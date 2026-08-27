@@ -230,7 +230,12 @@ function issuePeriod(row) {
    issue period and then sweeping outward to match the name. About a dozen
    requests, against several hundred for a linear scan. */
 async function bseIssueByName(name, listedOn, high) {
-  const target = nameKey(name);
+  /* One register writes "Laser Power & Infra", the other "Laser Power and
+     Infra". nameKey drops the ampersand but leaves the word, so the two do not
+     meet; here, where a wrong match costs nothing but a retry, the conjunction
+     goes too. */
+  const looseKey = (s) => nameKey(s).replace(/\band\b/g, " ").replace(/\s+/g, " ").trim();
+  const target = looseKey(name);
   if (!target || !/^\d{4}-\d{2}-\d{2}$/.test(listedOn || "")) return null;
 
   const at = async (no) => (no < high - 1200 || no > high ? null : bseIssue(no));
@@ -263,7 +268,7 @@ async function bseIssueByName(name, listedOn, high) {
   for (let d = 0; d <= 40; d++) {
     for (const no of d === 0 ? [anchor] : [anchor + d, anchor - d]) {
       const row = await at(no);
-      const found = nameKey(row?.ScripName);
+      const found = looseKey(row?.ScripName);
       if (!found) continue;
       if (found === target || found.startsWith(target) || target.startsWith(found)) {
         const p = issuePeriod(row);
