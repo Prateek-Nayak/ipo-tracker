@@ -64,6 +64,11 @@ const CloudIcon = (p) => <SvgIcon {...p}><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.
 const CloudOff = (p) => <SvgIcon {...p}><path d="m2 2 20 20" /><path d="M5.782 5.782A7 7 0 0 0 9 19h8.5a4.5 4.5 0 0 0 1.307-.193" /><path d="M21.532 16.5A4.5 4.5 0 0 0 17.5 10h-1.79A7.008 7.008 0 0 0 10 5.07" /></SvgIcon>;
 const DownloadIcon = (p) => <SvgIcon {...p}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" x2="12" y1="15" y2="3" /></SvgIcon>;
 const LogOut = (p) => <SvgIcon {...p}><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><polyline points="16 17 21 12 16 7" /><line x1="21" x2="9" y1="12" y2="12" /></SvgIcon>;
+const AlertTriangle = (p) => <SvgIcon {...p}><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" /><line x1="12" x2="12" y1="9" y2="13" /><line x1="12" x2="12.01" y1="17" y2="17" /></SvgIcon>;
+const Sparkles = (p) => <SvgIcon {...p}><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z" /></SvgIcon>;
+const Search = (p) => <SvgIcon {...p}><circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" /></SvgIcon>;
+const Layers = (p) => <SvgIcon {...p}><path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z" /><path d="m22 12.18-9.17 4.16a2 2 0 0 1-1.66 0L2 12.18" /><path d="m22 17.18-9.17 4.16a2 2 0 0 1-1.66 0L2 17.18" /></SvgIcon>;
+const ClipboardCheck = (p) => <SvgIcon {...p}><rect width="8" height="4" x="8" y="2" rx="1" ry="1" /><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" /><path d="m9 14 2 2 4-4" /></SvgIcon>;
 
 /* ---------------------------------------------------------
    FORMATTING HELPERS
@@ -486,6 +491,9 @@ export default function App() {
   const [transferSheet, setTransferSheet] = useState(null); // { transfer }
   const [ipoDetail, setIpoDetail] = useState(null);         // ipo id
   const [dataSheetOpen, setDataSheetOpen] = useState(false);
+  const [bulkApplyFor, setBulkApplyFor] = useState(null);   // ipo id
+  const [bulkStatusFor, setBulkStatusFor] = useState(null); // ipo id
+  const [liveOpen, setLiveOpen] = useState(false);
 
   const skipNextAutoSync = useRef(true);
 
@@ -698,6 +706,7 @@ export default function App() {
         syncError={syncError}
         cloudOn={cloudEnabled()}
         onOpenData={() => setDataSheetOpen(true)}
+        onFetchLive={() => setLiveOpen(true)}
         onAdd={() => {
           if (tab === "ipos") setIpoSheet({ ipo: null });
           else if (tab === "accounts") setAcctSheet({ account: null });
@@ -726,7 +735,7 @@ export default function App() {
         )}
         {tab === "transfers" && (
           <TransfersScreen
-            transfers={transfers} accounts={accounts}
+            transfers={transfers} accounts={accounts} ipos={ipos}
             onEdit={(transfer) => setTransferSheet({ transfer })}
             onDelete={(id) => persistTransfers(transfers.filter((x) => x.id !== id))}
           />
@@ -742,6 +751,8 @@ export default function App() {
           onClose={() => setIpoDetail(null)}
           onEditIpo={(ipo) => { setIpoDetail(null); setIpoSheet({ ipo }); }}
           onAddApplication={(ipoId) => setAppSheet({ ipoId, application: null })}
+          onBulkApply={(ipoId) => { setIpoDetail(null); setBulkApplyFor(ipoId); }}
+          onBulkStatus={(ipoId) => { setIpoDetail(null); setBulkStatusFor(ipoId); }}
           onEditApplication={(ipoId, application) => setAppSheet({ ipoId, application })}
           onDeleteApplication={(ipoId, appId) => {
             persistIpos(ipos.map((i) => (i.id === ipoId
@@ -785,9 +796,56 @@ export default function App() {
         />
       )}
 
+      {bulkApplyFor && (
+        <BulkApplySheet
+          ipo={ipos.find((i) => i.id === bulkApplyFor)}
+          accounts={accounts}
+          onClose={() => setBulkApplyFor(null)}
+          onSave={(newApps) => {
+            persistIpos(ipos.map((i) => (i.id === bulkApplyFor
+              ? { ...i, applications: [...(i.applications || []), ...newApps] }
+              : i)));
+            setBulkApplyFor(null);
+            setIpoDetail(bulkApplyFor);
+          }}
+        />
+      )}
+
+      {bulkStatusFor && (
+        <BulkStatusSheet
+          ipo={ipos.find((i) => i.id === bulkStatusFor)}
+          accounts={accounts}
+          onClose={() => setBulkStatusFor(null)}
+          onSave={(draft) => {
+            persistIpos(ipos.map((i) => (i.id === bulkStatusFor
+              ? {
+                  ...i,
+                  applications: (i.applications || []).map((a) =>
+                    draft[a.id] ? { ...a, ...draft[a.id] } : a),
+                }
+              : i)));
+            setBulkStatusFor(null);
+            setIpoDetail(bulkStatusFor);
+          }}
+        />
+      )}
+
+      {liveOpen && (
+        <LiveIposSheet
+          existing={ipos}
+          onClose={() => setLiveOpen(false)}
+          onImport={(rows) => {
+            persistIpos([...rows, ...ipos]);
+            setLiveOpen(false);
+            setTab("ipos");
+          }}
+        />
+      )}
+
       {acctSheet && (
         <AccountFormSheet
           initial={acctSheet.account}
+          accounts={accounts}
           onClose={() => setAcctSheet(null)}
           onSave={(data) => {
             if (acctSheet.account) {
@@ -849,7 +907,7 @@ function Splash({ text }) {
 /* ---------------------------------------------------------
    CHROME
 ---------------------------------------------------------- */
-function Header({ tab, onAdd, onOpenData, syncing, syncError, cloudOn }) {
+function Header({ tab, onAdd, onOpenData, onFetchLive, syncing, syncError, cloudOn }) {
   const titles = { dashboard: "The Ledger", ipos: "IPOs", accounts: "Accounts", transfers: "Transfers" };
   const showAdd = tab !== "dashboard";
   const statusColor = !cloudOn ? COLORS.inkSoft : syncError ? COLORS.red : COLORS.gold;
@@ -874,6 +932,16 @@ function Header({ tab, onAdd, onOpenData, syncing, syncError, cloudOn }) {
         )}
       </div>
       <div style={{ display: "flex", gap: 8, flexShrink: 0, marginLeft: "auto" }}>
+        {tab === "ipos" && (
+          <button onClick={onFetchLive} aria-label="Live IPOs" style={{
+            display: "flex", alignItems: "center", gap: 5, height: 36, padding: "0 10px",
+            borderRadius: 18, border: `1px solid ${COLORS.gold}`, background: "transparent",
+            cursor: "pointer", flexShrink: 0,
+          }}>
+            <Sparkles size={14} color={COLORS.gold} />
+            <span style={{ color: COLORS.gold, fontSize: 12, fontWeight: 600, fontFamily: "Inter, sans-serif", whiteSpace: "nowrap" }}>Live</span>
+          </button>
+        )}
         <button
           onClick={onOpenData}
           aria-label="Sync and data"
@@ -994,35 +1062,226 @@ function EmptyState({ text }) {
   );
 }
 
-function IpoList({ ipos, accounts, onOpen, onEdit, onDelete }) {
-  if (ipos.length === 0) return <EmptyState text="No IPOs yet. Tap + to add one." />;
+const chipBase = {
+  border: `1px solid ${COLORS.border}`, background: COLORS.surface, color: COLORS.inkSoft,
+  borderRadius: 999, padding: "7px 12px", fontSize: 12, fontWeight: 600,
+  fontFamily: "Inter, sans-serif", cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0,
+};
+const chipOn = { background: COLORS.navy, border: `1px solid ${COLORS.navy}`, color: "#fff" };
+
+function ListControls({ search, setSearch, placeholder, filters, filter, setFilter, sorts, sort, setSort }) {
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      {ipos.map((ipo) => (
-        <IpoCard key={ipo.id} ipo={ipo} accounts={accounts} onClick={() => onOpen(ipo.id)}
-          onEdit={() => onEdit(ipo)} onDelete={() => onDelete(ipo.id)} showActions />
-      ))}
+    <div style={{ marginBottom: 12 }}>
+      <div style={{ position: "relative", marginBottom: 8 }}>
+        <span style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)", display: "flex", pointerEvents: "none" }}>
+          <Search size={15} color={COLORS.inkSoft} />
+        </span>
+        <Input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder={placeholder}
+          style={{ paddingLeft: 34 }}
+        />
+      </div>
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <div style={{ display: "flex", gap: 6, overflowX: "auto", flex: 1, paddingBottom: 2 }}>
+          {filters.map((f) => (
+            <button
+              key={f.id}
+              onClick={() => setFilter(f.id)}
+              style={{ ...chipBase, ...(filter === f.id ? chipOn : null) }}
+            >
+              {f.label}{f.count != null ? ` ${f.count}` : ""}
+            </button>
+          ))}
+        </div>
+        <select
+          value={sort}
+          onChange={(e) => setSort(e.target.value)}
+          aria-label="Sort order"
+          style={{
+            ...inputStyle, width: "auto", minHeight: 36, padding: "6px 8px",
+            fontSize: 12, fontWeight: 600, flexShrink: 0, maxWidth: 132,
+          }}
+        >
+          {sorts.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
+        </select>
+      </div>
     </div>
   );
 }
 
-function overallStatus(ipo) {
+function IpoList({ ipos, accounts, onOpen, onEdit, onDelete }) {
+  const [search, setSearch] = useState("");
+  const [filter, setFilter] = useState("all");
+  const [sort, setSort] = useState("recent");
+
+  const counts = useMemo(() => {
+    const c = { all: ipos.length, pending: 0, allotted: 0, rejected: 0, sme: 0 };
+    ipos.forEach((i) => {
+      const b = ipoBucket(i);
+      if (c[b] != null) c[b]++;
+      if ((i.category || "Mainboard") === "SME") c.sme++;
+    });
+    return c;
+  }, [ipos]);
+
+  const shown = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const dateKey = (i) => i.applicationDate || i.openDate || i.closeDate || "";
+    const cmp = {
+      recent: (a, b) => dateKey(b).localeCompare(dateKey(a)),
+      oldest: (a, b) => dateKey(a).localeCompare(dateKey(b)),
+      company: (a, b) => (a.company || "").localeCompare(b.company || ""),
+      allotted: (a, b) => allotmentTally(b).won - allotmentTally(a).won,
+      pending: (a, b) => allotmentTally(b).pending - allotmentTally(a).pending,
+    }[sort];
+
+    return ipos
+      .filter((i) => {
+        if (q && !`${i.company || ""} ${i.symbol || ""}`.toLowerCase().includes(q)) return false;
+        if (filter === "all") return true;
+        if (filter === "sme") return (i.category || "Mainboard") === "SME";
+        return ipoBucket(i) === filter;
+      })
+      .sort(cmp);
+  }, [ipos, search, filter, sort]);
+
+  if (ipos.length === 0) return <EmptyState text="No IPOs yet. Tap + to add one." />;
+
+  return (
+    <div>
+      <ListControls
+        search={search} setSearch={setSearch} placeholder="Search company or symbol"
+        filter={filter} setFilter={setFilter}
+        filters={[
+          { id: "all", label: "All", count: counts.all },
+          { id: "pending", label: "Pending", count: counts.pending },
+          { id: "allotted", label: "Allotted", count: counts.allotted },
+          { id: "rejected", label: "Missed", count: counts.rejected },
+          { id: "sme", label: "SME", count: counts.sme },
+        ]}
+        sort={sort} setSort={setSort}
+        sorts={[
+          { id: "recent", label: "Newest" },
+          { id: "oldest", label: "Oldest" },
+          { id: "company", label: "A–Z" },
+          { id: "allotted", label: "Most allotted" },
+          { id: "pending", label: "Most pending" },
+        ]}
+      />
+      {shown.length === 0 ? (
+        <EmptyState text="No IPOs match that search or filter." />
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {shown.map((ipo) => (
+            <IpoCard key={ipo.id} ipo={ipo} accounts={accounts} onClick={() => onOpen(ipo.id)}
+              onEdit={() => onEdit(ipo)} onDelete={() => onDelete(ipo.id)} showActions />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* Allotment happens per application, not per IPO. Count the outcomes instead of
+   collapsing eleven different results into one misleading word. */
+function allotmentTally(ipo) {
   const apps = ipo.applications || [];
-  if (apps.length === 0) return "Pending";
-  if (apps.every((a) => a.allotmentStatus === "Not Allotted")) return "Not Allotted";
-  if (apps.some((a) => a.allotmentStatus === "Pending")) return "Pending";
-  if (apps.some((a) => a.allotmentStatus === "Partial")) return "Partial";
-  return "Allotted";
+  const t = { total: apps.length, allotted: 0, partial: 0, pending: 0, rejected: 0 };
+  apps.forEach((a) => {
+    if (a.allotmentStatus === "Allotted") t.allotted++;
+    else if (a.allotmentStatus === "Partial") t.partial++;
+    else if (a.allotmentStatus === "Not Allotted") t.rejected++;
+    else t.pending++;
+  });
+  t.won = t.allotted + t.partial;
+  t.decided = t.total - t.pending;
+  return t;
+}
+
+// Coarse bucket, used only for filtering the list.
+function ipoBucket(ipo) {
+  const t = allotmentTally(ipo);
+  if (!t.total) return "none";
+  if (t.pending) return "pending";
+  if (t.won) return "allotted";
+  return "rejected";
+}
+
+const panOf = (account) => (account?.pan || "").trim().toUpperCase();
+
+/* One PAN may submit only one application per IPO — a duplicate gets every
+   application under that PAN rejected, not just the extra one. Worth catching. */
+function panConflicts(ipo, accounts) {
+  const byPan = new Map();
+  (ipo.applications || []).forEach((app) => {
+    const acc = accounts.find((a) => a.id === app.accountId);
+    const pan = panOf(acc);
+    if (!pan) return;
+    if (!byPan.has(pan)) byPan.set(pan, []);
+    byPan.get(pan).push(acc.name);
+  });
+  return [...byPan.entries()].filter(([, names]) => names.length > 1);
+}
+
+// PANs already committed to this IPO, for warning before another is added.
+function pansUsedIn(ipo, accounts) {
+  const used = new Set();
+  (ipo.applications || []).forEach((app) => {
+    const pan = panOf(accounts.find((a) => a.id === app.accountId));
+    if (pan) used.add(pan);
+  });
+  return used;
+}
+
+const blockedFor = (ipo, lots) =>
+  (Number(lots) || 0) * (Number(ipo?.lotSize) || 0) * (Number(ipo?.priceBand) || 0);
+
+function AllotmentBar({ tally }) {
+  if (!tally.total) return null;
+  const seg = (n, color) =>
+    n > 0 ? <div key={color} style={{ flex: n, background: color }} /> : null;
+  return (
+    <div style={{
+      display: "flex", height: 5, borderRadius: 3, overflow: "hidden",
+      background: COLORS.border, marginTop: 8,
+    }}>
+      {seg(tally.won, COLORS.green)}
+      {seg(tally.pending, COLORS.gold)}
+      {seg(tally.rejected, COLORS.red)}
+    </div>
+  );
+}
+
+function AllotmentCounts({ tally }) {
+  if (!tally.total) {
+    return <span style={{ fontSize: 11.5, color: COLORS.inkSoft }}>No applications yet</span>;
+  }
+  return (
+    <div style={{
+      display: "flex", gap: 10, flexWrap: "wrap", alignItems: "baseline",
+      fontFamily: "'JetBrains Mono', monospace", fontSize: 11.5,
+    }}>
+      <span style={{ color: tally.won ? COLORS.green : COLORS.inkSoft, fontWeight: 700 }}>
+        {tally.won}/{tally.total} allotted
+      </span>
+      {tally.pending > 0 && <span style={{ color: COLORS.gold }}>{tally.pending} pending</span>}
+      {tally.rejected > 0 && <span style={{ color: COLORS.red }}>{tally.rejected} rejected</span>}
+    </div>
+  );
 }
 
 function IpoCard({ ipo, accounts, onClick, onEdit, onDelete, showActions }) {
-  const status = overallStatus(ipo);
-  const meta = STATUS_META[status] || STATUS_META.Pending;
+  const tally = allotmentTally(ipo);
   const apps = ipo.applications || [];
   const totalLots = apps.reduce((s, a) => s + (Number(a.lots) || 0), 0);
   const gainPct = ipo.listingPrice && ipo.priceBand
     ? (((Number(ipo.listingPrice) - Number(ipo.priceBand)) / Number(ipo.priceBand)) * 100)
     : null;
+  const conflicts = panConflicts(ipo, accounts);
+  // Spine colour reflects where the IPO is overall, without claiming an outcome.
+  const spine = tally.pending ? COLORS.gold : tally.won ? COLORS.green : tally.total ? COLORS.red : COLORS.border;
 
   return (
     <div style={{
@@ -1030,7 +1289,7 @@ function IpoCard({ ipo, accounts, onClick, onEdit, onDelete, showActions }) {
       display: "flex", overflow: "hidden", cursor: "pointer",
     }} onClick={onClick}>
       <div style={{
-        width: 8, background: meta.color, flexShrink: 0,
+        width: 8, backgroundColor: spine, flexShrink: 0,
         backgroundImage: `repeating-linear-gradient(180deg, transparent 0 6px, ${COLORS.surface} 6px 8px)`,
       }} />
       <div style={{ padding: "12px 14px", flex: 1, minWidth: 0 }}>
@@ -1043,8 +1302,18 @@ function IpoCard({ ipo, accounts, onClick, onEdit, onDelete, showActions }) {
               {ipo.category || "Mainboard"} · ₹{ipo.priceBand || "—"}/sh · {totalLots} lot{totalLots === 1 ? "" : "s"} · {apps.length} applic.
             </div>
           </div>
-          <Badge color={meta.color} bg={meta.bg}>{status.toUpperCase()}</Badge>
+          {conflicts.length > 0 && (
+            <span title="The same PAN is used more than once on this IPO">
+              <AlertTriangle size={16} color={COLORS.red} />
+            </span>
+          )}
         </div>
+
+        <div style={{ marginTop: 8 }}>
+          <AllotmentCounts tally={tally} />
+          <AllotmentBar tally={tally} />
+        </div>
+
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 8, flexWrap: "wrap" }}>
           {gainPct !== null && (
             <span style={{
@@ -1079,9 +1348,11 @@ const roundIconBtn = {
   display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer",
 };
 
-function IpoDetailSheet({ ipo, accounts, onClose, onEditIpo, onAddApplication, onEditApplication, onDeleteApplication }) {
+function IpoDetailSheet({ ipo, accounts, onClose, onEditIpo, onAddApplication, onBulkApply, onBulkStatus, onEditApplication, onDeleteApplication }) {
   if (!ipo) return null;
   const apps = ipo.applications || [];
+  const tally = allotmentTally(ipo);
+  const conflicts = panConflicts(ipo, accounts);
   return (
     <Sheet title={ipo.company} onClose={onClose}>
       <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
@@ -1111,16 +1382,59 @@ function IpoDetailSheet({ ipo, accounts, onClose, onEditIpo, onAddApplication, o
         marginBottom: 16, cursor: "pointer", fontWeight: 600, textDecoration: "underline",
       }}>Edit IPO details</button>
 
+      {conflicts.length > 0 && (
+        <div style={{
+          background: COLORS.redSoft, color: COLORS.red, borderRadius: 10,
+          padding: "10px 12px", marginBottom: 14, fontSize: 12.5, display: "flex", gap: 8,
+        }}>
+          <AlertTriangle size={15} color={COLORS.red} style={{ flexShrink: 0, marginTop: 1 }} />
+          <div>
+            <strong>Duplicate PAN on this IPO.</strong>
+            {conflicts.map(([pan, names]) => (
+              <div key={pan} style={{ marginTop: 3, fontFamily: "'JetBrains Mono', monospace", fontSize: 11.5 }}>
+                {pan} — {names.join(", ")}
+              </div>
+            ))}
+            <div style={{ marginTop: 4 }}>
+              One PAN may submit only one application per IPO. A duplicate normally gets every
+              application under that PAN rejected, not just the extra one.
+            </div>
+          </div>
+        </div>
+      )}
+
+      {apps.length > 0 && (
+        <div style={{ marginBottom: 14 }}>
+          <AllotmentCounts tally={tally} />
+          <AllotmentBar tally={tally} />
+        </div>
+      )}
+
+      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+        <button onClick={() => onBulkApply(ipo.id)} style={{
+          flex: "1 1 46%", display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+          background: COLORS.navy, color: "#fff", border: "none", borderRadius: 10,
+          padding: "11px 10px", fontSize: 12.5, fontWeight: 600, cursor: "pointer",
+        }}><Layers size={14} color="#fff" /> Apply in bulk</button>
+        <button onClick={() => onBulkStatus(ipo.id)} disabled={!apps.length} style={{
+          flex: "1 1 46%", display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+          background: COLORS.surface, color: apps.length ? COLORS.ink : COLORS.inkSoft,
+          border: `1px solid ${COLORS.border}`, borderRadius: 10,
+          padding: "11px 10px", fontSize: 12.5, fontWeight: 600,
+          cursor: apps.length ? "pointer" : "default", opacity: apps.length ? 1 : 0.6,
+        }}><ClipboardCheck size={14} color={apps.length ? COLORS.ink : COLORS.inkSoft} /> Record allotment</button>
+      </div>
+
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
         <SectionLabel>Applications ({apps.length})</SectionLabel>
         <button onClick={() => onAddApplication(ipo.id)} style={{
-          display: "flex", alignItems: "center", gap: 4, background: COLORS.navy, color: "#fff",
-          border: "none", borderRadius: 8, padding: "8px 10px", fontSize: 12, fontWeight: 600, cursor: "pointer",
-        }}><Plus size={13} color="#fff" /> Application</button>
+          display: "flex", alignItems: "center", gap: 4, background: "transparent", color: COLORS.navy,
+          border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: "8px 10px", fontSize: 12, fontWeight: 600, cursor: "pointer",
+        }}><Plus size={13} color={COLORS.navy} /> One</button>
       </div>
 
       {apps.length === 0 ? (
-        <EmptyState text="No applications yet for this IPO." />
+        <EmptyState text="No applications yet for this IPO. Use “Apply in bulk” to add several at once." />
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {apps.map((app) => (
@@ -1177,33 +1491,119 @@ function ApplicationRow({ app, ipo, accounts, onEdit, onDelete }) {
 }
 
 function AccountList({ accounts, ipos, onEdit, onDelete }) {
+  const [search, setSearch] = useState("");
+  const [filter, setFilter] = useState("all");
+  const [sort, setSort] = useState("name");
+
+  const stats = useMemo(() => {
+    const m = {};
+    accounts.forEach((a) => { m[a.id] = { applied: 0, won: 0 }; });
+    ipos.forEach((ipo) => {
+      (ipo.applications || []).forEach((app) => {
+        const s = m[app.accountId];
+        if (!s) return;
+        s.applied++;
+        if (app.allotmentStatus === "Allotted" || app.allotmentStatus === "Partial") s.won++;
+      });
+    });
+    return m;
+  }, [accounts, ipos]);
+
+  // A PAN entered on two accounts is itself a mistake worth surfacing.
+  const dupPans = useMemo(() => {
+    const seen = new Map();
+    accounts.forEach((a) => {
+      const p = panOf(a);
+      if (!p) return;
+      seen.set(p, (seen.get(p) || 0) + 1);
+    });
+    return new Set([...seen].filter(([, n]) => n > 1).map(([p]) => p));
+  }, [accounts]);
+
+  const missingPan = accounts.filter((a) => !panOf(a)).length;
+
+  const shown = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const cmp = {
+      name: (a, b) => (a.name || "").localeCompare(b.name || ""),
+      applied: (a, b) => (stats[b.id]?.applied || 0) - (stats[a.id]?.applied || 0),
+      won: (a, b) => (stats[b.id]?.won || 0) - (stats[a.id]?.won || 0),
+    }[sort];
+
+    return accounts
+      .filter((a) => {
+        if (q && !`${a.name || ""} ${a.relation || ""} ${a.bank || ""} ${a.pan || ""}`.toLowerCase().includes(q)) return false;
+        if (filter === "nopan") return !panOf(a);
+        if (filter === "dup") return dupPans.has(panOf(a));
+        return true;
+      })
+      .sort(cmp);
+  }, [accounts, search, filter, sort, stats, dupPans]);
+
   if (accounts.length === 0) return <EmptyState text="No family accounts added yet. Tap + to add one." />;
-  const appCount = (id) => ipos.reduce((s, ipo) => s + (ipo.applications || []).filter((a) => a.accountId === id).length, 0);
+
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      {accounts.map((acc) => (
-        <div key={acc.id} style={{
-          background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 12,
-          padding: "12px 14px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10,
-        }}>
-          <div style={{ minWidth: 0 }}>
-            <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 600, fontSize: 15.5, color: COLORS.navyDeep }}>{acc.name}</div>
-            <div style={{ fontSize: 12, color: COLORS.inkSoft, marginTop: 2 }}>
-              {acc.relation || "Self"}{acc.bank ? ` · ${acc.bank}` : ""} · {appCount(acc.id)} application(s)
-            </div>
-            {acc.notes && <div style={{ fontSize: 11.5, color: COLORS.inkSoft, marginTop: 2, fontStyle: "italic" }}>{acc.notes}</div>}
-          </div>
-          <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
-            <button onClick={() => onEdit(acc)} aria-label="Edit account" style={roundIconBtn}><Pencil size={14} color={COLORS.inkSoft} /></button>
-            <button onClick={() => { if (confirm("Delete this account?")) onDelete(acc.id); }} aria-label="Delete account" style={roundIconBtn}><Trash2 size={14} color={COLORS.red} /></button>
-          </div>
+    <div>
+      <ListControls
+        search={search} setSearch={setSearch} placeholder="Search name, relation, bank or PAN"
+        filter={filter} setFilter={setFilter}
+        filters={[
+          { id: "all", label: "All", count: accounts.length },
+          { id: "nopan", label: "No PAN", count: missingPan },
+          ...(dupPans.size ? [{ id: "dup", label: "Duplicate PAN", count: dupPans.size }] : []),
+        ]}
+        sort={sort} setSort={setSort}
+        sorts={[
+          { id: "name", label: "Name" },
+          { id: "applied", label: "Most applied" },
+          { id: "won", label: "Most allotted" },
+        ]}
+      />
+      {shown.length === 0 ? (
+        <EmptyState text="No accounts match that search or filter." />
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {shown.map((acc) => {
+            const s = stats[acc.id] || { applied: 0, won: 0 };
+            const pan = panOf(acc);
+            const isDup = pan && dupPans.has(pan);
+            return (
+              <div key={acc.id} style={{
+                background: COLORS.surface, border: `1px solid ${isDup ? COLORS.red : COLORS.border}`,
+                borderRadius: 12, padding: "12px 14px",
+                display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10,
+              }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 600, fontSize: 15.5, color: COLORS.navyDeep }}>{acc.name}</div>
+                  <div style={{ fontSize: 12, color: COLORS.inkSoft, marginTop: 2 }}>
+                    {acc.relation || "Self"}{acc.bank ? ` · ${acc.bank}` : ""}
+                  </div>
+                  <div style={{
+                    fontFamily: "'JetBrains Mono', monospace", fontSize: 11, marginTop: 4,
+                    display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center",
+                  }}>
+                    <span style={{ color: COLORS.inkSoft }}>{s.applied} applied</span>
+                    <span style={{ color: s.won ? COLORS.green : COLORS.inkSoft }}>{s.won} allotted</span>
+                    {pan
+                      ? <span style={{ color: isDup ? COLORS.red : COLORS.inkSoft }}>{pan}{isDup ? " · duplicate" : ""}</span>
+                      : <span style={{ color: COLORS.gold }}>no PAN</span>}
+                  </div>
+                  {acc.notes && <div style={{ fontSize: 11.5, color: COLORS.inkSoft, marginTop: 4, fontStyle: "italic" }}>{acc.notes}</div>}
+                </div>
+                <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                  <button onClick={() => onEdit(acc)} aria-label="Edit account" style={roundIconBtn}><Pencil size={14} color={COLORS.inkSoft} /></button>
+                  <button onClick={() => { if (confirm("Delete this account?")) onDelete(acc.id); }} aria-label="Delete account" style={roundIconBtn}><Trash2 size={14} color={COLORS.red} /></button>
+                </div>
+              </div>
+            );
+          })}
         </div>
-      ))}
+      )}
     </div>
   );
 }
 
-function TransfersScreen({ transfers, accounts, onEdit, onDelete }) {
+function TransfersScreen({ transfers, accounts, ipos = [], onEdit, onDelete }) {
   const [view, setView] = useState("log");
   return (
     <div>
@@ -1221,7 +1621,7 @@ function TransfersScreen({ transfers, accounts, onEdit, onDelete }) {
         ))}
       </div>
       {view === "log" ? (
-        <TransferList transfers={transfers} accounts={accounts} onEdit={onEdit} onDelete={onDelete} />
+        <TransferList transfers={transfers} accounts={accounts} ipos={ipos} onEdit={onEdit} onDelete={onDelete} />
       ) : (
         <ReconciliationView transfers={transfers} accounts={accounts} />
       )}
@@ -1318,13 +1718,66 @@ function ReconciliationView({ transfers, accounts }) {
   );
 }
 
-function TransferList({ transfers, accounts, onEdit, onDelete }) {
-  if (transfers.length === 0) return <EmptyState text="No fund transfers logged yet. Tap + to record one." />;
+function TransferList({ transfers, accounts, ipos = [], onEdit, onDelete }) {
+  const [search, setSearch] = useState("");
+  const [filter, setFilter] = useState("all");
+  const [sort, setSort] = useState("recent");
+
   const name = (id) => accounts.find((a) => a.id === id)?.name || "Unknown";
-  const sorted = [...transfers].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  const ipoName = (id) => ipos.find((i) => i.id === id)?.company || "";
+
+  const shown = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const cmp = {
+      recent: (a, b) => (b.date || "").localeCompare(a.date || ""),
+      oldest: (a, b) => (a.date || "").localeCompare(b.date || ""),
+      largest: (a, b) => (Number(b.amount) || 0) - (Number(a.amount) || 0),
+      smallest: (a, b) => (Number(a.amount) || 0) - (Number(b.amount) || 0),
+    }[sort];
+
+    return transfers
+      .filter((t) => {
+        if (q) {
+          const hay = `${name(t.fromAccountId)} ${name(t.toAccountId)} ${t.remarks || ""} ${ipoName(t.relatedIpoId)}`.toLowerCase();
+          if (!hay.includes(q)) return false;
+        }
+        if (filter === "linked") return !!t.relatedIpoId;
+        if (filter === "unlinked") return !t.relatedIpoId;
+        if (filter.startsWith("acct:")) {
+          const id = filter.slice(5);
+          return t.fromAccountId === id || t.toAccountId === id;
+        }
+        return true;
+      })
+      .sort(cmp);
+  }, [transfers, accounts, ipos, search, filter, sort]);
+
+  if (transfers.length === 0) return <EmptyState text="No fund transfers logged yet. Tap + to record one." />;
+
+  const linked = transfers.filter((t) => t.relatedIpoId).length;
+
   return (
+    <div>
+      <ListControls
+        search={search} setSearch={setSearch} placeholder="Search account, IPO or remark"
+        filter={filter} setFilter={setFilter}
+        filters={[
+          { id: "all", label: "All", count: transfers.length },
+          { id: "linked", label: "For an IPO", count: linked },
+          { id: "unlinked", label: "Unlinked", count: transfers.length - linked },
+          ...accounts.slice(0, 6).map((a) => ({ id: `acct:${a.id}`, label: a.name })),
+        ]}
+        sort={sort} setSort={setSort}
+        sorts={[
+          { id: "recent", label: "Newest" },
+          { id: "oldest", label: "Oldest" },
+          { id: "largest", label: "Largest" },
+          { id: "smallest", label: "Smallest" },
+        ]}
+      />
+      {shown.length === 0 ? <EmptyState text="No transfers match that search or filter." /> : (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      {sorted.map((t) => (
+      {shown.map((t) => (
         <div key={t.id} style={{
           background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 12, padding: "12px 14px",
         }}>
@@ -1344,6 +1797,8 @@ function TransferList({ transfers, accounts, onEdit, onDelete }) {
           </div>
         </div>
       ))}
+    </div>
+      )}
     </div>
   );
 }
@@ -1432,16 +1887,50 @@ function ApplicationFormSheet({ initial, accounts, onClose, onSave }) {
   );
 }
 
-function AccountFormSheet({ initial, onClose, onSave }) {
-  const [f, setF] = useState(initial || { id: undefined, name: "", relation: "", bank: "", notes: "" });
+const PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
+
+function AccountFormSheet({ initial, accounts = [], onClose, onSave }) {
+  const [f, setF] = useState(initial || { id: undefined, name: "", relation: "", bank: "", pan: "", notes: "" });
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+
+  const pan = (f.pan || "").trim().toUpperCase();
+  const panShapeBad = pan.length > 0 && !PAN_RE.test(pan);
+  const panTakenBy = pan && !panShapeBad
+    ? accounts.find((a) => a.id !== f.id && panOf(a) === pan)
+    : null;
+
   return (
     <Sheet title={initial ? "Edit Account" : "New Account"} onClose={onClose}>
       <Field label="Name"><Input value={f.name} onChange={set("name")} placeholder="e.g. Mom, Dad, Priya Aunty" /></Field>
       <Field label="Relation"><Input value={f.relation} onChange={set("relation")} placeholder="e.g. Mother, Self, Brother-in-law" /></Field>
       <Field label="Bank / Broker (optional)"><Input value={f.bank} onChange={set("bank")} placeholder="e.g. HDFC / Zerodha" /></Field>
+      <Field label="PAN">
+        <Input
+          value={f.pan || ""}
+          onChange={(e) => setF({ ...f, pan: e.target.value.toUpperCase() })}
+          placeholder="ABCDE1234F"
+          maxLength={10}
+          autoCapitalize="characters"
+          autoCorrect="off"
+          spellCheck={false}
+          style={{ fontFamily: "'JetBrains Mono', monospace", letterSpacing: 1 }}
+        />
+      </Field>
+      {panShapeBad && (
+        <div style={{ background: COLORS.goldSoft, color: COLORS.ink, borderRadius: 8, padding: "8px 10px", marginTop: -6, marginBottom: 12, fontSize: 12 }}>
+          That does not look like a PAN (five letters, four digits, one letter). Saving anyway is fine — it is only used to catch duplicate applications.
+        </div>
+      )}
+      {panTakenBy && (
+        <div style={{ background: COLORS.redSoft, color: COLORS.red, borderRadius: 8, padding: "8px 10px", marginTop: -6, marginBottom: 12, fontSize: 12 }}>
+          <strong>{panTakenBy.name}</strong> already uses this PAN. Two accounts on one PAN still count as one applicant.
+        </div>
+      )}
       <Field label="Notes"><textarea value={f.notes} onChange={set("notes")} rows={2} style={{ ...inputStyle, resize: "vertical" }} /></Field>
-      <PrimaryButton onClick={() => { if (!f.name) return alert("Name is required"); onSave({ ...f, id: f.id || uid() }); }}>
+      <PrimaryButton onClick={() => {
+        if (!f.name) return alert("Name is required");
+        onSave({ ...f, pan, id: f.id || uid() });
+      }}>
         {initial ? "Save Changes" : "Add Account"}
       </PrimaryButton>
     </Sheet>
@@ -1728,5 +2217,419 @@ function AuthScreen({ mode, setMode, notice }) {
         </button>
       </div>
     </div>
+  );
+}
+
+/* ---------------------------------------------------------
+   BULK OPERATIONS
+   Applying one IPO across a dozen family accounts, and then
+   recording a dozen allotment results, are the two jobs that
+   are painful one form at a time.
+---------------------------------------------------------- */
+function BulkApplySheet({ ipo, accounts, onClose, onSave }) {
+  const alreadyApplied = useMemo(
+    () => new Set((ipo.applications || []).map((a) => a.accountId)),
+    [ipo]
+  );
+  const usedPans = useMemo(() => pansUsedIn(ipo, accounts), [ipo, accounts]);
+
+  const available = accounts.filter((a) => !alreadyApplied.has(a.id));
+  const [picked, setPicked] = useState({});
+  const [lots, setLots] = useState({});
+
+  const lotsFor = (id) => lots[id] ?? "1";
+  const chosen = available.filter((a) => picked[a.id]);
+
+  // A PAN clashes if another chosen account shares it, or it is already on the IPO.
+  const panClash = (acct) => {
+    const p = panOf(acct);
+    if (!p) return null;
+    if (usedPans.has(p)) return "already applied on this IPO";
+    const twin = chosen.find((o) => o.id !== acct.id && panOf(o) === p);
+    return twin ? `same PAN as ${twin.name}` : null;
+  };
+
+  const totalBlocked = chosen.reduce((s, a) => s + blockedFor(ipo, lotsFor(a.id)), 0);
+  const clashes = chosen.map((a) => [a, panClash(a)]).filter(([, c]) => c);
+  const lotSizeKnown = Number(ipo.lotSize) > 0 && Number(ipo.priceBand) > 0;
+
+  const toggle = (id) => setPicked((p) => ({ ...p, [id]: !p[id] }));
+  const selectAll = () => {
+    const next = {};
+    available.forEach((a) => { next[a.id] = true; });
+    setPicked(next);
+  };
+
+  const submit = () => {
+    if (!chosen.length) return;
+    if (clashes.length && !confirm(
+      clashes.length + " of the selected accounts share a PAN with another application on this IPO. " +
+      "Duplicate PANs normally get every application rejected. Add them anyway?"
+    )) return;
+    onSave(chosen.map((a) => ({
+      id: uid(),
+      accountId: a.id,
+      appliedFor: "",
+      lots: String(lotsFor(a.id)),
+      amountBlocked: String(blockedFor(ipo, lotsFor(a.id)) || ""),
+      allotmentStatus: "Pending",
+      sharesAllotted: "",
+      sold: false,
+      sellPrice: "",
+      sellDate: "",
+      remarks: "",
+    })));
+  };
+
+  return (
+    <Sheet title="Apply across accounts" onClose={onClose}>
+      <div style={{
+        background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 12,
+        padding: "10px 12px", marginBottom: 14,
+      }}>
+        <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 600, fontSize: 15, color: COLORS.navyDeep }}>{ipo.company}</div>
+        <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11.5, color: COLORS.inkSoft, marginTop: 3 }}>
+          ₹{ipo.priceBand || "—"}/sh · lot {ipo.lotSize || "—"} sh
+          {lotSizeKnown ? ` · ₹${(Number(ipo.lotSize) * Number(ipo.priceBand)).toLocaleString("en-IN")} per lot` : ""}
+        </div>
+      </div>
+
+      {!lotSizeKnown && (
+        <div style={{ background: COLORS.goldSoft, borderRadius: 8, padding: "8px 10px", marginBottom: 12, fontSize: 12, display: "flex", gap: 8 }}>
+          <AlertTriangle size={14} color={COLORS.gold} style={{ flexShrink: 0, marginTop: 1 }} />
+          <span>Set this IPO's price and lot size to have the blocked amount worked out for you.</span>
+        </div>
+      )}
+
+      {available.length === 0 ? (
+        <EmptyState text="Every account already has an application on this IPO." />
+      ) : (
+        <>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+            <SectionLabel>Accounts ({chosen.length}/{available.length})</SectionLabel>
+            <button onClick={selectAll} style={{ ...chipBase, padding: "6px 10px" }}>Select all</button>
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
+            {available.map((a) => {
+              const on = !!picked[a.id];
+              const clash = on ? panClash(a) : null;
+              return (
+                <div key={a.id} style={{
+                  background: COLORS.surface,
+                  border: `1px solid ${clash ? COLORS.red : COLORS.border}`,
+                  borderRadius: 10, padding: "10px 12px",
+                  display: "flex", alignItems: "center", gap: 10,
+                }}>
+                  <input
+                    type="checkbox" checked={on} onChange={() => toggle(a.id)}
+                    aria-label={`Apply from ${a.name}`}
+                    style={{ width: 18, height: 18, flexShrink: 0 }}
+                  />
+                  <div style={{ minWidth: 0, flex: 1 }} onClick={() => toggle(a.id)}>
+                    <div style={{ fontWeight: 600, fontSize: 14, color: COLORS.ink }}>{a.name}</div>
+                    <div style={{ fontSize: 11, color: clash ? COLORS.red : COLORS.inkSoft, fontFamily: "'JetBrains Mono', monospace" }}>
+                      {clash ? clash : (panOf(a) || "no PAN on file")}
+                    </div>
+                  </div>
+                  {on && (
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+                      <input
+                        type="number" min="1" inputMode="numeric"
+                        value={lotsFor(a.id)}
+                        onChange={(e) => setLots((l) => ({ ...l, [a.id]: e.target.value }))}
+                        aria-label={`Lots for ${a.name}`}
+                        style={{ ...inputStyle, width: 62, minHeight: 38, padding: "6px 8px", textAlign: "center" }}
+                      />
+                      <span style={{ fontSize: 10.5, color: COLORS.inkSoft, width: 58, textAlign: "right", fontFamily: "'JetBrains Mono', monospace" }}>
+                        {blockedFor(ipo, lotsFor(a.id)) ? inr(blockedFor(ipo, lotsFor(a.id))) : "—"}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {clashes.length > 0 && (
+            <div style={{ background: COLORS.redSoft, color: COLORS.red, borderRadius: 10, padding: "10px 12px", marginBottom: 12, fontSize: 12.5 }}>
+              <strong>{clashes.length} duplicate PAN{clashes.length === 1 ? "" : "s"}.</strong> One PAN may submit only
+              one application per IPO — a duplicate normally gets every application under it rejected, not just the extra one.
+            </div>
+          )}
+
+          {chosen.length > 0 && totalBlocked > 0 && (
+            <div style={{
+              background: COLORS.goldSoft, borderRadius: 10, padding: "10px 12px", marginBottom: 4,
+              fontFamily: "'JetBrains Mono', monospace", fontSize: 13, display: "flex", justifyContent: "space-between",
+            }}>
+              <span>{chosen.length} application{chosen.length === 1 ? "" : "s"}</span>
+              <strong>{inr(totalBlocked)} blocked</strong>
+            </div>
+          )}
+
+          <PrimaryButton onClick={submit} disabled={!chosen.length}>
+            {chosen.length ? `Add ${chosen.length} application${chosen.length === 1 ? "" : "s"}` : "Select accounts"}
+          </PrimaryButton>
+        </>
+      )}
+    </Sheet>
+  );
+}
+
+function BulkStatusSheet({ ipo, accounts, onClose, onSave }) {
+  const apps = ipo.applications || [];
+  const [draft, setDraft] = useState(() => {
+    const d = {};
+    apps.forEach((a) => {
+      d[a.id] = { allotmentStatus: a.allotmentStatus || "Pending", sharesAllotted: a.sharesAllotted || "" };
+    });
+    return d;
+  });
+
+  const nameOf = (id) => accounts.find((a) => a.id === id)?.name || "Unknown account";
+  const fullLot = Number(ipo.lotSize) || 0;
+
+  const sharesFor = (app, status, current) => {
+    if (status === "Allotted" && fullLot) return String(fullLot * (Number(app.lots) || 1));
+    if (status === "Not Allotted" || status === "Pending") return "";
+    return current;
+  };
+
+  const setAll = (status) => {
+    setDraft((d) => {
+      const next = { ...d };
+      apps.forEach((a) => {
+        next[a.id] = { allotmentStatus: status, sharesAllotted: sharesFor(a, status, d[a.id].sharesAllotted) };
+      });
+      return next;
+    });
+  };
+
+  const setOne = (app, status) => {
+    setDraft((d) => ({
+      ...d,
+      [app.id]: { allotmentStatus: status, sharesAllotted: sharesFor(app, status, d[app.id].sharesAllotted) },
+    }));
+  };
+
+  const counts = Object.values(draft).reduce((c, v) => {
+    const k = v.allotmentStatus === "Not Allotted" ? "rejected"
+      : v.allotmentStatus === "Pending" ? "pending" : "won";
+    c[k] = (c[k] || 0) + 1;
+    return c;
+  }, {});
+
+  return (
+    <Sheet title="Record allotment" onClose={onClose}>
+      <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 600, fontSize: 15, color: COLORS.navyDeep, marginBottom: 4 }}>
+        {ipo.company}
+      </div>
+      <div style={{ fontSize: 12, color: COLORS.inkSoft, marginBottom: 14 }}>
+        {apps.length} application{apps.length === 1 ? "" : "s"}. Set them all at once, then correct the exceptions.
+      </div>
+
+      <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" }}>
+        {ALLOTMENT_STATUSES.map((s) => (
+          <button key={s} onClick={() => setAll(s)} style={{ ...chipBase }}>All → {s}</button>
+        ))}
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
+        {apps.map((app) => {
+          const d = draft[app.id];
+          const meta = STATUS_META[d.allotmentStatus] || STATUS_META.Pending;
+          const needsShares = d.allotmentStatus === "Allotted" || d.allotmentStatus === "Partial";
+          return (
+            <div key={app.id} style={{
+              background: COLORS.surface, border: `1px solid ${COLORS.border}`,
+              borderLeft: `3px solid ${meta.color}`, borderRadius: 10, padding: "10px 12px",
+            }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontWeight: 600, fontSize: 14, color: COLORS.ink }}>{nameOf(app.accountId)}</div>
+                  <div style={{ fontSize: 11, color: COLORS.inkSoft, fontFamily: "'JetBrains Mono', monospace" }}>
+                    {app.lots || 0} lot(s) · {inr(app.amountBlocked)}
+                  </div>
+                </div>
+                <Select
+                  value={d.allotmentStatus}
+                  onChange={(e) => setOne(app, e.target.value)}
+                  aria-label={`Status for ${nameOf(app.accountId)}`}
+                  style={{ width: "auto", minHeight: 38, padding: "6px 8px", fontSize: 12.5, flexShrink: 0 }}
+                >
+                  {ALLOTMENT_STATUSES.map((s) => <option key={s}>{s}</option>)}
+                </Select>
+              </div>
+              {needsShares && (
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
+                  <span style={{ fontSize: 11, color: COLORS.inkSoft }}>Shares allotted</span>
+                  <input
+                    type="number" inputMode="numeric" value={d.sharesAllotted}
+                    onChange={(e) => setDraft((x) => ({ ...x, [app.id]: { ...x[app.id], sharesAllotted: e.target.value } }))}
+                    aria-label={`Shares for ${nameOf(app.accountId)}`}
+                    style={{ ...inputStyle, width: 100, minHeight: 38, padding: "6px 8px" }}
+                  />
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      <div style={{
+        background: COLORS.goldSoft, borderRadius: 10, padding: "10px 12px", marginBottom: 4,
+        fontFamily: "'JetBrains Mono', monospace", fontSize: 12.5,
+      }}>
+        {counts.won || 0} allotted · {counts.pending || 0} pending · {counts.rejected || 0} rejected
+      </div>
+
+      <PrimaryButton onClick={() => onSave(draft)}>Save all {apps.length}</PrimaryButton>
+    </Sheet>
+  );
+}
+
+/* ---------------------------------------------------------
+   LIVE IPOs (NSE, via /api/ipos)
+---------------------------------------------------------- */
+const normaliseName = (s) =>
+  String(s || "").toLowerCase().replace(/\s+(limited|ltd\.?)$/, "").replace(/\s+/g, " ").trim();
+
+function LiveIposSheet({ existing, onClose, onImport }) {
+  const [state, setState] = useState({ status: "loading", ipos: [], error: "", fetchedAt: "" });
+  const [picked, setPicked] = useState({});
+
+  const known = useMemo(() => {
+    const s = new Set();
+    existing.forEach((i) => {
+      if (i.symbol) s.add(String(i.symbol).toUpperCase());
+      if (i.company) s.add(normaliseName(i.company));
+    });
+    return s;
+  }, [existing]);
+
+  const isKnown = (r) =>
+    known.has(String(r.symbol).toUpperCase()) || known.has(normaliseName(r.company));
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/ipos");
+        const text = await res.text();
+        let data = {};
+        try { data = JSON.parse(text); } catch { /* handled below */ }
+        if (cancelled) return;
+        if (!res.ok || data.error) {
+          setState({ status: "error", ipos: [], error: data.error || `Request failed (${res.status})`, fetchedAt: "" });
+          return;
+        }
+        const rows = data.ipos || [];
+        setState({ status: "done", ipos: rows, error: "", fetchedAt: data.fetchedAt || "" });
+        const pre = {};
+        rows.forEach((r) => {
+          if (!(known.has(String(r.symbol).toUpperCase()) || known.has(normaliseName(r.company)))) {
+            pre[r.symbol] = true;
+          }
+        });
+        setPicked(pre);
+      } catch (e) {
+        if (!cancelled) setState({ status: "error", ipos: [], error: e.message || "Could not reach the server", fetchedAt: "" });
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [known]);
+
+  const chosen = state.ipos.filter((r) => picked[r.symbol]);
+
+  const doImport = () => {
+    onImport(chosen.map((r) => ({
+      id: uid(),
+      symbol: r.symbol,
+      company: r.company,
+      category: r.category,
+      applicationDate: "",
+      priceBand: r.priceMax != null ? String(r.priceMax) : "",
+      lotSize: "",
+      openDate: r.openDate,
+      closeDate: r.closeDate,
+      listingDate: "",
+      listingPrice: "",
+      remarks: `NSE ${r.symbol} · open ${r.openDate || "—"} to ${r.closeDate || "—"}`,
+      applications: [],
+    })));
+  };
+
+  return (
+    <Sheet title="Live IPOs from NSE" onClose={onClose}>
+      {state.status === "loading" && (
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "30px 0", gap: 10 }}>
+          <Loader2 size={26} color={COLORS.navy} className="spin" />
+          <div style={{ color: COLORS.inkSoft, fontSize: 13 }}>Asking NSE…</div>
+        </div>
+      )}
+
+      {state.status === "error" && (
+        <div>
+          <EmptyState text={`Could not load live IPOs. ${state.error}`} />
+          <PrimaryButton ghost onClick={onClose}>Close</PrimaryButton>
+        </div>
+      )}
+
+      {state.status === "done" && (
+        <>
+          <div style={{ fontSize: 11.5, color: COLORS.inkSoft, marginBottom: 12 }}>
+            Straight from NSE{state.fetchedAt ? `, ${fmtTime(new Date(state.fetchedAt))}` : ""}. Lot size and listing
+            date are not published here, so add those yourself.
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
+            {state.ipos.map((r) => {
+              const already = isKnown(r);
+              const on = !!picked[r.symbol];
+              return (
+                <label key={r.symbol} style={{
+                  display: "flex", gap: 10, alignItems: "flex-start", background: COLORS.surface,
+                  border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: "10px 12px",
+                  opacity: already ? 0.55 : 1,
+                }}>
+                  <input
+                    type="checkbox" checked={on}
+                    onChange={() => setPicked((p) => ({ ...p, [r.symbol]: !p[r.symbol] }))}
+                    style={{ marginTop: 3, width: 18, height: 18, flexShrink: 0 }}
+                  />
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 6, alignItems: "flex-start" }}>
+                      <span style={{ fontWeight: 600, fontSize: 14, color: COLORS.ink }}>{r.company}</span>
+                      <Badge color={COLORS.navy} bg="#EAEFF5">{r.category}</Badge>
+                    </div>
+                    <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: COLORS.inkSoft, marginTop: 4 }}>
+                      {r.priceMin != null ? `₹${r.priceMin}–${r.priceMax}` : "price not published"}
+                      {" · "}{r.openDate || "—"} → {r.closeDate || "—"}
+                    </div>
+                    <div style={{ marginTop: 4, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                      {r.subscription != null && (
+                        <Badge
+                          color={r.subscription >= 1 ? COLORS.green : COLORS.gold}
+                          bg={r.subscription >= 1 ? COLORS.greenSoft : COLORS.goldSoft}
+                        >
+                          {r.subscription.toFixed(2)}× subscribed
+                        </Badge>
+                      )}
+                      {!r.live && <Badge color={COLORS.inkSoft} bg="#EFEDE7">UPCOMING</Badge>}
+                      {already && <span style={{ fontSize: 11, color: COLORS.gold }}>already in your ledger</span>}
+                    </div>
+                  </div>
+                </label>
+              );
+            })}
+          </div>
+
+          <PrimaryButton onClick={doImport} disabled={!chosen.length}>
+            {chosen.length ? `Import ${chosen.length} IPO${chosen.length === 1 ? "" : "s"}` : "Select IPOs to import"}
+          </PrimaryButton>
+        </>
+      )}
+    </Sheet>
   );
 }
