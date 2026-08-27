@@ -3,9 +3,11 @@ import { createRoot } from "react-dom/client";
 import App from "./App.jsx";
 import "./styles.css";
 import { registerSW } from "./register-sw.jsx";
+import { inject } from "@vercel/analytics";
 
 createRoot(document.getElementById("root")).render(
   <React.StrictMode><App /></React.StrictMode>
 );
 
 registerSW();
+inject();
