@@ -723,7 +723,12 @@ export default function App() {
         matched++;
         const patch = { priceAsOf: asOf };
         if (hit.currentPrice != null) patch.currentPrice = String(hit.currentPrice);
-        if (isBlank(ipo.listingPrice) && hit.listingClose != null) patch.listingPrice = String(hit.listingClose);
+        if (isBlank(ipo.listingPrice) && hit.listingClose != null) {
+          // BSE publishes the listing-day close, not the opening print. Record
+          // which one this is so the UI does not call a close an open.
+          patch.listingPrice = String(hit.listingClose);
+          patch.listingPriceSource = "bse-close";
+        }
 
         // Every date we can source, but only where the field is empty — a date
         // entered by hand is a record of what actually happened and stands.
@@ -1537,7 +1542,7 @@ function IpoDetailSheet({ ipo, accounts, onClose, onEditIpo, onAddApplication, o
         <Badge color={COLORS.inkSoft} bg="#EFEDE7">Price ₹{ipo.priceBand || "—"}</Badge>
         <Badge color={COLORS.inkSoft} bg="#EFEDE7">Lot {ipo.lotSize || "—"} sh</Badge>
         {ipo.listingPrice && (
-          <Badge color={COLORS.inkSoft} bg="#EFEDE7">Listed ₹{ipo.listingPrice}</Badge>
+          <Badge color={COLORS.inkSoft} bg="#EFEDE7">{ipo.listingPriceSource === "bse-close" ? "Listing close" : "Listed"} ₹{ipo.listingPrice}</Badge>
         )}
         {isMarkedToMarket(ipo) && (
           <Badge color={Number(ipo.currentPrice) >= Number(ipo.priceBand) ? COLORS.green : COLORS.red}
@@ -2005,7 +2010,14 @@ function IpoFormSheet({ initial, onClose, onSave }) {
       <Field label="Price per Share (₹)"><Input type="number" inputMode="numeric" value={f.priceBand} onChange={set("priceBand")} placeholder="e.g. 285" /></Field>
       <Field label="Lot Size (shares)"><Input type="number" inputMode="numeric" value={f.lotSize} onChange={set("lotSize")} placeholder="e.g. 52" /></Field>
       <Field label="Listing Date (optional)"><Input type="date" value={f.listingDate} onChange={set("listingDate")} /></Field>
-      <Field label="Listing Price (optional, ₹)"><Input type="number" inputMode="numeric" value={f.listingPrice} onChange={set("listingPrice")} placeholder="e.g. 340" /></Field>
+      <Field label={f.listingPriceSource === "bse-close" ? "Listing Day Close (from BSE, ₹)" : "Listing Price (optional, ₹)"}>
+        <Input
+          type="number" inputMode="numeric" value={f.listingPrice}
+          // Typing over it makes it yours, so it is no longer BSE's close.
+          onChange={(e) => setF({ ...f, listingPrice: e.target.value, listingPriceSource: "" })}
+          placeholder="e.g. 340"
+        />
+      </Field>
       <Field label="Remarks">
         <textarea value={f.remarks} onChange={set("remarks")} rows={3} style={{ ...inputStyle, resize: "vertical" }} placeholder="Any notes about this IPO" />
       </Field>
