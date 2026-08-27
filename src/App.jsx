@@ -75,6 +75,13 @@ const ClipboardCheck = (p) => <SvgIcon {...p}><rect width="8" height="4" x="8" y
 ---------------------------------------------------------- */
 const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 const inr = (n) => "₹" + (Number(n) || 0).toLocaleString("en-IN", { maximumFractionDigits: 0 });
+
+/* Not every field can be filled in. NSE never publishes lot size and omits the
+   price band for some SME issues, so imported IPOs arrive incomplete. Treating
+   a blank as zero turns "we don't know" into a confident ₹0, which is worse
+   than saying nothing — so unknown values render as an em dash instead. */
+const isBlank = (v) => v === "" || v == null || !Number.isFinite(Number(v));
+const inrOrDash = (v) => (isBlank(v) ? "—" : inr(v));
 const fmtDate = (d) => {
   if (!d) return "—";
   const dt = new Date(d + "T00:00:00");
@@ -768,7 +775,20 @@ export default function App() {
           onClose={() => setIpoSheet(null)}
           onSave={(data) => {
             if (ipoSheet.ipo) {
-              persistIpos(ipos.map((i) => (i.id === data.id ? { ...i, ...data } : i)));
+              const merged = { ...ipoSheet.ipo, ...data };
+              // Applications added before the price and lot size were known were
+              // saved with a blank amount. Now that we can work it out, offer to.
+              const fillable = fillableApplications(merged);
+              const applications = fillable.length && confirm(
+                `Work out the blocked amount for ${fillable.length} application` +
+                `${fillable.length === 1 ? "" : "s"} that had none, from this price and lot size?`
+              )
+                ? (merged.applications || []).map((a) =>
+                    isBlank(a.amountBlocked) && blockedFor(merged, a.lots) > 0
+                      ? { ...a, amountBlocked: String(blockedFor(merged, a.lots)) }
+                      : a)
+                : merged.applications;
+              persistIpos(ipos.map((i) => (i.id === data.id ? { ...merged, applications } : i)));
             } else {
               persistIpos([{ ...data, id: uid(), applications: [] }, ...ipos]);
             }
@@ -1002,7 +1022,12 @@ function BottomNav({ tab, setTab }) {
    SCREENS
 ---------------------------------------------------------- */
 function Dashboard({ stats, ipos, accounts, onOpenIpo }) {
-  const recent = [...ipos].slice(0, 4);
+  const recent = [...ipos]
+    .sort((a, b) => (b.applicationDate || b.openDate || "").localeCompare(a.applicationDate || a.openDate || ""))
+    .slice(0, 4);
+  // Figures below are derived from price and lot size; say so when some are absent
+  // rather than quietly reporting a total that leaves money out.
+  const incomplete = ipos.filter((i) => (i.applications || []).length && missingIpoFields(i).length);
   return (
     <div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
@@ -1011,6 +1036,21 @@ function Dashboard({ stats, ipos, accounts, onOpenIpo }) {
         <StatCard label="Unrealized Gain" value={inr(stats.unrealized)} icon={stats.unrealized >= 0 ? TrendingUp : TrendingDown} tone={stats.unrealized >= 0 ? "green" : "red"} />
         <StatCard label="Pending Allotment" value={stats.pendingCount} icon={Clock} tone="gold" />
       </div>
+
+      {incomplete.length > 0 && (
+        <div style={{
+          background: COLORS.goldSoft, borderRadius: 10, padding: "9px 12px", marginBottom: 16,
+          fontSize: 12, color: COLORS.ink, display: "flex", gap: 8, alignItems: "flex-start",
+        }}>
+          <AlertTriangle size={14} color={COLORS.gold} style={{ flexShrink: 0, marginTop: 1 }} />
+          <span>
+            {incomplete.length} IPO{incomplete.length === 1 ? "" : "s"} with applications
+            {incomplete.length === 1 ? " is" : " are"} missing a price or lot size, so the figures
+            above leave {incomplete.length === 1 ? "it" : "them"} out. The IPOs tab has a
+            “Needs details” filter.
+          </span>
+        </div>
+      )}
 
       <SectionLabel>Recent Entries</SectionLabel>
       {ipos.length === 0 ? (
@@ -1117,11 +1157,12 @@ function IpoList({ ipos, accounts, onOpen, onEdit, onDelete }) {
   const [sort, setSort] = useState("recent");
 
   const counts = useMemo(() => {
-    const c = { all: ipos.length, pending: 0, allotted: 0, rejected: 0, sme: 0 };
+    const c = { all: ipos.length, pending: 0, allotted: 0, rejected: 0, sme: 0, incomplete: 0 };
     ipos.forEach((i) => {
       const b = ipoBucket(i);
       if (c[b] != null) c[b]++;
       if ((i.category || "Mainboard") === "SME") c.sme++;
+      if (missingIpoFields(i).length) c.incomplete++;
     });
     return c;
   }, [ipos]);
@@ -1142,6 +1183,7 @@ function IpoList({ ipos, accounts, onOpen, onEdit, onDelete }) {
         if (q && !`${i.company || ""} ${i.symbol || ""}`.toLowerCase().includes(q)) return false;
         if (filter === "all") return true;
         if (filter === "sme") return (i.category || "Mainboard") === "SME";
+        if (filter === "incomplete") return missingIpoFields(i).length > 0;
         return ipoBucket(i) === filter;
       })
       .sort(cmp);
@@ -1160,6 +1202,7 @@ function IpoList({ ipos, accounts, onOpen, onEdit, onDelete }) {
           { id: "allotted", label: "Allotted", count: counts.allotted },
           { id: "rejected", label: "Missed", count: counts.rejected },
           { id: "sme", label: "SME", count: counts.sme },
+          { id: "incomplete", label: "Needs details", count: counts.incomplete },
         ]}
         sort={sort} setSort={setSort}
         sorts={[
@@ -1198,6 +1241,22 @@ function allotmentTally(ipo) {
   t.won = t.allotted + t.partial;
   t.decided = t.total - t.pending;
   return t;
+}
+
+/* What this IPO still needs before any money figure derived from it can be
+   trusted. Both are required to work out how much a lot costs. */
+function missingIpoFields(ipo) {
+  const out = [];
+  if (!(Number(ipo.priceBand) > 0)) out.push("price");
+  if (!(Number(ipo.lotSize) > 0)) out.push("lot size");
+  return out;
+}
+
+// Applications whose blocked amount could be filled in now that the IPO is complete.
+function fillableApplications(ipo) {
+  return (ipo.applications || []).filter(
+    (a) => isBlank(a.amountBlocked) && blockedFor(ipo, a.lots) > 0
+  );
 }
 
 // Coarse bucket, used only for filtering the list.
@@ -1280,6 +1339,7 @@ function IpoCard({ ipo, accounts, onClick, onEdit, onDelete, showActions }) {
     ? (((Number(ipo.listingPrice) - Number(ipo.priceBand)) / Number(ipo.priceBand)) * 100)
     : null;
   const conflicts = panConflicts(ipo, accounts);
+  const missing = missingIpoFields(ipo);
   // Spine colour reflects where the IPO is overall, without claiming an outcome.
   const spine = tally.pending ? COLORS.gold : tally.won ? COLORS.green : tally.total ? COLORS.red : COLORS.border;
 
@@ -1301,6 +1361,11 @@ function IpoCard({ ipo, accounts, onClick, onEdit, onDelete, showActions }) {
             <div style={{ fontSize: 11.5, color: COLORS.inkSoft, marginTop: 2, fontFamily: "'JetBrains Mono', monospace" }}>
               {ipo.category || "Mainboard"} · ₹{ipo.priceBand || "—"}/sh · {totalLots} lot{totalLots === 1 ? "" : "s"} · {apps.length} applic.
             </div>
+            {missing.length > 0 && (
+              <div style={{ marginTop: 5 }}>
+                <Badge color={COLORS.gold} bg={COLORS.goldSoft}>NEEDS {missing.join(" & ").toUpperCase()}</Badge>
+              </div>
+            )}
           </div>
           {conflicts.length > 0 && (
             <span title="The same PAN is used more than once on this IPO">
@@ -1474,7 +1539,7 @@ function ApplicationRow({ app, ipo, accounts, onEdit, onDelete }) {
         <Badge color={meta.color} bg={meta.bg}>{app.allotmentStatus}</Badge>
       </div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8, fontFamily: "'JetBrains Mono', monospace", fontSize: 12 }}>
-        <span style={{ color: COLORS.inkSoft }}>{app.lots || 0} lot(s) · {inr(app.amountBlocked)} blocked</span>
+        <span style={{ color: COLORS.inkSoft }}>{app.lots || 0} lot(s) · {inrOrDash(app.amountBlocked)} blocked</span>
         {pnl !== null && (
           <span style={{ fontWeight: 700, color: pnl >= 0 ? COLORS.green : COLORS.red }}>
             {app.sold ? "P&L " : "Unreal. "}{inr(pnl)}
@@ -1787,7 +1852,7 @@ function TransferList({ transfers, accounts, ipos = [], onEdit, onDelete }) {
               <ArrowRightLeft size={13} color={COLORS.gold} />
               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name(t.toAccountId)}</span>
             </div>
-            <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, color: COLORS.navy, flexShrink: 0, marginLeft: 8 }}>{inr(t.amount)}</span>
+            <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, color: COLORS.navy, flexShrink: 0, marginLeft: 8 }}>{inrOrDash(t.amount)}</span>
           </div>
           <div style={{ fontSize: 11.5, color: COLORS.inkSoft, marginTop: 4 }}>{fmtDate(t.date)}</div>
           {t.remarks && <div style={{ fontSize: 12.5, color: COLORS.ink, marginTop: 6, fontStyle: "italic" }}>“{t.remarks}”</div>}
@@ -2449,7 +2514,7 @@ function BulkStatusSheet({ ipo, accounts, onClose, onSave }) {
                 <div style={{ minWidth: 0 }}>
                   <div style={{ fontWeight: 600, fontSize: 14, color: COLORS.ink }}>{nameOf(app.accountId)}</div>
                   <div style={{ fontSize: 11, color: COLORS.inkSoft, fontFamily: "'JetBrains Mono', monospace" }}>
-                    {app.lots || 0} lot(s) · {inr(app.amountBlocked)}
+                    {app.lots || 0} lot(s) · {inrOrDash(app.amountBlocked)}
                   </div>
                 </div>
                 <Select
