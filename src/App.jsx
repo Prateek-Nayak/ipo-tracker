@@ -202,6 +202,9 @@ async function gotrue(path, options = {}) {
 async function cloudSignUp(email, password) {
   return gotrue("signup", { method: "POST", body: JSON.stringify({ email, password }) });
 }
+async function cloudGetUser(accessToken) {
+  return gotrue("user", { headers: { Authorization: `Bearer ${accessToken}` } });
+}
 async function cloudSignIn(email, password) {
   return gotrue("token?grant_type=password", { method: "POST", body: JSON.stringify({ email, password }) });
 }
@@ -248,6 +251,23 @@ async function getFreshSession() {
   return refreshInFlight;
 }
 
+// Supabase sends the user back from a confirmation or recovery email with the
+// session in the URL fragment (#access_token=...). Pick it up so the link lands
+// straight in the ledger instead of on the sign-in screen.
+function readAuthHash() {
+  const hash = typeof window !== "undefined" ? window.location.hash || "" : "";
+  if (!/(^|[#&])(access_token|error|error_description)=/.test(hash)) return null;
+  return new URLSearchParams(hash.slice(1));
+}
+
+function clearAuthHash() {
+  try {
+    window.history.replaceState(null, "", window.location.pathname + window.location.search);
+  } catch {
+    window.location.hash = "";
+  }
+}
+
 async function rest(path, options = {}) {
   const session = await getFreshSession();
   const r = await fetch(`${CLOUD.url}/rest/v1/${path}`, {
@@ -259,15 +279,22 @@ async function rest(path, options = {}) {
       ...(options.headers || {}),
     },
   });
+  // Read the body once, as text. A write sent with `Prefer: return=minimal`
+  // comes back 201 with an empty body, so never hand an empty string to JSON.parse.
+  const text = await r.text();
   if (!r.ok) {
     if (r.status === 401) {
       setSession(null);
       throw new AuthError("Session expired. Please sign in again.");
     }
-    const text = await r.text();
     throw new Error(`Cloud request failed (${r.status}): ${text.slice(0, 300)}`);
   }
-  return r.status === 204 ? null : r.json();
+  if (!text.trim()) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(`Cloud returned a response that could not be read: ${text.slice(0, 200)}`);
+  }
 }
 
 async function cloudLoad() {
@@ -440,6 +467,8 @@ function PrimaryButton({ children, onClick, danger, ghost, disabled, type = "but
 export default function App() {
   const [session, setSessionState] = useState(currentSession);
   const [authMode, setAuthMode] = useState("login");
+  const [linkBusy, setLinkBusy] = useState(() => cloudEnabled() && !!readAuthHash());
+  const [linkNotice, setLinkNotice] = useState("");
 
   const [tab, setTab] = useState("dashboard");
   const [accounts, setAccounts] = useState([]);
@@ -467,6 +496,43 @@ export default function App() {
     sessionListeners.add(listener);
     return () => { sessionListeners.delete(listener); };
   }, []);
+
+  // Complete a sign-in that arrived via an email link.
+  useEffect(() => {
+    if (!linkBusy) return;
+    const params = readAuthHash();
+    clearAuthHash();
+    if (!params) { setLinkBusy(false); return; }
+
+    const token = params.get("access_token");
+    if (!token) {
+      const err = params.get("error_description") || params.get("error");
+      setLinkNotice((err || "That link is no longer valid.").replace(/\+/g, " "));
+      setLinkBusy(false);
+      return;
+    }
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const user = await cloudGetUser(token);
+        if (cancelled) return;
+        setSession(normalizeSession({
+          access_token: token,
+          refresh_token: params.get("refresh_token"),
+          expires_at: params.get("expires_at"),
+          expires_in: params.get("expires_in"),
+          user,
+        }));
+      } catch {
+        if (!cancelled) setLinkNotice("That link could not be used. Please sign in below.");
+      } finally {
+        if (!cancelled) setLinkBusy(false);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [linkBusy]);
 
   const userId = session?.user?.id || null;
 
@@ -497,19 +563,34 @@ export default function App() {
       try {
         const remote = await cloudLoad();
         if (cancelled) return;
-        if (isEmptyState(remote)) {
-          if (localIsOurs && !isEmptyState(local)) {
-            // First sign-in for this account: seed the cloud from what is on this
-            // device. This is how data from the localStorage-only build arrives.
-            await cloudSave(userId, local);
-          } else if (!localIsOurs) {
-            // Someone else's ledger is cached here; do not adopt or upload it.
-            apply(empty);
-            TABLES.forEach((k) => saveTable(k, []));
+
+        const commit = (state) => {
+          apply(state);
+          TABLES.forEach((k) => saveTable(k, state[k]));
+        };
+
+        if (!localIsOurs) {
+          // Someone else's ledger is cached here; do not adopt or upload it.
+          commit(isEmptyState(remote) ? empty : remote);
+        } else if (isEmptyState(remote)) {
+          // First sign-in for this account: seed the cloud from what is on this
+          // device. This is how data from the localStorage-only build arrives.
+          if (!isEmptyState(local)) await cloudSave(userId, local);
+        } else if (!owner && !isEmptyState(local)) {
+          // This device still holds data from the pre-sync build, and the cloud
+          // already has something. Merge rather than overwrite, so it does not
+          // matter which device gets synced first and nothing is ever lost.
+          const merged = {
+            accounts: mergeById(remote.accounts, local.accounts),
+            ipos: mergeIpos(remote.ipos, local.ipos),
+            transfers: mergeById(remote.transfers, local.transfers),
+          };
+          commit(merged);
+          if (TABLES.some((k) => merged[k].length !== remote[k].length)) {
+            await cloudSave(userId, merged);
           }
         } else {
-          apply(remote);
-          TABLES.forEach((k) => saveTable(k, remote[k]));
+          commit(remote);
         }
         if (cancelled) return;
         setLocalOwner(userId);
@@ -536,7 +617,18 @@ export default function App() {
     if (!cloudEnabled() || !userId) return;
     setSyncing(true);
     try {
-      await cloudSave(userId, { accounts, ipos, transfers });
+      const state = { accounts, ipos, transfers };
+      // Never let a device that has nothing wipe a cloud that has something.
+      // Without this, opening the app somewhere new and hitting Sync now would
+      // overwrite the real ledger with three empty arrays.
+      if (isEmptyState(state)) {
+        const remote = await cloudLoad();
+        if (!isEmptyState(remote)) {
+          setSyncError("This device is empty but your cloud ledger is not. Nothing was overwritten — reload to pull it down.");
+          return;
+        }
+      }
+      await cloudSave(userId, state);
       setSyncError("");
       setLastSync(new Date());
     } catch (e) {
@@ -584,20 +676,13 @@ export default function App() {
   }, [ipos]);
 
   /* ---------- gates ---------- */
+  if (linkBusy) return <Splash text="Signing you in…" />;
+
   if (cloudEnabled() && !session) {
-    return <AuthScreen mode={authMode} setMode={setAuthMode} />;
+    return <AuthScreen mode={authMode} setMode={setAuthMode} notice={linkNotice} />;
   }
 
-  if (!loaded) {
-    return (
-      <div style={{
-        minHeight: "100dvh", background: COLORS.bg,
-        display: "flex", alignItems: "center", justifyContent: "center",
-      }}>
-        <div style={{ fontFamily: "'Fraunces', serif", color: COLORS.navy, fontSize: 18 }}>Loading ledger…</div>
-      </div>
-    );
-  }
+  if (!loaded) return <Splash text="Loading ledger…" />;
 
   return (
     <div style={{
@@ -746,6 +831,17 @@ export default function App() {
           onSignOut={async () => { setDataSheetOpen(false); await cloudSignOut(); }}
         />
       )}
+    </div>
+  );
+}
+
+function Splash({ text }) {
+  return (
+    <div style={{
+      minHeight: "100dvh", background: COLORS.bg,
+      display: "flex", alignItems: "center", justifyContent: "center",
+    }}>
+      <div style={{ fontFamily: "'Fraunces', serif", color: COLORS.navy, fontSize: 18 }}>{text}</div>
     </div>
   );
 }
@@ -1546,11 +1642,11 @@ function DataSheet({ state, session, cloudOn, syncing, syncError, lastSync, onCl
 /* ---------------------------------------------------------
    AUTH
 ---------------------------------------------------------- */
-function AuthScreen({ mode, setMode }) {
+function AuthScreen({ mode, setMode, notice }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState(notice || "");
   const [info, setInfo] = useState("");
 
   const submit = async () => {

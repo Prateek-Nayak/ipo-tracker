@@ -87,32 +87,63 @@ git push -u origin main
 
 ---
 
-## 5. Move the data off your phone
+## 5. Point Supabase at your real URLs
+
+By default Supabase sends confirmation and recovery emails back to
+`http://localhost:3000`, which is why such a link opens a dead page.
+
+Go to **Authentication → URL Configuration** and set:
+
+- **Site URL**: `https://prateeknayak.in`
+- **Redirect URLs** (add each one):
+  ```text
+  https://prateeknayak.in/**
+  https://www.prateeknayak.in/**
+  https://silly-sherbet-a650b6.netlify.app/**
+  http://localhost:5173/**
+  ```
+
+The Netlify entry is only needed for the one-time data move below; drop it after.
+`localhost:5173` is Vite's dev port — note it is 5173, not 3000.
+
+The app reads the session out of the `#access_token=...` fragment these links come
+back with, so clicking a confirmation email drops you straight into the ledger,
+already signed in.
+
+---
+
+## 6. Move the data off your phone
 
 Browser storage is per-origin. The data you entered on the old Netlify site lives
-in that site's localStorage and does **not** follow you to a new Vercel URL. The
-app reads and writes the same `ipo_ledger_*` storage keys the original build used,
-which makes the move a one-time, no-typing operation:
+in that site's localStorage and does **not** follow you to the Vercel URL. Only
+code served from the Netlify origin can read it, so the move has to start there.
+The app keeps the same `ipo_ledger_*` storage keys the original build used, which
+turns it into a one-time, no-typing operation:
 
-1. Build this project: `npm run build` (or download the `dist/` output that Vercel built).
-2. Deploy that same `dist/` folder to your **existing Netlify site** — open the site
-   in the Netlify dashboard, go to **Deploys**, and drag the `dist` folder onto the
+1. Make sure `.env` has your two Supabase values, then run `npm run build`.
+2. Deploy that `dist/` folder to your **existing Netlify site** — open the site in
+   the Netlify dashboard, go to **Deploys**, and drag the `dist` folder onto the
    drop zone. This replaces the old single-file build in place, on the same URL.
-3. On your phone, open **https://silly-sherbet-a650b6.netlify.app/** and hard-refresh
-   (pull down to reload, or close and reopen the tab).
-4. Sign up with your email and password. On that first sign-in the app finds the
-   ledger already sitting in localStorage and uploads it to Supabase.
-5. Confirm it worked: tap the cloud icon in the header. It should show your email,
-   "Synced at …", and the right counts.
-6. Now open your Vercel URL, sign in with the same account, and the whole ledger
-   is there. Install it from the browser menu (**Install app** / **Add to Home screen**)
-   and retire the Netlify site whenever you like.
+3. On your phone, open **https://silly-sherbet-a650b6.netlify.app/** and reload.
+4. Sign in with the account you already confirmed. The app finds the ledger sitting
+   in localStorage and uploads it to Supabase.
+5. Check it worked: tap the cloud icon. It should show your email, "Synced at …",
+   and the right counts.
+6. Open **https://prateeknayak.in**, sign in with the same account, and the ledger
+   is there. Install it from the browser menu (**Install app** / **Add to Home
+   screen**), then delete the Netlify site.
 
-**If you would rather not touch Netlify:** on the phone, open the old site, tap the
-cloud icon → **Copy JSON**, then open the Vercel site, sign in, tap the cloud icon →
-**Restore from a backup…**, paste, and choose **Merge in**. This only works once the
-new build is on the Netlify site though, since the old single-file build has no
-export button — which is why step 2 is the simpler path.
+**Order does not matter.** If you have already added entries on the Vercel site,
+the phone's data is merged with what is in the cloud rather than overwritten — you
+end up with both sets, and nothing is lost whichever device syncs first.
+
+**If you would rather not touch Netlify at all,** the only alternative is retyping
+the entries by hand. The old single-file build has no export button, and nothing
+outside that origin — including this project and any script you run elsewhere —
+can reach its localStorage. Step 2 is what puts an export button on that origin in
+the first place; once it is there you could instead use the cloud icon →
+**Copy JSON** on the phone and **Restore from a backup…** on Vercel, but by then
+signing in has already done the job for you.
 
 ---
 
