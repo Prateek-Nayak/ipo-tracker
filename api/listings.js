@@ -191,11 +191,20 @@ async function bseListingOpen(scripCode, isoDay) {
   if (!t.trim()) return null;
   try {
     const row = JSON.parse(t)?.StockData?.[0];
-    return { open: num(row?.qe_open), close: num(row?.qe_close) };
+    // This endpoint returns prices as display strings, so anything over a
+    // thousand arrives grouped: "1,193.80". Number() makes that NaN, which
+    // silently dropped every listing above Rs.1000.
+    return { open: money(row?.qe_open), close: money(row?.qe_close) };
   } catch {
     return null;
   }
 }
+
+const money = (v) => {
+  // Number("") is 0, so an absent price would otherwise become a confident zero.
+  const s = String(v ?? "").replace(/,/g, "").trim();
+  return s ? num(s) : null;
+};
 
 // The scrip code is embedded in the company link BSE returns: .../aye/544699/
 function scripCodeFrom(url) {
