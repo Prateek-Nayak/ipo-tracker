@@ -696,7 +696,15 @@ export default function App() {
     if (!ipos.length) return { matched: 0, updated: 0 };
     setPricing(true);
     try {
-      const res = await fetch("/api/listings");
+      /* Ask BSE back as far as this ledger actually reaches. Without this the
+         window defaults to the last year or so, and anything older simply
+         never matches. */
+      const years = ipos
+        .map((i) => parseInt(String(i.listingDate || i.applicationDate || i.openDate || "").slice(0, 4), 10))
+        .filter((y) => Number.isFinite(y) && y >= 2010);
+      const from = years.length ? Math.min(...years) : new Date().getFullYear() - 1;
+
+      const res = await fetch(`/api/listings?from=${from}`);
       const text = await res.text();
       let data = {};
       try { data = JSON.parse(text); } catch { /* handled next */ }

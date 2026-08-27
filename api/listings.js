@@ -78,29 +78,31 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  // Default to this year and last, which covers anything still worth tracking.
+  /* BSE's Fromdt is a starting year, not a single one: Fromdt=2023 returns
+     2023 through today in one response. So one call with the earliest year
+     the caller cares about covers everything, and asking for several years
+     would just fetch the same rows repeatedly. */
   const thisYear = new Date().getFullYear();
-  const requested = String(req.query?.years || "")
-    .split(",")
-    .map((y) => parseInt(y, 10))
-    .filter((y) => Number.isFinite(y) && y >= 2000 && y <= thisYear + 1);
-  const years = requested.length ? requested.slice(0, 4) : [thisYear, thisYear - 1];
+  const asked = parseInt(String(req.query?.from ?? req.query?.years ?? "").split(",").pop(), 10);
+  const from = Number.isFinite(asked)
+    ? Math.min(Math.max(asked, 2010), thisYear)
+    : thisYear - 1;
 
   try {
-    const batches = await Promise.all(
-      years.map((y) => bseYear(y).catch(() => []))
-    );
+    const rows = await bseYear(from);
 
-    // One row per company. A later year wins, and a row that actually carries a
-    // current price beats one that does not.
+    // One row per company. A row that actually carries a current price beats
+    // one that does not; otherwise the more recent listing wins.
     const byKey = new Map();
-    batches.flat().forEach((raw) => {
+    rows.forEach((raw) => {
       const row = normalise(raw);
       if (!row.key) return;
       const prev = byKey.get(row.key);
-      if (!prev || (row.currentPrice != null && prev.currentPrice == null)) {
-        byKey.set(row.key, row);
-      }
+      if (!prev) { byKey.set(row.key, row); return; }
+      const better =
+        (row.currentPrice != null && prev.currentPrice == null) ||
+        (row.listedOn || "") > (prev.listedOn || "");
+      if (better) byKey.set(row.key, row);
     });
 
     const listings = [...byKey.values()].sort((a, b) => (b.listedOn || "").localeCompare(a.listedOn || ""));
@@ -113,7 +115,7 @@ export default async function handler(req, res) {
     return res.status(200).json({
       source: "BSE",
       fetchedAt: new Date().toISOString(),
-      years,
+      from,
       listings,
     });
   } catch (error) {
