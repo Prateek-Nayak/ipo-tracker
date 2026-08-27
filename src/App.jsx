@@ -123,18 +123,59 @@ function todayISO() {
 // "Listed" about a share that has not listed yet is simply wrong.
 const hasListed = (ipo) => !!ipo?.listingDate && ipo.listingDate <= todayISO();
 
-// Calendar arithmetic on a plain date, skipping weekends.
+/* Declared here rather than beside the other storage helpers because the
+   holiday cache below needs it, and a const used before its declaration is
+   undefined at that point - which quietly wrote the calendar to a key called
+   "undefinedholidays". */
+const STORAGE_PREFIX = "ipo_ledger_";
+
+/* NSE's trading-holiday calendar, kept module-wide because every date
+   calculation needs it. Deliberately the trading calendar and not the clearing
+   one: they differ on four days of 2026, and 26 August — a clearing holiday but
+   an ordinary trading day — is one an IPO actually listed on. */
+const HOLIDAY_KEY = STORAGE_PREFIX + "holidays";
+let marketHolidays = new Set();
+const holidayListeners = new Set();
+
+function setHolidays(dates, fetchedAt) {
+  marketHolidays = new Set(dates);
+  try {
+    localStorage.setItem(HOLIDAY_KEY, JSON.stringify({ fetchedAt, dates }));
+  } catch { /* a cache miss only costs one request */ }
+  holidayListeners.forEach((fn) => fn());
+}
+
+(function loadCachedHolidays() {
+  try {
+    const c = JSON.parse(localStorage.getItem(HOLIDAY_KEY) || "null");
+    if (c && Array.isArray(c.dates)) marketHolidays = new Set(c.dates);
+  } catch { /* start empty */ }
+})();
+
+// Calendar arithmetic on a plain date, skipping weekends and market holidays.
 function addWorkingDays(iso, n) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(iso || "")) return "";
   const d = new Date(iso + "T00:00:00Z");
   const step = n >= 0 ? 1 : -1;
   let left = Math.abs(n);
-  while (left > 0) {
+  let guard = 0;
+  while (left > 0 && guard++ < 400) {
     d.setUTCDate(d.getUTCDate() + step);
     const wd = d.getUTCDay();
-    if (wd !== 0 && wd !== 6) left--;
+    const iso2 = d.toISOString().slice(0, 10);
+    if (wd !== 0 && wd !== 6 && !marketHolidays.has(iso2)) left--;
   }
   return d.toISOString().slice(0, 10);
+}
+
+/* When an issue lists. SEBI's T+3: bidding closes on T, listing follows three
+   trading days later. Checked against every 2025-26 issue with both dates on
+   record — 19 of 19 — so the inference is sound, but it is still an inference
+   and is shown as one until the exchange confirms it. */
+function listingDateOf(ipo) {
+  if (ipo?.listingDate) return { date: ipo.listingDate, exact: true };
+  if (ipo?.closeDate) return { date: addWorkingDays(ipo.closeDate, 3), exact: false };
+  return { date: "", exact: false };
 }
 
 /* The day the basis of allotment is settled — the day there is something to
@@ -145,8 +186,8 @@ function addWorkingDays(iso, n) {
    labelled as one. */
 function allotmentDateOf(ipo) {
   if (ipo?.allotmentDate) return { date: ipo.allotmentDate, exact: true };
-  if (ipo?.listingDate) return { date: addWorkingDays(ipo.listingDate, -2), exact: false };
   if (ipo?.closeDate) return { date: addWorkingDays(ipo.closeDate, 1), exact: false };
+  if (ipo?.listingDate) return { date: addWorkingDays(ipo.listingDate, -2), exact: false };
   return { date: "", exact: false };
 }
 
@@ -182,6 +223,18 @@ function issueStage(x) {
   }
 
   if (listed && listed > today) return { label: "LISTS " + fmtDate(listed).toUpperCase().slice(0, 6), color: COLORS.navy, bg: "#EAEFF5" };
+
+  /* With no listing date on record, T+3 from the close says when to expect one.
+     Never treated as proof it has listed — only as what is coming. */
+  const expected = listingDateOf(x);
+  // Strictly past: on the closing day itself the close is the immediate event,
+  // and saying when it might list instead would bury the deadline.
+  if (!listed && expected.date && close && close < today) {
+    if (expected.date === today) return { label: "LISTS LIKELY TODAY", color: COLORS.green, bg: COLORS.greenSoft };
+    if (expected.date > today) return { label: "LISTS ~" + fmtDate(expected.date).toUpperCase().slice(0, 6), color: COLORS.navy, bg: "#EAEFF5" };
+    return { label: "LISTING DUE", color: COLORS.gold, bg: COLORS.goldSoft };
+  }
+
   if (allot.date && allot.date > today && close && close < today) {
     return { label: "ALLOTMENT " + fmtDate(allot.date).toUpperCase().slice(0, 6), color: COLORS.gold, bg: COLORS.goldSoft };
   }
@@ -214,7 +267,6 @@ const TABLES = ["accounts", "ipos", "transfers"];
    build ("ipo_ledger_*") so an existing install on the same
    origin keeps its data and uploads it on first sign-in.
 ---------------------------------------------------------- */
-const STORAGE_PREFIX = "ipo_ledger_";
 
 function loadTable(key) {
   try {
@@ -633,6 +685,34 @@ export default function App() {
 
   const skipNextAutoSync = useRef(true);
   const pricedOnce = useRef(false);
+  const [, bumpHolidays] = useState(0);
+
+  /* The holiday calendar changes about once a year, so it is cached and only
+     refetched when a day old. Every date shown is computed from it, hence the
+     re-render once it lands. */
+  useEffect(() => {
+    const listener = () => bumpHolidays((n) => n + 1);
+    holidayListeners.add(listener);
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const cached = JSON.parse(localStorage.getItem(HOLIDAY_KEY) || "null");
+        const age = cached?.fetchedAt ? Date.now() - Date.parse(cached.fetchedAt) : Infinity;
+        if (cached?.dates?.length && age < 24 * 3600 * 1000) return;
+
+        const res = await fetch("/api/holidays");
+        if (!res.ok) return;
+        const data = JSON.parse(await res.text());
+        if (cancelled || data.error || !Array.isArray(data.holidays)) return;
+        setHolidays(data.holidays.map((h) => h.date), data.fetchedAt || new Date().toISOString());
+      } catch {
+        // Weekend-only arithmetic is a reasonable fallback.
+      }
+    })();
+
+    return () => { cancelled = true; holidayListeners.delete(listener); };
+  }, []);
 
   // Keep React in step with the module-level session, which the token refresh
   // logic and any 401 response can also change.
@@ -1724,9 +1804,9 @@ function IpoDetailSheet({ ipo, accounts, onClose, onEditIpo, onAddApplication, o
             {allotmentDateOf(ipo).exact ? "" : " (expected)"}
           </span>
         )}
-        {ipo.listingDate && (
-          <span>{hasListed(ipo) ? "Listed" : "Lists"} {fmtDate(ipo.listingDate)}</span>
-        )}
+        {ipo.listingDate
+          ? <span>{hasListed(ipo) ? "Listed" : "Lists"} {fmtDate(ipo.listingDate)}</span>
+          : listingDateOf(ipo).date && <span>Lists {fmtDate(listingDateOf(ipo).date)} (expected)</span>}
       </div>
       {ipo.remarks && (
         <div style={{ fontSize: 13, color: COLORS.ink, background: COLORS.goldSoft, borderRadius: 8, padding: "8px 10px", marginBottom: 10 }}>
@@ -2210,7 +2290,9 @@ function IpoFormSheet({ initial, onClose, onSave }) {
               {allotmentDateOf(f).exact ? "" : " (expected)"}
             </span>
           )}
-          {f.listingDate && <span>{hasListed(f) ? "Listed" : "Lists"} {fmtDate(f.listingDate)}</span>}
+          {f.listingDate
+            ? <span>{hasListed(f) ? "Listed" : "Lists"} {fmtDate(f.listingDate)}</span>
+            : listingDateOf(f).date && <span>Lists {fmtDate(listingDateOf(f).date)} (expected)</span>}
           {!(f.openDate || f.closeDate || f.listingDate) && (
             <span style={{ fontFamily: "Inter, sans-serif" }}>
               BSE has none for this issue. Refreshing prices fills them in when it does.
