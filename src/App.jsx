@@ -734,11 +734,17 @@ export default function App() {
            rather than only filling gaps. */
         const patch = { priceAsOf: asOf };
         if (hit.currentPrice != null) patch.currentPrice = String(hit.currentPrice);
-        if (hit.listingClose != null) {
-          // BSE publishes the listing-day close, not the opening print.
+        /* The listing price is the opening print on debut day. The close can be
+           far from it — Innovision opened at 466 and closed at 372.8 the same
+           day — so the close is only a fallback when the open is unavailable. */
+        if (hit.listingOpen != null) {
+          patch.listingPrice = String(hit.listingOpen);
+          patch.listingPriceSource = "bse-open";
+        } else if (hit.listingClose != null) {
           patch.listingPrice = String(hit.listingClose);
           patch.listingPriceSource = "bse-close";
         }
+        if (hit.listingClose != null) patch.listingClosePrice = String(hit.listingClose);
         if (hit.listedOn) patch.listingDate = hit.listedOn;
         if (hit.openDate) patch.openDate = hit.openDate;
         if (hit.closeDate) {
@@ -1570,6 +1576,10 @@ function IpoDetailSheet({ ipo, accounts, onClose, onEditIpo, onAddApplication, o
         {ipo.listingPrice && hasListed(ipo) && (
           <Badge color={COLORS.inkSoft} bg="#EFEDE7">{ipo.listingPriceSource === "bse-close" ? "Listing close" : "Listed"} ₹{ipo.listingPrice}</Badge>
         )}
+        {hasListed(ipo) && ipo.listingClosePrice && ipo.listingPriceSource === "bse-open"
+          && ipo.listingClosePrice !== ipo.listingPrice && (
+          <Badge color={COLORS.inkSoft} bg="#EFEDE7">closed ₹{ipo.listingClosePrice}</Badge>
+        )}
         {isMarkedToMarket(ipo) && (
           <Badge color={Number(ipo.currentPrice) >= Number(ipo.priceBand) ? COLORS.green : COLORS.red}
             bg={Number(ipo.currentPrice) >= Number(ipo.priceBand) ? COLORS.greenSoft : COLORS.redSoft}>
@@ -2056,7 +2066,7 @@ function IpoFormSheet({ initial, onClose, onSave }) {
           {f.listingDate && <span>{hasListed(f) ? "Listed" : "Lists"} {fmtDate(f.listingDate)}</span>}
         </div>
       )}
-      <Field label={f.listingPriceSource === "bse-close" ? "Listing Day Close (from BSE, ₹)" : "Listing Price (optional, ₹)"}>
+      <Field label={f.listingPriceSource === "bse-open" ? "Listing Price — day-one open (from BSE, ₹)" : f.listingPriceSource === "bse-close" ? "Listing Day Close (from BSE, ₹)" : "Listing Price (optional, ₹)"}>
         <Input
           type="number" inputMode="numeric" value={f.listingPrice}
           // Typing over it makes it yours, so it is no longer BSE's close.

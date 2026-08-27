@@ -33,9 +33,8 @@ const num = (v) => {
 
 const isoDate = (v) => (typeof v === "string" && v.length >= 10 ? v.slice(0, 10) : "");
 
-async function bseYear(year) {
-  // type=1 covers mainboard and SME together; type=2 would be mainboard only.
-  const url = `${BSE}/MoreCompanyN/w?Fromdt=${year}&company=&flag=1&type=1`;
+async function moreCompany(year, type) {
+  const url = `${BSE}/MoreCompanyN/w?Fromdt=${year}&company=&flag=1&type=${type}`;
   const r = await fetch(url, {
     headers: {
       "User-Agent": UA,
@@ -54,6 +53,36 @@ async function bseYear(year) {
     throw new Error(`BSE returned a non-JSON body for ${year}`);
   }
   return Array.isArray(data?.Table) ? data.Table : [];
+}
+
+/* The two variants carry different things and both are needed: type=1 lists
+   mainboard and SME together but omits the company link, while type=2 is
+   mainboard only and includes it. That link is the only place the scrip code
+   appears, and without a scrip code there is no listing-day price to fetch. */
+async function bseYear(year) {
+  /* The two variants behave differently: type=1 is cumulative, so one call from
+     the earliest year returns everything since. type=2 is per-year, so it has
+     to be asked for each year separately - which is worth doing only because it
+     is the sole carrier of the company link, and so of the scrip code. */
+  const thisYear = new Date().getFullYear();
+  const years = [];
+  for (let y = year; y <= thisYear && years.length < 8; y++) years.push(y);
+
+  const [all, ...perYear] = await Promise.all([
+    moreCompany(year, 1),
+    ...years.map((y) => moreCompany(y, 2).catch(() => [])),
+  ]);
+
+  const links = new Map();
+  perYear.flat().forEach((r) => {
+    const k = nameKey(r.CompanyName);
+    if (k && r.IMAGE) links.set(k, { IMAGE: r.IMAGE, Company_Short_Name: r.Company_Short_Name });
+  });
+
+  return all.map((r) => {
+    const extra = links.get(nameKey(r.CompanyName));
+    return extra ? { ...r, ...extra } : r;
+  });
 }
 
 /* Bidding windows. flag=1 is live and forthcoming, flag=2 is closed issues;
@@ -137,6 +166,43 @@ async function bseLotSize(ipoNo) {
   }
 }
 
+/* The price a share actually listed at — the opening print on its first day.
+   MoreCompanyN only carries the listing-day close, which on a volatile debut is
+   a different number entirely. This is the daily OHLC endpoint, asked for a
+   single date. Verified against a known listing: it returns the same close that
+   MoreCompanyN reports, so its open is trustworthy too. */
+async function bseListingOpen(scripCode, isoDay) {
+  if (!scripCode || !/^\d{4}-\d{2}-\d{2}$/.test(isoDay || "")) return null;
+  const [y, m, d] = isoDay.split("-");
+  const dmy = `${d}/${m}/${y}`;
+  const url =
+    `${BSE}/StockpricesearchData/w?MonthDate=${dmy}&YearDate=${dmy}` +
+    `&pageType=0&Scode=${encodeURIComponent(scripCode)}&Seg=C&rbType=D`;
+  const r = await fetch(url, {
+    headers: {
+      "User-Agent": UA,
+      Accept: "application/json, text/plain, */*",
+      Referer: "https://www.bseindia.com/",
+      Origin: "https://www.bseindia.com",
+    },
+  });
+  if (!r.ok) return null;
+  const t = await r.text();
+  if (!t.trim()) return null;
+  try {
+    const row = JSON.parse(t)?.StockData?.[0];
+    return { open: num(row?.qe_open), close: num(row?.qe_close) };
+  } catch {
+    return null;
+  }
+}
+
+// The scrip code is embedded in the company link BSE returns: .../aye/544699/
+function scripCodeFrom(url) {
+  const m = String(url || "").match(/\/(\d{6})\/?$/);
+  return m ? m[1] : "";
+}
+
 async function mapLimited(items, limit, fn) {
   const out = new Array(items.length);
   let i = 0;
@@ -160,6 +226,7 @@ function normalise(row) {
     listedOn: isoDate(row.ListedOn),
     listingClose: num(row.ListingDayClose),
     lotSize: null,
+    listingOpen: null,
     priceMin: null,
     priceMax: null,
     listingDayGain: num(row.ListingDayGain),
@@ -169,7 +236,7 @@ function normalise(row) {
   };
 }
 
-export const config = { maxDuration: 20 };
+export const config = { maxDuration: 30 };
 
 export default async function handler(req, res) {
   if (req.method !== "GET") {
@@ -235,12 +302,27 @@ export default async function handler(req, res) {
       .filter(Boolean);
 
     if (wanted.length) {
-      const targets = wanted
-        .map((k) => byKey.get(k))
-        .filter((row) => row && row.ipoNo && row.lotSize == null)
+      const rowsFor = wanted.map((k) => byKey.get(k)).filter(Boolean);
+
+      const lotTargets = rowsFor.filter((r) => r.ipoNo && r.lotSize == null).slice(0, 25);
+      const openTargets = rowsFor
+        .filter((r) => r.listedOn && scripCodeFrom(r.bseUrl))
         .slice(0, 25);
-      const lots = await mapLimited(targets, 5, (row) => bseLotSize(row.ipoNo));
-      lots.forEach((lot, i) => { if (lot) targets[i].lotSize = lot; });
+
+      const [lots, opens] = await Promise.all([
+        mapLimited(lotTargets, 5, (r) => bseLotSize(r.ipoNo)),
+        mapLimited(openTargets, 5, (r) => bseListingOpen(scripCodeFrom(r.bseUrl), r.listedOn)),
+      ]);
+
+      lots.forEach((lot, i) => { if (lot) lotTargets[i].lotSize = lot; });
+      opens.forEach((o, i) => {
+        if (!o) return;
+        const row = openTargets[i];
+        if (o.open != null) row.listingOpen = o.open;
+        // Same-day close straight from the OHLC record, rather than the
+        // aggregate feed's copy of it.
+        if (o.close != null) row.listingClose = o.close;
+      });
     }
 
     const listings = [...byKey.values()].sort((a, b) => (b.listedOn || "").localeCompare(a.listedOn || ""));
