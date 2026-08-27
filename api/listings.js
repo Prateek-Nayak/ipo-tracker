@@ -190,13 +190,20 @@ function parseBand(s) {
    every issue BSE has ever run. */
 /* The whole issue record behind an IPO_NO — dates, lot size and price band.
    BSE keeps these indefinitely, unlike the bidding-window feed. */
+/* Survives between invocations on a warm function, so a second refresh pays
+   for far fewer probes than the first. */
+const issueCache = new Map();
+
 async function bseIssue(ipoNo) {
+  if (issueCache.has(ipoNo)) return issueCache.get(ipoNo);
   const url = `${BSE}/GetMkt_ISSUE_BBS_IPO/w?IPO_NO=${encodeURIComponent(ipoNo)}`;
   try {
     const res = await bseFetch(url, 1);
     const text = await res.text();
     if (!text.trim()) return null;
-    return JSON.parse(text)?.IPONO_0?.[0] || null;
+    const row = JSON.parse(text)?.IPONO_0?.[0] || null;
+    if (issueCache.size < 4000) issueCache.set(ipoNo, row);
+    return row;
   } catch {
     return null;
   }
@@ -226,12 +233,7 @@ async function bseIssueByName(name, listedOn, high) {
   const target = nameKey(name);
   if (!target || !/^\d{4}-\d{2}-\d{2}$/.test(listedOn || "")) return null;
 
-  const seen = new Map();
-  const at = async (no) => {
-    if (no < high - 1200 || no > high) return null;
-    if (!seen.has(no)) seen.set(no, await bseIssue(no));
-    return seen.get(no);
-  };
+  const at = async (no) => (no < high - 1200 || no > high ? null : bseIssue(no));
   // A dated neighbour, for the numbers BSE returns blank.
   const dated = async (no) => {
     for (let k = 0; k <= 6; k++) {
@@ -383,7 +385,7 @@ function normalise(row) {
   };
 }
 
-export const config = { maxDuration: 30 };
+export const config = { maxDuration: 60 };
 
 export default async function handler(req, res) {
   if (req.method !== "GET") {
@@ -475,8 +477,8 @@ export default async function handler(req, res) {
       if (highNo) {
         const stale = rowsFor
           .filter((r) => r.listedOn && (!r.closeDate || r.lotSize == null))
-          .slice(0, 6);
-        const found = await mapLimited(stale, 3, (r) =>
+          .slice(0, 8);
+        const found = await mapLimited(stale, 8, (r) =>
           bseIssueByName(r.company, r.listedOn, highNo).catch(() => null)
         );
         found.forEach((hit, i) => {
