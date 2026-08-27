@@ -33,17 +33,33 @@ const num = (v) => {
 
 const isoDate = (v) => (typeof v === "string" && v.length >= 10 ? v.slice(0, 10) : "");
 
+/* BSE drops connections intermittently — a given query can throw "fetch failed"
+   for a spell and then recover — so a transient failure gets one more go before
+   being believed. */
+async function bseFetch(url, attempts = 2) {
+  let last;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const r = await fetch(url, {
+        headers: {
+          "User-Agent": UA,
+          Accept: "application/json, text/plain, */*",
+          Referer: "https://www.bseindia.com/",
+          Origin: "https://www.bseindia.com",
+        },
+      });
+      if (!r.ok) throw new Error(`BSE responded ${r.status}`);
+      return r;
+    } catch (e) {
+      last = e;
+      if (i < attempts - 1) await new Promise((res) => setTimeout(res, 400));
+    }
+  }
+  throw last;
+}
+
 async function moreCompany(year, type) {
-  const url = `${BSE}/MoreCompanyN/w?Fromdt=${year}&company=&flag=1&type=${type}`;
-  const r = await fetch(url, {
-    headers: {
-      "User-Agent": UA,
-      Accept: "application/json, text/plain, */*",
-      Referer: "https://www.bseindia.com/",
-      Origin: "https://www.bseindia.com",
-    },
-  });
-  if (!r.ok) throw new Error(`BSE responded ${r.status} for ${year}`);
+  const r = await bseFetch(`${BSE}/MoreCompanyN/w?Fromdt=${year}&company=&flag=1&type=${type}`);
   const text = await r.text();
   if (!text.trim()) return [];
   let data;
@@ -70,19 +86,35 @@ async function bseYear(year) {
 
   const [all, ...perYear] = await Promise.all([
     moreCompany(year, 1),
-    ...years.map((y) => moreCompany(y, 2).catch(() => [])),
+    ...years.map((y) => moreCompany(y, 2).then((rows) => ({ ok: true, rows })).catch(() => ({ ok: false, rows: [] }))),
   ]);
 
+  /* Category is inferred from absence — an issue is SME because it is *not* in
+     the mainboard list — so it can only be asserted when that list actually
+     arrived. A failed fetch would otherwise relabel every mainboard IPO as SME,
+     which looks like data rather than like a failure. */
+  const mainboardKnown = perYear.some((p) => p.ok && p.rows.length);
+
   const links = new Map();
-  perYear.flat().forEach((r) => {
+  const mainboard = new Set();
+  perYear.forEach((p) => p.rows.forEach((r) => {
     const k = nameKey(r.CompanyName);
-    if (k && r.IMAGE) links.set(k, { IMAGE: r.IMAGE, Company_Short_Name: r.Company_Short_Name });
+    if (!k) return;
+    mainboard.add(k);
+    if (r.IMAGE) links.set(k, { IMAGE: r.IMAGE, Company_Short_Name: r.Company_Short_Name });
+  }));
+
+  const rows = all.map((r) => {
+    const k = nameKey(r.CompanyName);
+    const extra = links.get(k);
+    return {
+      ...r,
+      ...(extra || {}),
+      __category: mainboardKnown ? (mainboard.has(k) ? "Mainboard" : "SME") : "",
+    };
   });
 
-  return all.map((r) => {
-    const extra = links.get(nameKey(r.CompanyName));
-    return extra ? { ...r, ...extra } : r;
-  });
+  return { rows, mainboardKnown };
 }
 
 /* Bidding windows. flag=1 is live and forthcoming, flag=2 is closed issues;
@@ -231,6 +263,7 @@ function normalise(row) {
     company: String(row.CompanyName || "").replace(/\s+/g, " ").trim(),
     key: nameKey(row.CompanyName),
     shortName: row.Company_Short_Name || "",
+    category: row.__category || "",
     issuePrice: num(row.IssuePrice),
     listedOn: isoDate(row.ListedOn),
     listingClose: num(row.ListingDayClose),
@@ -263,10 +296,11 @@ export default async function handler(req, res) {
     : thisYear - 1;
 
   try {
-    const [rows, windows] = await Promise.all([
+    const [yearData, windows] = await Promise.all([
       bseYear(from),
       bseIssueWindows().catch(() => new Map()),
     ]);
+    const rows = yearData.rows;
 
     // One row per company. A row that actually carries a current price beats
     // one that does not; otherwise the more recent listing wins.
@@ -345,6 +379,7 @@ export default async function handler(req, res) {
       source: "BSE",
       fetchedAt: new Date().toISOString(),
       from,
+      categoryKnown: yearData.mainboardKnown,
       listings,
     });
   } catch (error) {

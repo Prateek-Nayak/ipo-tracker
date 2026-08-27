@@ -110,6 +110,25 @@ const todayISO = () => new Date().toISOString().slice(0, 10);
 // A listing date in the future is a scheduled date, not a past event. Saying
 // "Listed" about a share that has not listed yet is simply wrong.
 const hasListed = (ipo) => !!ipo?.listingDate && ipo.listingDate <= todayISO();
+
+/* Where an issue is in its life, worked out from its own dates rather than from
+   which feed it arrived in. An issue that closed yesterday is closed, however
+   the exchange still files it. */
+function issueStage(x) {
+  const today = todayISO();
+  const listed = x?.listingDate || x?.listedOn || "";
+  const open = x?.openDate || "";
+  const close = x?.closeDate || "";
+
+  if (listed && listed < today) return { label: "LISTED", color: COLORS.navy, bg: "#EAEFF5" };
+  if (listed && listed === today) return { label: "LISTS TODAY", color: COLORS.green, bg: COLORS.greenSoft };
+  if (listed && listed > today) return { label: "LISTS " + fmtDate(listed).toUpperCase().slice(0, 6), color: COLORS.navy, bg: "#EAEFF5" };
+  if (close && close < today) return { label: "CLOSED", color: COLORS.inkSoft, bg: "#EFEDE7" };
+  if (close && close === today) return { label: "CLOSES TODAY", color: COLORS.red, bg: COLORS.redSoft };
+  if (open && open <= today) return { label: "OPEN NOW", color: COLORS.green, bg: COLORS.greenSoft };
+  if (open && open > today) return { label: "UPCOMING", color: COLORS.gold, bg: COLORS.goldSoft };
+  return null;
+}
 const fmtDate = (d) => {
   if (!d) return "—";
   const dt = new Date(d + "T00:00:00");
@@ -1489,6 +1508,7 @@ function IpoCard({ ipo, accounts, onClick, onEdit, onDelete, showActions }) {
     : null;
   const conflicts = panConflicts(ipo, accounts);
   const missing = missingIpoFields(ipo);
+  const stage = issueStage(ipo);
   // Spine colour reflects where the IPO is overall, without claiming an outcome.
   const spine = tally.pending ? COLORS.gold : tally.won ? COLORS.green : tally.total ? COLORS.red : COLORS.border;
 
@@ -1510,11 +1530,12 @@ function IpoCard({ ipo, accounts, onClick, onEdit, onDelete, showActions }) {
             <div style={{ fontSize: 11.5, color: COLORS.inkSoft, marginTop: 2, fontFamily: "'JetBrains Mono', monospace" }}>
               {ipo.category || "Mainboard"} · ₹{ipo.priceBand || "—"}/sh · {totalLots} lot{totalLots === 1 ? "" : "s"} · {apps.length} applic.
             </div>
-            {missing.length > 0 && (
-              <div style={{ marginTop: 5 }}>
+            <div style={{ marginTop: 5, display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {stage && <Badge color={stage.color} bg={stage.bg}>{stage.label}</Badge>}
+              {missing.length > 0 && (
                 <Badge color={COLORS.gold} bg={COLORS.goldSoft}>NEEDS {missing.join(" & ").toUpperCase()}</Badge>
-              </div>
-            )}
+              )}
+            </div>
           </div>
           {conflicts.length > 0 && (
             <span title="The same PAN is used more than once on this IPO">
@@ -2759,11 +2780,20 @@ function BulkStatusSheet({ ipo, accounts, onClose, onSave }) {
    LIVE IPOs (NSE, via /api/ipos)
 ---------------------------------------------------------- */
 const normaliseName = (s) =>
-  String(s || "").toLowerCase().replace(/\s+(limited|ltd\.?)$/, "").replace(/\s+/g, " ").trim();
+  String(s || "").toLowerCase().replace(/[^a-z0-9 ]+/g, " ")
+    .replace(/\b(limited|ltd|private|pvt|india|the)\b/g, " ")
+    .replace(/\s+/g, " ").trim();
 
+/* Two ways in: the issues open or coming up, and everything that listed in a
+   given year. The second exists because a ledger started late would otherwise
+   have to be typed out by hand, an IPO at a time. */
 function LiveIposSheet({ existing, onClose, onImport }) {
-  const [state, setState] = useState({ status: "loading", ipos: [], error: "", fetchedAt: "" });
+  const thisYear = new Date().getFullYear();
+  const [mode, setMode] = useState("current");           // "current" | "year"
+  const [year, setYear] = useState(thisYear);
+  const [state, setState] = useState({ status: "loading", rows: [], error: "", fetchedAt: "", note: "" });
   const [picked, setPicked] = useState({});
+  const [search, setSearch] = useState("");
 
   const known = useMemo(() => {
     const s = new Set();
@@ -2775,69 +2805,144 @@ function LiveIposSheet({ existing, onClose, onImport }) {
   }, [existing]);
 
   const isKnown = (r) =>
-    known.has(String(r.symbol).toUpperCase()) || known.has(normaliseName(r.company));
+    (r.symbol && known.has(String(r.symbol).toUpperCase())) || known.has(normaliseName(r.company));
 
   useEffect(() => {
     let cancelled = false;
+    setState((s) => ({ ...s, status: "loading", error: "" }));
+    setPicked({});
+
     (async () => {
       try {
-        const res = await fetch("/api/ipos");
+        const url = mode === "current" ? "/api/ipos" : `/api/listings?from=${year}`;
+        const res = await fetch(url);
         const text = await res.text();
         let data = {};
         try { data = JSON.parse(text); } catch { /* handled below */ }
         if (cancelled) return;
         if (!res.ok || data.error) {
-          setState({ status: "error", ipos: [], error: data.error || `Request failed (${res.status})`, fetchedAt: "" });
+          setState({ status: "error", rows: [], error: data.error || `Request failed (${res.status})`, fetchedAt: "", note: "" });
           return;
         }
-        const rows = data.ipos || [];
-        setState({ status: "done", ipos: rows, error: "", fetchedAt: data.fetchedAt || "" });
-        const pre = {};
-        rows.forEach((r) => {
-          if (!(known.has(String(r.symbol).toUpperCase()) || known.has(normaliseName(r.company)))) {
-            pre[r.symbol] = true;
-          }
-        });
-        setPicked(pre);
+
+        let rows;
+        let note = "";
+        if (mode === "current") {
+          rows = (data.ipos || []).map((r) => ({ ...r, listedOn: "" }));
+          note = "Issues and subscription from NSE; lot size and the retail book from BSE.";
+        } else {
+          // Only the chosen year, since the feed is cumulative from it.
+          rows = (data.listings || [])
+            .filter((r) => r.listedOn && r.listedOn.slice(0, 4) === String(year))
+            .map((r) => ({
+              symbol: "",
+              company: r.company,
+              category: r.category || "",
+              priceMin: null,
+              priceMax: r.issuePrice,
+              openDate: r.openDate || "",
+              closeDate: r.closeDate || "",
+              listedOn: r.listedOn,
+              listingOpen: r.listingOpen,
+              listingClose: r.listingClose,
+              currentPrice: r.currentPrice,
+              lotSize: r.lotSize,
+              subscription: null,
+              categories: null,
+            }));
+          note = data.categoryKnown === false
+            ? "Listed in " + year + ", from BSE. Mainboard/SME could not be determined this time."
+            : "Everything that listed in " + year + ", from BSE. Prices fill in on import.";
+        }
+
+        rows.sort((a, b) => (b.listedOn || b.closeDate || "").localeCompare(a.listedOn || a.closeDate || ""));
+        setState({ status: "done", rows, error: "", fetchedAt: data.fetchedAt || "", note });
+
+        // Pre-tick only what is genuinely new, and only for the current view —
+        // ticking a whole year by default would be a trap.
+        if (mode === "current") {
+          const pre = {};
+          rows.forEach((r) => { if (!isKnown(r)) pre[r.company] = true; });
+          setPicked(pre);
+        }
       } catch (e) {
-        if (!cancelled) setState({ status: "error", ipos: [], error: e.message || "Could not reach the server", fetchedAt: "" });
+        if (!cancelled) setState({ status: "error", rows: [], error: e.message || "Could not reach the server", fetchedAt: "", note: "" });
       }
     })();
-    return () => { cancelled = true; };
-  }, [known]);
 
-  const chosen = state.ipos.filter((r) => picked[r.symbol]);
+    return () => { cancelled = true; };
+  }, [mode, year]);
+
+  const visible = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return q ? state.rows.filter((r) => `${r.company} ${r.symbol || ""}`.toLowerCase().includes(q)) : state.rows;
+  }, [state.rows, search]);
+
+  const chosen = state.rows.filter((r) => picked[r.company]);
+  const newVisible = visible.filter((r) => !isKnown(r));
+  const allNewPicked = newVisible.length > 0 && newVisible.every((r) => picked[r.company]);
+
+  const toggleAll = () => {
+    setPicked((p) => {
+      const next = { ...p };
+      newVisible.forEach((r) => { next[r.company] = !allNewPicked; });
+      return next;
+    });
+  };
 
   const doImport = () => {
     onImport(chosen.map((r) => ({
       id: uid(),
-      symbol: r.symbol,
+      symbol: r.symbol || "",
       company: r.company,
-      category: r.category,
-      applicationDate: r.openDate || "",
+      category: r.category || "Mainboard",
+      applicationDate: r.closeDate || "",
       priceBand: r.priceMax != null ? String(r.priceMax) : "",
       lotSize: r.lotSize != null ? String(r.lotSize) : "",
-      openDate: r.openDate,
-      closeDate: r.closeDate,
-      listingDate: "",
-      listingPrice: "",
-      remarks: `NSE ${r.symbol} · open ${r.openDate || "—"} to ${r.closeDate || "—"}`,
+      openDate: r.openDate || "",
+      closeDate: r.closeDate || "",
+      listingDate: r.listedOn || "",
+      listingPrice: r.listingOpen != null ? String(r.listingOpen)
+        : r.listingClose != null ? String(r.listingClose) : "",
+      listingPriceSource: r.listingOpen != null ? "bse-open" : r.listingClose != null ? "bse-close" : "",
+      listingClosePrice: r.listingClose != null ? String(r.listingClose) : "",
+      currentPrice: r.currentPrice != null ? String(r.currentPrice) : "",
+      remarks: r.symbol ? `NSE ${r.symbol}` : "",
       applications: [],
     })));
   };
 
+  const years = [thisYear, thisYear - 1, thisYear - 2];
+
   return (
-    <Sheet title="Live IPOs from NSE" onClose={onClose}>
+    <Sheet title={mode === "current" ? "Open & upcoming IPOs" : `IPOs listed in ${year}`} onClose={onClose}>
+      <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
+        <button onClick={() => setMode("current")} style={{ ...chipBase, ...(mode === "current" ? chipOn : null) }}>
+          Open &amp; upcoming
+        </button>
+        {years.map((y) => (
+          <button
+            key={y}
+            onClick={() => { setMode("year"); setYear(y); }}
+            style={{ ...chipBase, ...(mode === "year" && year === y ? chipOn : null) }}
+          >
+            {y}
+          </button>
+        ))}
+      </div>
+
       {state.status === "loading" && (
         <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "30px 0", gap: 10 }}>
           <Loader2 size={26} color={COLORS.navy} className="spin" />
-          <div style={{ color: COLORS.inkSoft, fontSize: 13 }}>Asking NSE…</div>
+          <div style={{ color: COLORS.inkSoft, fontSize: 13 }}>
+            {mode === "current" ? "Asking the exchanges…" : `Fetching ${year} listings…`}
+          </div>
         </div>
       )}
 
       {state.status === "error" && (
         <div>
-          <EmptyState text={`Could not load live IPOs. ${state.error}`} />
+          <EmptyState text={`Could not load. ${state.error}`} />
           <PrimaryButton ghost onClick={onClose}>Close</PrimaryButton>
         </div>
       )}
@@ -2845,56 +2950,100 @@ function LiveIposSheet({ existing, onClose, onImport }) {
       {state.status === "done" && (
         <>
           <div style={{ fontSize: 11.5, color: COLORS.inkSoft, marginBottom: 12 }}>
-            Issues and subscription from NSE{state.fetchedAt ? `, ${fmtTime(new Date(state.fetchedAt))}` : ""}; lot size and
-            the retail book from BSE. Listing date is not published while an issue is open.
+            {state.note}{state.fetchedAt ? ` ${fmtTime(new Date(state.fetchedAt))}.` : ""}
           </div>
 
-          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
-            {state.ipos.map((r) => {
-              const already = isKnown(r);
-              const on = !!picked[r.symbol];
-              return (
-                <label key={r.symbol} style={{
-                  display: "flex", gap: 10, alignItems: "flex-start", background: COLORS.surface,
-                  border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: "10px 12px",
-                  opacity: already ? 0.55 : 1,
-                }}>
-                  <input
-                    type="checkbox" checked={on}
-                    onChange={() => setPicked((p) => ({ ...p, [r.symbol]: !p[r.symbol] }))}
-                    style={{ marginTop: 3, width: 18, height: 18, flexShrink: 0 }}
-                  />
-                  <div style={{ minWidth: 0, flex: 1 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", gap: 6, alignItems: "flex-start" }}>
-                      <span style={{ fontWeight: 600, fontSize: 14, color: COLORS.ink }}>{r.company}</span>
-                      <Badge color={COLORS.navy} bg="#EAEFF5">{r.category}</Badge>
-                    </div>
-                    <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: COLORS.inkSoft, marginTop: 4 }}>
-                      {r.priceMin != null ? `₹${r.priceMin}–${r.priceMax}` : "price not published"}
-                      {" · "}{r.openDate || "—"} → {r.closeDate || "—"}
-                      {r.lotSize ? ` · lot ${r.lotSize}` : ""}
-                      {r.lotCost ? ` · ${inr(r.lotCost)}/lot` : ""}
-                    </div>
-                    <div style={{ marginTop: 4, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                      {r.subscription != null && (
-                        <Badge
-                          color={r.subscription >= 1 ? COLORS.green : COLORS.gold}
-                          bg={r.subscription >= 1 ? COLORS.greenSoft : COLORS.goldSoft}
-                        >
-                          {r.subscription.toFixed(2)}× subscribed
-                        </Badge>
-                      )}
-                      {r.categories && r.categories.retail != null && (
-                        <Badge color={COLORS.navy} bg="#EAEFF5">retail {r.categories.retail.toFixed(1)}×</Badge>
-                      )}
-                      {!r.live && <Badge color={COLORS.inkSoft} bg="#EFEDE7">UPCOMING</Badge>}
-                      {already && <span style={{ fontSize: 11, color: COLORS.gold }}>already in your ledger</span>}
-                    </div>
-                  </div>
-                </label>
-              );
-            })}
+          {state.rows.length > 8 && (
+            <div style={{ position: "relative", marginBottom: 10 }}>
+              <span style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)", display: "flex", pointerEvents: "none" }}>
+                <Search size={15} color={COLORS.inkSoft} />
+              </span>
+              <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search company" style={{ paddingLeft: 34 }} />
+            </div>
+          )}
+
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+            <span style={{ fontSize: 12, color: COLORS.inkSoft, fontFamily: "'JetBrains Mono', monospace" }}>
+              {visible.length} shown · {chosen.length} selected
+            </span>
+            {newVisible.length > 0 && (
+              <button onClick={toggleAll} style={{ ...chipBase, padding: "6px 10px" }}>
+                {allNewPicked ? "Clear" : `Select ${newVisible.length} new`}
+              </button>
+            )}
           </div>
+
+          {visible.length === 0 ? (
+            <EmptyState text="Nothing matches that search." />
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
+              {visible.map((r) => {
+                const already = isKnown(r);
+                const on = !!picked[r.company];
+                const stage = issueStage(r);
+                const gain = r.currentPrice != null && r.priceMax
+                  ? ((r.currentPrice - r.priceMax) / r.priceMax) * 100
+                  : null;
+                return (
+                  <label key={r.company} style={{
+                    display: "flex", gap: 10, alignItems: "flex-start", background: COLORS.surface,
+                    border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: "10px 12px",
+                    opacity: already ? 0.55 : 1,
+                  }}>
+                    <input
+                      type="checkbox" checked={on}
+                      onChange={() => setPicked((p) => ({ ...p, [r.company]: !p[r.company] }))}
+                      style={{ marginTop: 3, width: 18, height: 18, flexShrink: 0 }}
+                    />
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: 6, alignItems: "flex-start" }}>
+                        <span style={{ fontWeight: 600, fontSize: 14, color: COLORS.ink }}>{r.company}</span>
+                        {r.category && <Badge color={COLORS.navy} bg="#EAEFF5">{r.category}</Badge>}
+                      </div>
+
+                      <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: COLORS.inkSoft, marginTop: 4 }}>
+                        {r.priceMin != null && r.priceMax != null
+                          ? `₹${r.priceMin}–${r.priceMax}`
+                          : r.priceMax != null ? `₹${r.priceMax}` : "price not published"}
+                        {r.lotSize ? ` · lot ${r.lotSize}` : ""}
+                        {r.listedOn
+                          ? ` · listed ${fmtDate(r.listedOn)}`
+                          : r.closeDate ? ` · ${r.openDate || "—"} → ${r.closeDate}` : ""}
+                      </div>
+
+                      {(r.listingOpen != null || r.currentPrice != null) && (
+                        <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: COLORS.inkSoft, marginTop: 3 }}>
+                          {r.listingOpen != null ? `listed ₹${r.listingOpen}` : ""}
+                          {r.currentPrice != null ? `${r.listingOpen != null ? " · " : ""}now ₹${r.currentPrice}` : ""}
+                          {gain != null && (
+                            <span style={{ color: gain >= 0 ? COLORS.green : COLORS.red, fontWeight: 700 }}>
+                              {"  "}{gain >= 0 ? "+" : ""}{gain.toFixed(0)}%
+                            </span>
+                          )}
+                        </div>
+                      )}
+
+                      <div style={{ marginTop: 5, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                        {stage && <Badge color={stage.color} bg={stage.bg}>{stage.label}</Badge>}
+                        {r.subscription != null && (
+                          <Badge
+                            color={r.subscription >= 1 ? COLORS.green : COLORS.gold}
+                            bg={r.subscription >= 1 ? COLORS.greenSoft : COLORS.goldSoft}
+                          >
+                            {r.subscription.toFixed(2)}× subscribed
+                          </Badge>
+                        )}
+                        {r.categories && r.categories.retail != null && (
+                          <Badge color={COLORS.navy} bg="#EAEFF5">retail {r.categories.retail.toFixed(1)}×</Badge>
+                        )}
+                        {already && <span style={{ fontSize: 11, color: COLORS.gold }}>already in your ledger</span>}
+                      </div>
+                    </div>
+                  </label>
+                );
+              })}
+            </div>
+          )}
 
           <PrimaryButton onClick={doImport} disabled={!chosen.length}>
             {chosen.length ? `Import ${chosen.length} IPO${chosen.length === 1 ? "" : "s"}` : "Select IPOs to import"}
@@ -2904,3 +3053,4 @@ function LiveIposSheet({ existing, onClose, onImport }) {
     </Sheet>
   );
 }
+
