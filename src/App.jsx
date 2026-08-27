@@ -1517,7 +1517,10 @@ const chipBase = {
 };
 const chipOn = { background: COLORS.navy, border: `1px solid ${COLORS.navy}`, color: "#fff" };
 
-function ListControls({ search, setSearch, placeholder, filters, filter, setFilter, sorts, sort, setSort }) {
+/* `boards` is a second, independent dimension. Which board an issue is on says
+   nothing about how the application went, so folding it into the status chips
+   would make "pending, mainboard only" unaskable. */
+function ListControls({ search, setSearch, placeholder, filters, filter, setFilter, sorts, sort, setSort, boards, board, setBoard }) {
   return (
     <div style={{ marginBottom: 12 }}>
       <div style={{ position: "relative", marginBottom: 8 }}>
@@ -1555,6 +1558,23 @@ function ListControls({ search, setSearch, placeholder, filters, filter, setFilt
           {sorts.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
         </select>
       </div>
+      {boards && (
+        <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 8, overflowX: "auto" }}>
+          <span style={{
+            fontSize: 10.5, color: COLORS.inkSoft, fontFamily: "'JetBrains Mono', monospace",
+            letterSpacing: 0.4, textTransform: "uppercase", flexShrink: 0,
+          }}>Board</span>
+          {boards.map((b) => (
+            <button
+              key={b.id}
+              onClick={() => setBoard(b.id)}
+              style={{ ...chipBase, padding: "5px 10px", fontSize: 11.5, ...(board === b.id ? chipOn : null) }}
+            >
+              {b.label}{b.count != null ? ` ${b.count}` : ""}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -1562,16 +1582,29 @@ function ListControls({ search, setSearch, placeholder, filters, filter, setFilt
 function IpoList({ ipos, accounts, onOpen, onEdit, onDelete }) {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
+  const [board, setBoard] = useState("any");
   const [sort, setSort] = useState("recent");
 
+  /* Status counts follow the board in view, so a chip never promises rows the
+     board filter is about to hide. The board counts stay whole. */
+  const onBoard = useMemo(
+    () => (board === "any" ? ipos : ipos.filter((i) => boardOf(i) === board)),
+    [ipos, board]
+  );
+
   const counts = useMemo(() => {
-    const c = { all: ipos.length, pending: 0, allotted: 0, rejected: 0, sme: 0, incomplete: 0 };
-    ipos.forEach((i) => {
+    const c = { all: onBoard.length, pending: 0, allotted: 0, rejected: 0, incomplete: 0 };
+    onBoard.forEach((i) => {
       const b = ipoBucket(i);
       if (c[b] != null) c[b]++;
-      if ((i.category || "Mainboard") === "SME") c.sme++;
       if (missingIpoFields(i).length) c.incomplete++;
     });
+    return c;
+  }, [onBoard]);
+
+  const boardCounts = useMemo(() => {
+    const c = { any: ipos.length, Mainboard: 0, SME: 0 };
+    ipos.forEach((i) => { c[boardOf(i)]++; });
     return c;
   }, [ipos]);
 
@@ -1586,16 +1619,15 @@ function IpoList({ ipos, accounts, onOpen, onEdit, onDelete }) {
       pending: (a, b) => allotmentTally(b).pending - allotmentTally(a).pending,
     }[sort];
 
-    return ipos
+    return onBoard
       .filter((i) => {
         if (q && !`${i.company || ""} ${i.symbol || ""}`.toLowerCase().includes(q)) return false;
         if (filter === "all") return true;
-        if (filter === "sme") return (i.category || "Mainboard") === "SME";
         if (filter === "incomplete") return missingIpoFields(i).length > 0;
         return ipoBucket(i) === filter;
       })
       .sort(cmp);
-  }, [ipos, search, filter, sort]);
+  }, [onBoard, search, filter, sort]);
 
   if (ipos.length === 0) return <EmptyState text="No IPOs yet. Tap + to add one." />;
 
@@ -1609,9 +1641,16 @@ function IpoList({ ipos, accounts, onOpen, onEdit, onDelete }) {
           { id: "pending", label: "Pending", count: counts.pending },
           { id: "allotted", label: "Allotted", count: counts.allotted },
           { id: "rejected", label: "Missed", count: counts.rejected },
-          { id: "sme", label: "SME", count: counts.sme },
           { id: "incomplete", label: "Needs details", count: counts.incomplete },
         ]}
+        boards={[
+          /* Not "All": the status row already has one, and two chips reading
+             All on the same screen is a coin toss. */
+          { id: "any", label: "Any", count: boardCounts.any },
+          { id: "Mainboard", label: "Mainboard", count: boardCounts.Mainboard },
+          { id: "SME", label: "SME", count: boardCounts.SME },
+        ]}
+        board={board} setBoard={setBoard}
         sort={sort} setSort={setSort}
         sorts={[
           { id: "recent", label: "Newest" },
@@ -1665,6 +1704,14 @@ function fillableApplications(ipo) {
   return (ipo.applications || []).filter(
     (a) => isBlank(a.amountBlocked) && blockedFor(ipo, a.lots) > 0
   );
+}
+
+/* Which board an issue is on. BSE labels the small-company platforms in several
+   ways, and the ledger has only ever offered two choices, so anything that is
+   not recognisably SME is treated as mainboard — the same assumption the rest
+   of the app makes when the field is blank. */
+function boardOf(ipo) {
+  return /\bsme\b|emerge|\bbse\s*ss?me\b/i.test(String(ipo?.category || "")) ? "SME" : "Mainboard";
 }
 
 // Coarse bucket, used only for filtering the list.
@@ -1733,8 +1780,10 @@ function AllotmentCounts({ tally }) {
       <span style={{ color: tally.won ? COLORS.green : COLORS.inkSoft, fontWeight: 700 }}>
         {tally.won}/{tally.total} allotted
       </span>
+      {/* Rejections are not spelled out: with the tally and what is still
+          pending, they are simply the rest, and "0/8 allotted · 8 rejected"
+          says one thing twice. The bar above still shows them in red. */}
       {tally.pending > 0 && <span style={{ color: COLORS.gold }}>{tally.pending} pending</span>}
-      {tally.rejected > 0 && <span style={{ color: COLORS.red }}>{tally.rejected} rejected</span>}
     </div>
   );
 }
@@ -3088,6 +3137,7 @@ function LiveIposSheet({ existing, onClose, onImport }) {
   const [state, setState] = useState({ status: "loading", rows: [], error: "", fetchedAt: "", note: "" });
   const [picked, setPicked] = useState({});
   const [search, setSearch] = useState("");
+  const [board, setBoard] = useState("any");
   const [importing, setImporting] = useState(false);
 
   const known = useMemo(() => {
@@ -3106,6 +3156,7 @@ function LiveIposSheet({ existing, onClose, onImport }) {
     let cancelled = false;
     setState((s) => ({ ...s, status: "loading", error: "" }));
     setPicked({});
+    setBoard("any");
 
     (async () => {
       try {
@@ -3175,10 +3226,24 @@ function LiveIposSheet({ existing, onClose, onImport }) {
     return () => { cancelled = true; };
   }, [mode, year]);
 
+  /* BSE does not always say which board a listing was on. Guessing mainboard
+     here would quietly hide SME issues behind a filter that looks precise, so
+     an unlabelled row gets its own bucket rather than a default. */
+  const boardOfRow = (r) => (r.category ? boardOf(r) : "unknown");
+
+  const boardCounts = useMemo(() => {
+    const c = { any: state.rows.length, Mainboard: 0, SME: 0, unknown: 0 };
+    state.rows.forEach((r) => { c[boardOfRow(r)]++; });
+    return c;
+  }, [state.rows]);
+
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return q ? state.rows.filter((r) => `${r.company} ${r.symbol || ""}`.toLowerCase().includes(q)) : state.rows;
-  }, [state.rows, search]);
+    return state.rows.filter((r) => {
+      if (board !== "any" && boardOfRow(r) !== board) return false;
+      return !q || `${r.company} ${r.symbol || ""}`.toLowerCase().includes(q);
+    });
+  }, [state.rows, search, board]);
 
   const chosen = state.rows.filter((r) => picked[r.company]);
   const newVisible = visible.filter((r) => !isKnown(r));
@@ -3304,6 +3369,30 @@ function LiveIposSheet({ existing, onClose, onImport }) {
             </div>
           )}
 
+          {(boardCounts.Mainboard > 0 || boardCounts.SME > 0) && (
+            <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 10, overflowX: "auto" }}>
+              <span style={{
+                fontSize: 10.5, color: COLORS.inkSoft, fontFamily: "'JetBrains Mono', monospace",
+                letterSpacing: 0.4, textTransform: "uppercase", flexShrink: 0,
+              }}>Board</span>
+              {[
+                { id: "any", label: "Any", count: boardCounts.any },
+                { id: "Mainboard", label: "Mainboard", count: boardCounts.Mainboard },
+                { id: "SME", label: "SME", count: boardCounts.SME },
+                // Only worth offering when BSE actually left some rows unlabelled.
+                ...(boardCounts.unknown ? [{ id: "unknown", label: "Unlabelled", count: boardCounts.unknown }] : []),
+              ].map((b) => (
+                <button
+                  key={b.id}
+                  onClick={() => setBoard(b.id)}
+                  style={{ ...chipBase, padding: "5px 10px", fontSize: 11.5, ...(board === b.id ? chipOn : null) }}
+                >
+                  {b.label} {b.count}
+                </button>
+              ))}
+            </div>
+          )}
+
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
             <span style={{ fontSize: 12, color: COLORS.inkSoft, fontFamily: "'JetBrains Mono', monospace" }}>
               {visible.length} shown · {chosen.length} selected
@@ -3323,7 +3412,7 @@ function LiveIposSheet({ existing, onClose, onImport }) {
           </div>
 
           {visible.length === 0 ? (
-            <EmptyState text="Nothing matches that search." />
+            <EmptyState text={board === "any" ? "Nothing matches that search." : "Nothing on that board matches."} />
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
               {visible.map((r) => {
