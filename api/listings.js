@@ -145,6 +145,13 @@ async function bseIssueWindows() {
   const rows = (await Promise.all([pull(1), pull(2)])).flat();
   const byKey = new Map();
   rows.forEach((r) => {
+    /* The feed is public issues of every kind, and only a minority are IPOs:
+       alongside them sit OFS, OTB, RI, FPO, DPI, BuyBack, ZCZP and CMN — better
+       than half the rows. Hindustan Copper appearing as a closed 2026 "IPO" was
+       an offer for sale by its promoter. Their dates must not be attached to a
+       company's IPO record either, so the filter belongs here rather than only
+       where standalone rows are added. */
+    if (!/^ipo$/i.test(String(r.IR_flag || "").trim())) return;
     const key = nameKey(r.Scrip_Name || r.LONG_NAME || r.short_name);
     if (!key) return;
     const openDate = isoDate(r.Start_Dt);

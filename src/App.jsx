@@ -513,6 +513,24 @@ function Sheet({ title, onClose, children }) {
   );
 }
 
+/* Keeps the confirming action in reach. These sheets can run to a couple of
+   hundred rows, and a button after the last one means scrolling the whole list
+   to press it. Sits on the sheet's own bottom padding, hence the negative
+   margins. */
+function StickyFooter({ children }) {
+  return (
+    <div style={{
+      position: "sticky", bottom: 0, zIndex: 2,
+      background: COLORS.bg,
+      margin: "10px -18px calc(-28px - env(safe-area-inset-bottom))",
+      padding: "10px 18px calc(16px + env(safe-area-inset-bottom))",
+      borderTop: `1px solid ${COLORS.border}`,
+    }}>
+      {children}
+    </div>
+  );
+}
+
 function PrimaryButton({ children, onClick, danger, ghost, disabled, type = "button" }) {
   return (
     <button
@@ -2705,9 +2723,11 @@ function BulkApplySheet({ ipo, accounts, onClose, onSave }) {
             </div>
           )}
 
-          <PrimaryButton onClick={submit} disabled={!chosen.length}>
-            {chosen.length ? `Add ${chosen.length} application${chosen.length === 1 ? "" : "s"}` : "Select accounts"}
-          </PrimaryButton>
+          <StickyFooter>
+            <PrimaryButton onClick={submit} disabled={!chosen.length}>
+              {chosen.length ? `Add ${chosen.length} application${chosen.length === 1 ? "" : "s"}` : "Select accounts"}
+            </PrimaryButton>
+          </StickyFooter>
         </>
       )}
     </Sheet>
@@ -2821,7 +2841,9 @@ function BulkStatusSheet({ ipo, accounts, onClose, onSave }) {
         {counts.won || 0} allotted · {counts.pending || 0} pending · {counts.rejected || 0} rejected
       </div>
 
-      <PrimaryButton onClick={() => onSave(draft)}>Save all {apps.length}</PrimaryButton>
+      <StickyFooter>
+        <PrimaryButton onClick={() => onSave(draft)}>Save all {apps.length}</PrimaryButton>
+      </StickyFooter>
     </Sheet>
   );
 }
@@ -3138,13 +3160,15 @@ function LiveIposSheet({ existing, onClose, onImport }) {
             </div>
           )}
 
-          <PrimaryButton onClick={doImport} disabled={!chosen.length || importing}>
-            {importing
-              ? "Fetching lot sizes…"
-              : chosen.length
-                ? `Import ${chosen.length} IPO${chosen.length === 1 ? "" : "s"}`
-                : "Select IPOs to import"}
-          </PrimaryButton>
+          <StickyFooter>
+            <PrimaryButton onClick={doImport} disabled={!chosen.length || importing}>
+              {importing
+                ? "Fetching lot sizes…"
+                : chosen.length
+                  ? `Import ${chosen.length} IPO${chosen.length === 1 ? "" : "s"}`
+                  : "Select IPOs to import"}
+            </PrimaryButton>
+          </StickyFooter>
         </>
       )}
     </Sheet>
