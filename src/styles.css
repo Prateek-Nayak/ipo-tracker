@@ -1,0 +1,26 @@
+html, body, #root {
+  margin: 0;
+  min-height: 100%;
+  background: #F7F5F0;
+}
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+body {
+  overscroll-behavior-y: none;
+  -webkit-tap-highlight-color: transparent;
+}
+button, input, select, textarea {
+  touch-action: manipulation;
+}
+* {
+  box-sizing: border-box;
+}
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+.spin {
+  animation: spin 1s linear infinite;
+}
