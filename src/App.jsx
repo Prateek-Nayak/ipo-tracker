@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import React, { useState, useEffect, useMemo, useCallback, useRef, useContext } from "react";
+import { createPortal } from "react-dom";
 
 /* ---------------------------------------------------------
    THEME
@@ -621,7 +622,14 @@ function Select(props) {
   return <select {...props} style={{ ...inputStyle, ...(props.style || {}) }} />;
 }
 
+/* Lets a sheet's confirming action live outside the scrolling list. */
+const SheetFooterSlot = React.createContext(null);
+
 function Sheet({ title, onClose, children }) {
+  /* The panel is a column: a title that stays put, a body that scrolls, and a
+     footer slot below both. The footer used to sit inside the scroll area,
+     stuck to its bottom edge, which left rows sliding underneath it. */
+  const [footerEl, setFooterEl] = useState(null);
   return (
     <div style={{
       position: "fixed", inset: 0, background: "rgba(28,35,51,0.45)", zIndex: 50,
@@ -631,12 +639,15 @@ function Sheet({ title, onClose, children }) {
         onClick={(e) => e.stopPropagation()}
         style={{
           background: COLORS.bg, width: "100%", maxWidth: 480,
-          maxHeight: "92vh", overflowY: "auto", borderRadius: "18px 18px 0 0",
-          padding: "18px 18px calc(28px + env(safe-area-inset-bottom))",
+          maxHeight: "92vh", borderRadius: "18px 18px 0 0",
+          display: "flex", flexDirection: "column", minHeight: 0,
           boxShadow: "0 -8px 30px rgba(0,0,0,0.2)",
         }}
       >
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+        <div style={{
+          display: "flex", justifyContent: "space-between", alignItems: "center",
+          padding: "18px 18px 16px", flexShrink: 0,
+        }}>
           <h2 style={{
             fontFamily: "'Fraunces', serif", fontWeight: 600, fontSize: 20, color: COLORS.navyDeep, margin: 0,
           }}>{title}</h2>
@@ -645,7 +656,15 @@ function Sheet({ title, onClose, children }) {
             width: 36, height: 36, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer",
           }}><X size={16} color={COLORS.inkSoft} /></button>
         </div>
-        {children}
+        <div style={{
+          flex: "1 1 auto", overflowY: "auto", minHeight: 0,
+          WebkitOverflowScrolling: "touch",
+          padding: "0 18px calc(28px + env(safe-area-inset-bottom))",
+        }}>
+          <SheetFooterSlot.Provider value={footerEl}>{children}</SheetFooterSlot.Provider>
+        </div>
+        {/* Empty and invisible until a StickyFooter fills it. */}
+        <div ref={setFooterEl} style={{ flexShrink: 0 }} />
       </div>
     </div>
   );
@@ -653,20 +672,21 @@ function Sheet({ title, onClose, children }) {
 
 /* Keeps the confirming action in reach. These sheets can run to a couple of
    hundred rows, and a button after the last one means scrolling the whole list
-   to press it. Sits on the sheet's own bottom padding, hence the negative
-   margins. */
+   to press it. Rendered into the sheet's footer slot, below the scrolling body
+   rather than floating over its last rows. */
 function StickyFooter({ children }) {
-  return (
+  const slot = useContext(SheetFooterSlot);
+  const bar = (
     <div style={{
-      position: "sticky", bottom: 0, zIndex: 2,
       background: COLORS.bg,
-      margin: "10px -18px calc(-28px - env(safe-area-inset-bottom))",
       padding: "10px 18px calc(16px + env(safe-area-inset-bottom))",
       borderTop: `1px solid ${COLORS.border}`,
     }}>
       {children}
     </div>
   );
+  // Outside a Sheet there is nowhere to hoist it to, so it stays in place.
+  return slot ? createPortal(bar, slot) : bar;
 }
 
 function PrimaryButton({ children, onClick, danger, ghost, disabled, type = "button" }) {
@@ -2857,7 +2877,14 @@ function BulkApplySheet({ ipo, accounts, onClose, onSave }) {
         <>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
             <SectionLabel>Accounts ({chosen.length}/{available.length})</SectionLabel>
-            <button onClick={selectAll} style={{ ...chipBase, padding: "6px 10px" }}>Select all</button>
+            <div style={{ display: "flex", gap: 6 }}>
+              {chosen.length < available.length && (
+                <button onClick={selectAll} style={{ ...chipBase, padding: "6px 10px" }}>Select all</button>
+              )}
+              {chosen.length > 0 && (
+                <button onClick={() => setPicked({})} style={{ ...chipBase, padding: "6px 10px" }}>Clear</button>
+              )}
+            </div>
           </div>
 
           <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
@@ -3157,13 +3184,18 @@ function LiveIposSheet({ existing, onClose, onImport }) {
   const newVisible = visible.filter((r) => !isKnown(r));
   const allNewPicked = newVisible.length > 0 && newVisible.every((r) => picked[r.company]);
 
-  const toggleAll = () => {
+  /* Selecting covers what is on screen and not already in the ledger; clearing
+     covers everything, including rows a search has since filtered away — which
+     is the point of it, since those are the ones easiest to forget. */
+  const selectAllNew = () => {
     setPicked((p) => {
       const next = { ...p };
-      newVisible.forEach((r) => { next[r.company] = !allNewPicked; });
+      newVisible.forEach((r) => { next[r.company] = true; });
       return next;
     });
   };
+
+  const clearAll = () => setPicked({});
 
   /* Lot size and the day-one open are fetched per company, so the year listing
      comes back without them. Ask for just the selected ones before importing —
@@ -3276,11 +3308,18 @@ function LiveIposSheet({ existing, onClose, onImport }) {
             <span style={{ fontSize: 12, color: COLORS.inkSoft, fontFamily: "'JetBrains Mono', monospace" }}>
               {visible.length} shown · {chosen.length} selected
             </span>
-            {newVisible.length > 0 && (
-              <button onClick={toggleAll} style={{ ...chipBase, padding: "6px 10px" }}>
-                {allNewPicked ? "Clear" : `Select ${newVisible.length} new`}
-              </button>
-            )}
+            <div style={{ display: "flex", gap: 6 }}>
+              {newVisible.length > 0 && !allNewPicked && (
+                <button onClick={selectAllNew} style={{ ...chipBase, padding: "6px 10px" }}>
+                  Select {newVisible.length} new
+                </button>
+              )}
+              {chosen.length > 0 && (
+                <button onClick={clearAll} style={{ ...chipBase, padding: "6px 10px" }}>
+                  Clear {chosen.length}
+                </button>
+              )}
+            </div>
           </div>
 
           {visible.length === 0 ? (
