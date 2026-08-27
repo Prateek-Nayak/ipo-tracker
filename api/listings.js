@@ -90,14 +90,65 @@ async function bseIssueWindows() {
     const closeDate = isoDate(r.End_Dt);
     if (!openDate && !closeDate) return;
     if (!byKey.has(key)) {
+      const band = parseBand(r.Price_Band);
       byKey.set(key, {
         openDate,
         closeDate,
+        priceMin: band.min,
+        priceMax: band.max,
+        ipoNo: String(r.IPO_NO || "").trim(),
         company: String(r.Scrip_Name || r.LONG_NAME || "").replace(/\s+/g, " ").trim(),
       });
     }
   });
   return byKey;
+}
+
+// "131.00 - 138.00" -> { min: 131, max: 138 }
+function parseBand(s) {
+  const nums = String(s || "").match(/\d+(?:\.\d+)?/g);
+  if (!nums || !nums.length) return { min: null, max: null };
+  const vals = nums.map(Number);
+  return { min: Math.min(...vals), max: Math.max(...vals) };
+}
+
+/* Market lot, which lives only on the per-issue endpoint. One request each, so
+   it is fetched for the issues the caller actually asked about rather than for
+   every issue BSE has ever run. */
+async function bseLotSize(ipoNo) {
+  const url = `${BSE}/GetMkt_ISSUE_BBS_IPO/w?IPO_NO=${encodeURIComponent(ipoNo)}`;
+  const r = await fetch(url, {
+    headers: {
+      "User-Agent": UA,
+      Accept: "application/json, text/plain, */*",
+      Referer: "https://www.bseindia.com/",
+      Origin: "https://www.bseindia.com",
+    },
+  });
+  if (!r.ok) return null;
+  const t = await r.text();
+  if (!t.trim()) return null;
+  try {
+    const d = JSON.parse(t)?.IPONO_0?.[0];
+    const lot = parseInt(String(d?.Market_Lot || "").replace(/[^0-9]/g, ""), 10);
+    return Number.isFinite(lot) && lot > 0 ? lot : null;
+  } catch {
+    return null;
+  }
+}
+
+async function mapLimited(items, limit, fn) {
+  const out = new Array(items.length);
+  let i = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, async () => {
+      while (i < items.length) {
+        const idx = i++;
+        try { out[idx] = await fn(items[idx]); } catch { out[idx] = null; }
+      }
+    })
+  );
+  return out;
 }
 
 function normalise(row) {
@@ -108,6 +159,9 @@ function normalise(row) {
     issuePrice: num(row.IssuePrice),
     listedOn: isoDate(row.ListedOn),
     listingClose: num(row.ListingDayClose),
+    lotSize: null,
+    priceMin: null,
+    priceMax: null,
     listingDayGain: num(row.ListingDayGain),
     currentPrice: num(row.CurrentPrice),
     gainSinceIssue: num(row.GainLoss),
@@ -157,17 +211,37 @@ export default async function handler(req, res) {
     windows.forEach((w, key) => {
       const existing = byKey.get(key);
       if (existing) {
-        existing.openDate = w.openDate;
-        existing.closeDate = w.closeDate;
+        Object.assign(existing, {
+          openDate: w.openDate, closeDate: w.closeDate,
+          priceMin: w.priceMin, priceMax: w.priceMax, ipoNo: w.ipoNo,
+        });
       } else {
         byKey.set(key, {
           company: w.company || "", key, shortName: "",
           issuePrice: null, listedOn: "", listingClose: null, listingDayGain: null,
           currentPrice: null, gainSinceIssue: null, bseUrl: "",
           openDate: w.openDate, closeDate: w.closeDate,
+          priceMin: w.priceMin, priceMax: w.priceMax, ipoNo: w.ipoNo,
         });
       }
     });
+
+    /* Lot sizes for the companies the caller named. Without this the blocked
+       amount cannot be worked out, and it is one request per issue, so the
+       caller says which ones matter instead of us fetching all of them. */
+    const wanted = String(req.query?.keys || "")
+      .split("|")
+      .map((k) => nameKey(k))
+      .filter(Boolean);
+
+    if (wanted.length) {
+      const targets = wanted
+        .map((k) => byKey.get(k))
+        .filter((row) => row && row.ipoNo && row.lotSize == null)
+        .slice(0, 25);
+      const lots = await mapLimited(targets, 5, (row) => bseLotSize(row.ipoNo));
+      lots.forEach((lot, i) => { if (lot) targets[i].lotSize = lot; });
+    }
 
     const listings = [...byKey.values()].sort((a, b) => (b.listedOn || "").localeCompare(a.listedOn || ""));
 

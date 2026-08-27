@@ -105,6 +105,11 @@ function valuationPrice(ipo) {
   return Number.isFinite(listed) && listed > 0 ? listed : null;
 }
 const isMarkedToMarket = (ipo) => Number(ipo?.currentPrice) > 0;
+
+const todayISO = () => new Date().toISOString().slice(0, 10);
+// A listing date in the future is a scheduled date, not a past event. Saying
+// "Listed" about a share that has not listed yet is simply wrong.
+const hasListed = (ipo) => !!ipo?.listingDate && ipo.listingDate <= todayISO();
 const fmtDate = (d) => {
   if (!d) return "—";
   const dt = new Date(d + "T00:00:00");
@@ -704,7 +709,10 @@ export default function App() {
         .filter((y) => Number.isFinite(y) && y >= 2010);
       const from = years.length ? Math.min(...years) : new Date().getFullYear() - 1;
 
-      const res = await fetch(`/api/listings?from=${from}`);
+      // Naming the companies lets BSE's per-issue lot sizes come back with the
+      // response; without a lot size the blocked amount cannot be worked out.
+      const keys = ipos.map((i) => i.company).filter(Boolean).join("|");
+      const res = await fetch(`/api/listings?from=${from}&keys=${encodeURIComponent(keys)}`);
       const text = await res.text();
       let data = {};
       try { data = JSON.parse(text); } catch { /* handled next */ }
@@ -716,39 +724,57 @@ export default function App() {
       const asOf = data.fetchedAt || new Date().toISOString();
       let matched = 0;
       let updated = 0;
+      let reblocked = 0;
 
       const next = ipos.map((ipo) => {
         const hit = byKey.get(nameKey(ipo.company));
         if (!hit) return ipo;
         matched++;
+        /* BSE is authoritative here, so its values replace what is on record
+           rather than only filling gaps. */
         const patch = { priceAsOf: asOf };
         if (hit.currentPrice != null) patch.currentPrice = String(hit.currentPrice);
-        if (isBlank(ipo.listingPrice) && hit.listingClose != null) {
-          // BSE publishes the listing-day close, not the opening print. Record
-          // which one this is so the UI does not call a close an open.
+        if (hit.listingClose != null) {
+          // BSE publishes the listing-day close, not the opening print.
           patch.listingPrice = String(hit.listingClose);
           patch.listingPriceSource = "bse-close";
         }
-
-        // Every date we can source, but only where the field is empty — a date
-        // entered by hand is a record of what actually happened and stands.
-        if (!ipo.listingDate && hit.listedOn) patch.listingDate = hit.listedOn;
-        if (!ipo.openDate && hit.openDate) patch.openDate = hit.openDate;
-        if (!ipo.closeDate && hit.closeDate) patch.closeDate = hit.closeDate;
-        // The application date is the one thing BSE cannot know. Falling back to
-        // the day bidding opened is a sensible placeholder, and editable.
-        if (!ipo.applicationDate && (hit.openDate || hit.listedOn)) {
-          patch.applicationDate = hit.openDate || "";
+        if (hit.listedOn) patch.listingDate = hit.listedOn;
+        if (hit.openDate) patch.openDate = hit.openDate;
+        if (hit.closeDate) {
+          patch.closeDate = hit.closeDate;
+          // The last day to bid is the day an application had to be in by.
+          patch.applicationDate = hit.closeDate;
         }
-        if (!patch.applicationDate) delete patch.applicationDate;
-        const changed = Object.keys(patch).some((k) => String(ipo[k] ?? "") !== String(patch[k]));
+        // The top of the band: what a cut-off application is priced at.
+        if (hit.priceMax != null) patch.priceBand = String(hit.priceMax);
+        if (hit.lotSize != null) patch.lotSize = String(hit.lotSize);
+
+        const merged = { ...ipo, ...patch };
+
+        /* Recompute what each application actually blocked. Old records carry a
+           round placeholder rather than lots x lot size x price. */
+        const lot = Number(merged.lotSize);
+        const band = Number(merged.priceBand);
+        if (lot > 0 && band > 0) {
+          merged.applications = (merged.applications || []).map((a) => {
+            const want = String((Number(a.lots) || 0) * lot * band);
+            if (want === "0" || a.amountBlocked === want) return a;
+            reblocked++;
+            return { ...a, amountBlocked: want };
+          });
+        }
+
+        const changed =
+          Object.keys(patch).some((k) => String(ipo[k] ?? "") !== String(patch[k])) ||
+          merged.applications !== ipo.applications;
         if (changed) updated++;
-        return changed ? { ...ipo, ...patch } : ipo;
+        return changed ? merged : ipo;
       });
 
       if (updated) persistIpos(next);
-      setPriceInfo({ asOf, matched, total: ipos.length, error: "" });
-      return { matched, updated };
+      setPriceInfo({ asOf, matched, total: ipos.length, reblocked, error: "" });
+      return { matched, updated, reblocked };
     } catch (e) {
       console.error("Price refresh failed", e);
       setPriceInfo((p) => ({ ...p, error: e.message || "Could not update prices" }));
@@ -1541,7 +1567,7 @@ function IpoDetailSheet({ ipo, accounts, onClose, onEditIpo, onAddApplication, o
         <Badge color={COLORS.navy} bg="#EAEFF5">{ipo.category || "Mainboard"}</Badge>
         <Badge color={COLORS.inkSoft} bg="#EFEDE7">Price ₹{ipo.priceBand || "—"}</Badge>
         <Badge color={COLORS.inkSoft} bg="#EFEDE7">Lot {ipo.lotSize || "—"} sh</Badge>
-        {ipo.listingPrice && (
+        {ipo.listingPrice && hasListed(ipo) && (
           <Badge color={COLORS.inkSoft} bg="#EFEDE7">{ipo.listingPriceSource === "bse-close" ? "Listing close" : "Listed"} ₹{ipo.listingPrice}</Badge>
         )}
         {isMarkedToMarket(ipo) && (
@@ -1553,8 +1579,13 @@ function IpoDetailSheet({ ipo, accounts, onClose, onEditIpo, onAddApplication, o
       </div>
 
       <div style={{ fontSize: 12.5, color: COLORS.inkSoft, marginBottom: 6, display: "flex", flexWrap: "wrap", gap: "4px 14px" }}>
-        <span>Applied: {fmtDate(ipo.applicationDate)}</span>
-        {ipo.listingDate && <span>Listed: {fmtDate(ipo.listingDate)}</span>}
+        {ipo.openDate && <span>Opens {fmtDate(ipo.openDate)}</span>}
+        {ipo.closeDate
+          ? <span>Closes {fmtDate(ipo.closeDate)}</span>
+          : ipo.applicationDate && <span>Applied {fmtDate(ipo.applicationDate)}</span>}
+        {ipo.listingDate && (
+          <span>{hasListed(ipo) ? "Listed" : "Lists"} {fmtDate(ipo.listingDate)}</span>
+        )}
       </div>
       {ipo.remarks && (
         <div style={{ fontSize: 13, color: COLORS.ink, background: COLORS.goldSoft, borderRadius: 8, padding: "8px 10px", marginBottom: 10 }}>
@@ -2006,10 +2037,25 @@ function IpoFormSheet({ initial, onClose, onSave }) {
           <option>Mainboard</option><option>SME</option>
         </Select>
       </Field>
-      <Field label="Application Date"><Input type="date" value={f.applicationDate} onChange={set("applicationDate")} /></Field>
       <Field label="Price per Share (₹)"><Input type="number" inputMode="numeric" value={f.priceBand} onChange={set("priceBand")} placeholder="e.g. 285" /></Field>
       <Field label="Lot Size (shares)"><Input type="number" inputMode="numeric" value={f.lotSize} onChange={set("lotSize")} placeholder="e.g. 52" /></Field>
-      <Field label="Listing Date (optional)"><Input type="date" value={f.listingDate} onChange={set("listingDate")} /></Field>
+
+      {/* Dates come from BSE and are shown rather than typed — every one of
+          them was a duplicate of something the exchange already publishes. */}
+      {(f.openDate || f.closeDate || f.listingDate) && (
+        <div style={{
+          background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 10,
+          padding: "10px 12px", marginBottom: 14, fontSize: 12, color: COLORS.inkSoft,
+          fontFamily: "'JetBrains Mono', monospace", display: "flex", flexDirection: "column", gap: 3,
+        }}>
+          <span style={{ fontFamily: "Inter, sans-serif", fontWeight: 600, color: COLORS.ink, fontSize: 11 }}>
+            DATES FROM BSE
+          </span>
+          {f.openDate && <span>Opens {fmtDate(f.openDate)}</span>}
+          {f.closeDate && <span>Closes {fmtDate(f.closeDate)} — last day to apply</span>}
+          {f.listingDate && <span>{hasListed(f) ? "Listed" : "Lists"} {fmtDate(f.listingDate)}</span>}
+        </div>
+      )}
       <Field label={f.listingPriceSource === "bse-close" ? "Listing Day Close (from BSE, ₹)" : "Listing Price (optional, ₹)"}>
         <Input
           type="number" inputMode="numeric" value={f.listingPrice}
@@ -2269,7 +2315,7 @@ function DataSheet({ state, session, cloudOn, syncing, syncError, lastSync, onCl
         {priceInfo?.error
           ? priceInfo.error
           : priceInfo?.asOf
-            ? `${priceInfo.matched} of ${priceInfo.total} IPOs matched on BSE · as of ${fmtTime(new Date(priceInfo.asOf))}`
+            ? `${priceInfo.matched} of ${priceInfo.total} IPOs matched on BSE${priceInfo.reblocked ? ` · ${priceInfo.reblocked} blocked amounts recalculated` : ""} · as of ${fmtTime(new Date(priceInfo.asOf))}`
             : "Not updated yet. Unrealised gains use the listing price until you do."}
       </div>
       <PrimaryButton ghost onClick={() => onRefreshPrices().catch(() => {})} disabled={pricing}>
