@@ -1,16 +1,14 @@
 /*
- * Trading holidays, from NSE's holiday master.
+ * Market holidays, from NSE's holiday master — both calendars, because an IPO
+ * timetable needs both.
  *
- * The allotment and listing dates an IPO tracker cares about are counted in
- * working days from the issue close, and a market holiday shifts every one of
- * them.
- *
- * It has to be the trading calendar, not the clearing one — they differ, and
- * the difference matters. 26 August 2026 was Id-E-Milad, a clearing holiday but
- * a normal trading day: Gaja Alternative and Dhanwel Hybrid both listed on it.
- * Counting it as a holiday moves every date that week a day late. Checked
- * against 19 issues with a known close and listing date, T+3 on the trading
- * calendar matches all 19; on the clearing calendar it matches 17.
+ * Allotment is a clearing event and listing is a trading event, and the two
+ * calendars are not the same. 26 August 2026 (Id-E-Milad) is the clean example:
+ * a clearing holiday but an ordinary trading day. Gaja Alternative closed on the
+ * 21st, was allotted on the 24th and listed on the 26th — trading through a
+ * clearing holiday. Augmont closed on the 25th, and because the 26th was closed
+ * for clearing its allotment slipped to the 27th and its listing to the 31st.
+ * One calendar cannot explain both; two can.
  *
  * No API key; NSE serves a challenge page to clients that do not look like a
  * browser, so a cookie is taken from its home page first.
@@ -54,6 +52,47 @@ async function nseCookie() {
   }
 }
 
+/* The response is keyed by segment — CM, FO, CD and the rest. CM is the equity
+   segment, the one an IPO settles and lists in. Any segment is taken as a
+   fallback, since in practice a holiday closes all of them together. */
+async function calendar(type, cookie) {
+  const r = await fetch(`${NSE}/api/holiday-master?type=${type}`, {
+    headers: {
+      "User-Agent": UA,
+      Accept: "application/json, text/plain, */*",
+      "Accept-Language": "en-US,en;q=0.9",
+      Referer: NSE + "/resources/exchange-communication-holidays",
+      ...(cookie ? { Cookie: cookie } : {}),
+    },
+  });
+  if (!r.ok) throw new Error(`NSE responded ${r.status} for ${type}`);
+  const text = await r.text();
+  if (!text.trim()) throw new Error(`NSE returned an empty ${type} body`);
+
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(`NSE returned a non-JSON ${type} body`);
+  }
+
+  const cm = Array.isArray(data?.CM) && data.CM.length;
+  const rows = cm ? data.CM : Object.values(data || {}).flat();
+
+  const byDate = new Map();
+  rows.forEach((row) => {
+    const iso = toISO(row?.tradingDate);
+    if (iso && !byDate.has(iso)) byDate.set(iso, String(row?.description || "").trim());
+  });
+
+  return {
+    segment: cm ? "CM" : "all",
+    holidays: [...byDate.entries()]
+      .map(([date, description]) => ({ date, description }))
+      .sort((a, b) => a.date.localeCompare(b.date)),
+  };
+}
+
 export const config = { maxDuration: 20 };
 
 export default async function handler(req, res) {
@@ -63,45 +102,12 @@ export default async function handler(req, res) {
 
   try {
     const cookie = await nseCookie();
-    const r = await fetch(`${NSE}/api/holiday-master?type=trading`, {
-      headers: {
-        "User-Agent": UA,
-        Accept: "application/json, text/plain, */*",
-        "Accept-Language": "en-US,en;q=0.9",
-        Referer: NSE + "/resources/exchange-communication-holidays",
-        ...(cookie ? { Cookie: cookie } : {}),
-      },
-    });
-    if (!r.ok) throw new Error(`NSE responded ${r.status}`);
-    const text = await r.text();
-    if (!text.trim()) throw new Error("NSE returned an empty body");
+    const [trading, clearing] = await Promise.all([
+      calendar("trading", cookie),
+      calendar("clearing", cookie),
+    ]);
 
-    let data;
-    try {
-      data = JSON.parse(text);
-    } catch {
-      throw new Error("NSE returned a non-JSON body");
-    }
-
-    /* The response is keyed by segment — CM, FO, CD and the rest. CM is the
-       equity segment, which is the one an IPO settles and lists in. Any segment
-       is taken as a fallback, since in practice a market holiday closes all of
-       them together. */
-    const rows = Array.isArray(data?.CM) && data.CM.length
-      ? data.CM
-      : Object.values(data || {}).flat();
-
-    const byDate = new Map();
-    rows.forEach((row) => {
-      const iso = toISO(row?.tradingDate);
-      if (iso && !byDate.has(iso)) byDate.set(iso, String(row?.description || "").trim());
-    });
-
-    const holidays = [...byDate.entries()]
-      .map(([date, description]) => ({ date, description }))
-      .sort((a, b) => a.date.localeCompare(b.date));
-
-    if (!holidays.length) {
+    if (!trading.holidays.length || !clearing.holidays.length) {
       return res.status(502).json({ error: "NSE returned no holidays." });
     }
 
@@ -110,8 +116,11 @@ export default async function handler(req, res) {
     return res.status(200).json({
       source: "NSE",
       fetchedAt: new Date().toISOString(),
-      segment: Array.isArray(data?.CM) && data.CM.length ? "CM" : "all",
-      holidays,
+      segment: trading.segment,
+      trading: trading.holidays,
+      clearing: clearing.holidays,
+      // Older clients read `holidays` and mean the trading calendar.
+      holidays: trading.holidays,
     });
   } catch (error) {
     return res.status(502).json({ error: error.message || "Could not reach NSE" });

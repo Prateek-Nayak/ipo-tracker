@@ -129,18 +129,24 @@ const hasListed = (ipo) => !!ipo?.listingDate && ipo.listingDate <= todayISO();
    "undefinedholidays". */
 const STORAGE_PREFIX = "ipo_ledger_";
 
-/* NSE's trading-holiday calendar, kept module-wide because every date
-   calculation needs it. Deliberately the trading calendar and not the clearing
-   one: they differ on four days of 2026, and 26 August — a clearing holiday but
-   an ordinary trading day — is one an IPO actually listed on. */
+/* NSE's holiday calendars, kept module-wide because every date calculation
+   needs them. Both are required, and which one applies depends on the event:
+   allotment is settled by the clearing corporation, listing happens on the
+   exchange floor, and the two calendars differ. In 2026 they differ on four
+   days — 26 August most instructively, a clearing holiday that was an ordinary
+   trading day. Gaja Alternative closed on the 21st and listed on it; Augmont
+   closed on the 25th and had its allotment pushed from the 26th to the 27th,
+   and its listing out to the 31st. */
 const HOLIDAY_KEY = STORAGE_PREFIX + "holidays";
-let marketHolidays = new Set();
+let tradingHolidays = new Set();
+let clearingHolidays = new Set();
 const holidayListeners = new Set();
 
-function setHolidays(dates, fetchedAt) {
-  marketHolidays = new Set(dates);
+function setHolidays(trading, clearing, fetchedAt) {
+  tradingHolidays = new Set(trading);
+  clearingHolidays = new Set(clearing);
   try {
-    localStorage.setItem(HOLIDAY_KEY, JSON.stringify({ fetchedAt, dates }));
+    localStorage.setItem(HOLIDAY_KEY, JSON.stringify({ fetchedAt, trading, clearing }));
   } catch { /* a cache miss only costs one request */ }
   holidayListeners.forEach((fn) => fn());
 }
@@ -148,12 +154,17 @@ function setHolidays(dates, fetchedAt) {
 (function loadCachedHolidays() {
   try {
     const c = JSON.parse(localStorage.getItem(HOLIDAY_KEY) || "null");
-    if (c && Array.isArray(c.dates)) marketHolidays = new Set(c.dates);
+    if (!c) return;
+    // An older cache holds one list, which was the trading calendar.
+    const trading = Array.isArray(c.trading) ? c.trading : (Array.isArray(c.dates) ? c.dates : []);
+    tradingHolidays = new Set(trading);
+    clearingHolidays = new Set(Array.isArray(c.clearing) ? c.clearing : trading);
   } catch { /* start empty */ }
 })();
 
-// Calendar arithmetic on a plain date, skipping weekends and market holidays.
-function addWorkingDays(iso, n) {
+/* Calendar arithmetic on a plain date, skipping weekends and whichever set of
+   holidays applies to the event being counted. */
+function addDays(iso, n, holidays) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(iso || "")) return "";
   const d = new Date(iso + "T00:00:00Z");
   const step = n >= 0 ? 1 : -1;
@@ -163,32 +174,57 @@ function addWorkingDays(iso, n) {
     d.setUTCDate(d.getUTCDate() + step);
     const wd = d.getUTCDay();
     const iso2 = d.toISOString().slice(0, 10);
-    if (wd !== 0 && wd !== 6 && !marketHolidays.has(iso2)) left--;
+    if (wd !== 0 && wd !== 6 && !holidays.has(iso2)) left--;
   }
   return d.toISOString().slice(0, 10);
 }
 
-/* When an issue lists. SEBI's T+3: bidding closes on T, listing follows three
-   trading days later. Checked against every 2025-26 issue with both dates on
-   record — 19 of 19 — so the inference is sound, but it is still an inference
-   and is shown as one until the exchange confirms it. */
-function listingDateOf(ipo) {
-  if (ipo?.listingDate) return { date: ipo.listingDate, exact: true };
-  if (ipo?.closeDate) return { date: addWorkingDays(ipo.closeDate, 3), exact: false };
-  return { date: "", exact: false };
-}
+const addTradingDays = (iso, n) => addDays(iso, n, tradingHolidays);
+const addClearingDays = (iso, n) => addDays(iso, n, clearingHolidays);
 
 /* The day the basis of allotment is settled — the day there is something to
    record. No exchange feed publishes it, so unless it has been entered by hand
-   it is worked out from SEBI's T+3 timetable: bidding closes on T, allotment is
-   settled on T+1, listing follows on T+3. Weekends are skipped but public
-   holidays are not, so a derived date is an expectation, not a fact, and is
-   labelled as one. */
+   it is worked out from SEBI's T+3 timetable: bidding closes on T, allotment
+   follows on the next working day. That step belongs to the clearing calendar,
+   which is why Augmont, closing on 25 August 2026, was allotted on the 27th and
+   not the 26th. A derived date is an expectation and is labelled as one. */
 function allotmentDateOf(ipo) {
   if (ipo?.allotmentDate) return { date: ipo.allotmentDate, exact: true };
-  if (ipo?.closeDate) return { date: addWorkingDays(ipo.closeDate, 1), exact: false };
-  if (ipo?.listingDate) return { date: addWorkingDays(ipo.listingDate, -2), exact: false };
+  if (ipo?.closeDate) return { date: addClearingDays(ipo.closeDate, 1), exact: false };
+  if (ipo?.listingDate) return { date: addClearingDays(addTradingDays(ipo.listingDate, -1), -1), exact: false };
   return { date: "", exact: false };
+}
+
+/* Shares reach the demat account the working day after allotment — a clearing
+   step, like the allotment itself. */
+function creditDateOf(ipo) {
+  const allot = allotmentDateOf(ipo);
+  if (!allot.date) return { date: "", exact: false };
+  return { date: addClearingDays(allot.date, 1), exact: allot.exact && !!ipo?.allotmentDate };
+}
+
+/* Listing is one trading day after the credit — the first step that happens on
+   the exchange floor rather than in the clearing house.
+
+   Counting the whole timetable on a single calendar cannot fit the record.
+   Tempsens closed on 24 August 2026 and listed on the 28th: allotment on the
+   25th, but the 26th was closed for clearing, so the credit slipped to the 27th
+   and the listing to the 28th. Purely on the trading calendar that comes out a
+   day early; purely on the clearing calendar Gaja comes out a day late. Walking
+   the real chain — clearing, clearing, trading — reproduces all 22 issues with
+   both dates on record. It stays an inference until the exchange confirms it. */
+function listingDateOf(ipo) {
+  if (ipo?.listingDate) return { date: ipo.listingDate, exact: true };
+  const credit = creditDateOf(ipo);
+  if (credit.date) return { date: addTradingDays(credit.date, 1), exact: false };
+  return { date: "", exact: false };
+}
+
+/* An expected date has done its job once every application carries a recorded
+   result — there is nothing left to wait for, so the ledger stops predicting. */
+function allotmentSettled(ipo) {
+  const apps = ipo?.applications || [];
+  return apps.length > 0 && apps.every((a) => (a.allotmentStatus || "Pending") !== "Pending");
 }
 
 /* Applications still sitting at Pending after the allotment should have been
@@ -699,13 +735,17 @@ export default function App() {
       try {
         const cached = JSON.parse(localStorage.getItem(HOLIDAY_KEY) || "null");
         const age = cached?.fetchedAt ? Date.now() - Date.parse(cached.fetchedAt) : Infinity;
-        if (cached?.dates?.length && age < 24 * 3600 * 1000) return;
+        // A cache without a clearing list predates the two-calendar split.
+        if (cached?.trading?.length && cached?.clearing && age < 24 * 3600 * 1000) return;
 
         const res = await fetch("/api/holidays");
         if (!res.ok) return;
         const data = JSON.parse(await res.text());
-        if (cancelled || data.error || !Array.isArray(data.holidays)) return;
-        setHolidays(data.holidays.map((h) => h.date), data.fetchedAt || new Date().toISOString());
+        if (cancelled || data.error) return;
+        const days = (list) => (Array.isArray(list) ? list.map((h) => h.date) : null);
+        const trading = days(data.trading) || days(data.holidays);
+        if (!trading) return;
+        setHolidays(trading, days(data.clearing) || trading, data.fetchedAt || new Date().toISOString());
       } catch {
         // Weekend-only arithmetic is a reasonable fallback.
       }
@@ -1798,7 +1838,7 @@ function IpoDetailSheet({ ipo, accounts, onClose, onEditIpo, onAddApplication, o
         {ipo.closeDate
           ? <span>Closes {fmtDate(ipo.closeDate)}</span>
           : ipo.applicationDate && <span>Applied {fmtDate(ipo.applicationDate)}</span>}
-        {!hasListed(ipo) && allotmentDateOf(ipo).date && (
+        {!hasListed(ipo) && !allotmentSettled(ipo) && allotmentDateOf(ipo).date && (
           <span>
             Allotment {fmtDate(allotmentDateOf(ipo).date)}
             {allotmentDateOf(ipo).exact ? "" : " (expected)"}
@@ -2284,7 +2324,7 @@ function IpoFormSheet({ initial, onClose, onSave }) {
           </div>
           {f.openDate && <span>Opens {fmtDate(f.openDate)}</span>}
           {f.closeDate && <span>Closes {fmtDate(f.closeDate)} — last day to apply</span>}
-          {allotmentDateOf(f).date && (
+          {!hasListed(f) && !allotmentSettled(f) && allotmentDateOf(f).date && (
             <span>
               Allotment {fmtDate(allotmentDateOf(f).date)}
               {allotmentDateOf(f).exact ? "" : " (expected)"}
