@@ -17,6 +17,11 @@ const UA =
 
 // Company names never match exactly across sources: "Aye Finance Limited" here,
 // "AYE FINANCE LTD" there. Reduce both sides to the same shape before comparing.
+const MONTHS = {
+  jan: "01", feb: "02", mar: "03", apr: "04", may: "05", jun: "06",
+  jul: "07", aug: "08", sep: "09", oct: "10", nov: "11", dec: "12",
+};
+
 function nameKey(s) {
   return String(s || "")
     .toLowerCase()
@@ -183,6 +188,97 @@ function parseBand(s) {
 /* Market lot, which lives only on the per-issue endpoint. One request each, so
    it is fetched for the issues the caller actually asked about rather than for
    every issue BSE has ever run. */
+/* The whole issue record behind an IPO_NO — dates, lot size and price band.
+   BSE keeps these indefinitely, unlike the bidding-window feed. */
+async function bseIssue(ipoNo) {
+  const url = `${BSE}/GetMkt_ISSUE_BBS_IPO/w?IPO_NO=${encodeURIComponent(ipoNo)}`;
+  try {
+    const r = await bseFetch(url, 1);
+    return r?.IPONO_0?.[0] || null;
+  } catch {
+    return null;
+  }
+}
+
+// "29 Jun 2026 to 01 Jul 2026" — sometimes with a revision note after a pipe.
+function issuePeriod(row) {
+  const m = String(row?.Issue_Period || "").split("|")[0]
+    .match(/(\d{1,2})\s+([A-Za-z]{3})\w*\s+(\d{4})\s+to\s+(\d{1,2})\s+([A-Za-z]{3})\w*\s+(\d{4})/);
+  if (!m) return null;
+  const iso = (d, mo, y) => {
+    const mm = MONTHS[mo.toLowerCase()];
+    return mm ? `${y}-${mm}-${d.padStart(2, "0")}` : "";
+  };
+  const open = iso(m[1], m[2], m[3]);
+  const close = iso(m[4], m[5], m[6]);
+  return open && close ? { open, close } : null;
+}
+
+/* BSE's bidding-window feed is a rolling few weeks: an issue that closed two
+   months ago keeps its listing price but loses its dates, its lot size and the
+   IPO_NO that would fetch them. Nothing indexes an old issue by name — but
+   IPO_NO runs in date order, so the number can be found by bisecting on the
+   issue period and then sweeping outward to match the name. About a dozen
+   requests, against several hundred for a linear scan. */
+async function bseIssueByName(name, listedOn, high) {
+  const target = nameKey(name);
+  if (!target || !/^\d{4}-\d{2}-\d{2}$/.test(listedOn || "")) return null;
+
+  const seen = new Map();
+  const at = async (no) => {
+    if (no < high - 1200 || no > high) return null;
+    if (!seen.has(no)) seen.set(no, await bseIssue(no));
+    return seen.get(no);
+  };
+  // A dated neighbour, for the numbers BSE returns blank.
+  const dated = async (no) => {
+    for (let k = 0; k <= 6; k++) {
+      for (const probe of k === 0 ? [no] : [no + k, no - k]) {
+        const row = await at(probe);
+        const p = issuePeriod(row);
+        if (p) return { no: probe, row, period: p };
+      }
+    }
+    return null;
+  };
+
+  // Bidding usually opens a week or so before listing; that is where to look.
+  const want = Date.parse(listedOn) - 9 * 86400000;
+  let lo = high - 1200;
+  let hi = high;
+  let anchor = null;
+  while (lo <= hi) {
+    const hit = await dated((lo + hi) >> 1);
+    if (!hit) break;
+    anchor = hit.no;
+    if (Date.parse(hit.period.open) < want) lo = hit.no + 1;
+    else hi = hit.no - 1;
+  }
+  if (anchor == null) return null;
+
+  for (let d = 0; d <= 40; d++) {
+    for (const no of d === 0 ? [anchor] : [anchor + d, anchor - d]) {
+      const row = await at(no);
+      const found = nameKey(row?.ScripName);
+      if (!found) continue;
+      if (found === target || found.startsWith(target) || target.startsWith(found)) {
+        const p = issuePeriod(row);
+        const lot = parseInt(String(row.Market_Lot || "").replace(/[^0-9]/g, ""), 10);
+        const band = String(row.Price_Band || "").split("|")[0].split("-");
+        return {
+          ipoNo: no,
+          openDate: p?.open || "",
+          closeDate: p?.close || "",
+          lotSize: Number.isFinite(lot) && lot > 0 ? lot : null,
+          priceMin: num(band[0]),
+          priceMax: num(band[1]),
+        };
+      }
+    }
+  }
+  return null;
+}
+
 async function bseLotSize(ipoNo) {
   const url = `${BSE}/GetMkt_ISSUE_BBS_IPO/w?IPO_NO=${encodeURIComponent(ipoNo)}`;
   const r = await fetch(url, {
@@ -365,6 +461,33 @@ export default async function handler(req, res) {
       ]);
 
       lots.forEach((lot, i) => { if (lot) lotTargets[i].lotSize = lot; });
+
+      /* Anything the caller named that still has no bidding window: its issue
+         has aged out of the rolling feed, so go and find its IPO_NO. Bounded,
+         because each one costs a dozen requests — the rest are picked up on a
+         later refresh, and a refresh that returns nothing new is cheap. */
+      const highNo = Math.max(
+        0,
+        ...[...byKey.values()].map((r) => Number(r.ipoNo) || 0)
+      );
+      if (highNo) {
+        const stale = rowsFor
+          .filter((r) => r.listedOn && (!r.closeDate || r.lotSize == null))
+          .slice(0, 6);
+        const found = await mapLimited(stale, 3, (r) =>
+          bseIssueByName(r.company, r.listedOn, highNo).catch(() => null)
+        );
+        found.forEach((hit, i) => {
+          if (!hit) return;
+          const row = stale[i];
+          row.ipoNo = row.ipoNo || hit.ipoNo;
+          if (!row.openDate && hit.openDate) row.openDate = hit.openDate;
+          if (!row.closeDate && hit.closeDate) row.closeDate = hit.closeDate;
+          if (row.lotSize == null && hit.lotSize != null) row.lotSize = hit.lotSize;
+          if (row.priceMin == null && hit.priceMin != null) row.priceMin = hit.priceMin;
+          if (row.priceMax == null && hit.priceMax != null) row.priceMax = hit.priceMax;
+        });
+      }
       opens.forEach((o, i) => {
         if (!o) return;
         const row = openTargets[i];

@@ -1517,6 +1517,47 @@ const chipBase = {
 };
 const chipOn = { background: COLORS.navy, border: `1px solid ${COLORS.navy}`, color: "#fff" };
 
+const selectStyle = {
+  ...inputStyle, width: "auto", minWidth: 0, minHeight: 36, padding: "6px 8px",
+  fontSize: 12, fontWeight: 600,
+};
+
+/* A short, mutually exclusive choice — one pill track rather than loose chips,
+   so it reads as a single control and cannot be mistaken for the filters. */
+function Segmented({ options, value, onChange, label }) {
+  return (
+    <div
+      role="group"
+      aria-label={label}
+      style={{
+        display: "inline-flex", alignItems: "center", gap: 2, flexShrink: 0,
+        background: COLORS.surface, border: `1px solid ${COLORS.border}`,
+        borderRadius: 999, padding: 2,
+      }}
+    >
+      {options.map((o) => {
+        const on = value === o.id;
+        return (
+          <button
+            key={o.id}
+            onClick={() => onChange(o.id)}
+            aria-pressed={on}
+            style={{
+              border: 0, borderRadius: 999, padding: "5px 11px", cursor: "pointer",
+              fontFamily: "Inter, sans-serif", fontSize: 12, fontWeight: 600,
+              whiteSpace: "nowrap",
+              background: on ? COLORS.navy : "transparent",
+              color: on ? "#fff" : COLORS.inkSoft,
+            }}
+          >
+            {o.label}{o.count != null ? ` ${o.count}` : ""}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 /* `boards` is a second, independent dimension. Which board an issue is on says
    nothing about how the application went, so folding it into the status chips
    would make "pending, mainboard only" unaskable. */
@@ -1534,47 +1575,30 @@ function ListControls({ search, setSearch, placeholder, filters, filter, setFilt
           style={{ paddingLeft: 34 }}
         />
       </div>
-      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-        <div style={{ display: "flex", gap: 6, overflowX: "auto", flex: 1, paddingBottom: 2 }}>
+      {/* One bar: the board in view stays on show, since it is the choice worth
+          seeing at a glance, and the rest fold into their own controls rather
+          than a second and third row of chips that has to be scrolled. */}
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        {boards && <Segmented options={boards} value={board} onChange={setBoard} label="Board" />}
+        <select
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          aria-label="Filter"
+          style={{ ...selectStyle, flex: "1 1 116px" }}
+        >
           {filters.map((f) => (
-            <button
-              key={f.id}
-              onClick={() => setFilter(f.id)}
-              style={{ ...chipBase, ...(filter === f.id ? chipOn : null) }}
-            >
-              {f.label}{f.count != null ? ` ${f.count}` : ""}
-            </button>
+            <option key={f.id} value={f.id}>{f.label}{f.count != null ? ` ${f.count}` : ""}</option>
           ))}
-        </div>
+        </select>
         <select
           value={sort}
           onChange={(e) => setSort(e.target.value)}
           aria-label="Sort order"
-          style={{
-            ...inputStyle, width: "auto", minHeight: 36, padding: "6px 8px",
-            fontSize: 12, fontWeight: 600, flexShrink: 0, maxWidth: 132,
-          }}
+          style={{ ...selectStyle, flex: "1 1 116px" }}
         >
           {sorts.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
         </select>
       </div>
-      {boards && (
-        <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 8, overflowX: "auto" }}>
-          <span style={{
-            fontSize: 10.5, color: COLORS.inkSoft, fontFamily: "'JetBrains Mono', monospace",
-            letterSpacing: 0.4, textTransform: "uppercase", flexShrink: 0,
-          }}>Board</span>
-          {boards.map((b) => (
-            <button
-              key={b.id}
-              onClick={() => setBoard(b.id)}
-              style={{ ...chipBase, padding: "5px 10px", fontSize: 11.5, ...(board === b.id ? chipOn : null) }}
-            >
-              {b.label}{b.count != null ? ` ${b.count}` : ""}
-            </button>
-          ))}
-        </div>
-      )}
     </div>
   );
 }
@@ -3370,26 +3394,19 @@ function LiveIposSheet({ existing, onClose, onImport }) {
           )}
 
           {(boardCounts.Mainboard > 0 || boardCounts.SME > 0) && (
-            <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 10, overflowX: "auto" }}>
-              <span style={{
-                fontSize: 10.5, color: COLORS.inkSoft, fontFamily: "'JetBrains Mono', monospace",
-                letterSpacing: 0.4, textTransform: "uppercase", flexShrink: 0,
-              }}>Board</span>
-              {[
-                { id: "any", label: "Any", count: boardCounts.any },
-                { id: "Mainboard", label: "Mainboard", count: boardCounts.Mainboard },
-                { id: "SME", label: "SME", count: boardCounts.SME },
-                // Only worth offering when BSE actually left some rows unlabelled.
-                ...(boardCounts.unknown ? [{ id: "unknown", label: "Unlabelled", count: boardCounts.unknown }] : []),
-              ].map((b) => (
-                <button
-                  key={b.id}
-                  onClick={() => setBoard(b.id)}
-                  style={{ ...chipBase, padding: "5px 10px", fontSize: 11.5, ...(board === b.id ? chipOn : null) }}
-                >
-                  {b.label} {b.count}
-                </button>
-              ))}
+            <div style={{ display: "flex", marginBottom: 10, overflowX: "auto", paddingBottom: 2 }}>
+              <Segmented
+                label="Board"
+                value={board}
+                onChange={setBoard}
+                options={[
+                  { id: "any", label: "Any", count: boardCounts.any },
+                  { id: "Mainboard", label: "Mainboard", count: boardCounts.Mainboard },
+                  { id: "SME", label: "SME", count: boardCounts.SME },
+                  // Only worth offering when BSE actually left some rows unlabelled.
+                  ...(boardCounts.unknown ? [{ id: "unknown", label: "Unlabelled", count: boardCounts.unknown }] : []),
+                ]}
+              />
             </div>
           )}
 
