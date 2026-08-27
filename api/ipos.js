@@ -1,15 +1,19 @@
 /*
- * Live IPO data.
+ * Live IPO data, from both exchanges.
  *
- * NSE is the spine: it publishes the open and upcoming issues together with
- * live subscription figures. It does not publish lot size, which is the one
- * number you cannot apply without — so each issue is then matched against
- * BSE's public-issue list to pick up its IPO number, and BSE's per-issue
- * endpoint supplies the market lot.
+ * Neither one lists everything. NSE Emerge SME issues never reach BSE, and BSE
+ * carries issues NSE does not, so the two are unioned by company name rather
+ * than one being trusted as the whole picture. It also means an exchange being
+ * unreachable shortens the list instead of emptying it.
  *
- * Neither source needs an API key; both are public. NSE serves a challenge
- * page to clients that do not look like a browser, so we take a cookie from
- * its home page first. BSE only wants browser-ish headers.
+ * NSE contributes the ticker and the headline subscription figure. BSE
+ * contributes what NSE does not publish at all: the market lot, without which
+ * an application cannot be costed, and the subscription split by investor
+ * category — the retail line being the one that bears on a family's odds.
+ *
+ * Neither needs an API key; both are public. NSE serves a challenge page to
+ * clients that do not look like a browser, so a cookie is taken from its home
+ * page first. BSE only wants browser-ish headers.
  */
 
 const NSE = "https://www.nseindia.com";
@@ -120,17 +124,41 @@ async function bseJson(path) {
   }
 }
 
-// Live and forthcoming issues, which is where each issue's IPO number comes from.
+/* Live and forthcoming issues. This is both a source of issues in its own right
+   and where each one's IPO number comes from.
+
+   The feed mixes in things that are not IPOs at all, and IR_flag is what tells
+   them apart: IPO, RI (rights), OTB (offer to buy), DPI (debt public issue) and
+   BuyBack. Only IPO belongs in an IPO tracker — the platform field does not
+   separate them, since an open offer on the mainboard still says MainBoard. */
+function parseBand(s) {
+  const nums = String(s || "").match(/\d+(?:\.\d+)?/g);
+  if (!nums || !nums.length) return { min: null, max: null };
+  const vals = nums.map(Number);
+  return { min: Math.min(...vals), max: Math.max(...vals) };
+}
+
 async function bsePublicIssues() {
   const data = await bseJson("/GetPublicIssue_par_updated/w?flag=1");
   const rows = Array.isArray(data?.Table) ? data.Table : [];
   return rows
-    .map((r) => ({
-      key: nameKey(r.Scrip_Name || r.LONG_NAME || r.short_name),
-      ipoNo: String(r.IPO_NO || "").trim(),
-      platform: String(r.eXCHANGE_PLATFORM || "").trim(),
-      faceValue: num(r.Face_Val),
-    }))
+    .map((r) => {
+      const platform = String(r.eXCHANGE_PLATFORM || "").trim();
+      const band = parseBand(r.Price_Band);
+      return {
+        key: nameKey(r.Scrip_Name || r.LONG_NAME || r.short_name),
+        company: String(r.Scrip_Name || r.LONG_NAME || "").replace(/\s+/g, " ").trim(),
+        ipoNo: String(r.IPO_NO || "").trim(),
+        platform,
+        category: /sme/i.test(platform) ? "SME" : "Mainboard",
+        priceMin: band.min,
+        priceMax: band.max,
+        openDate: String(r.Start_Dt || "").slice(0, 10),
+        closeDate: String(r.End_Dt || "").slice(0, 10),
+        faceValue: num(r.Face_Val),
+        isIpo: /^ipo$/i.test(String(r.IR_flag || "").trim()),
+      };
+    })
     .filter((r) => r.key && r.ipoNo);
 }
 
@@ -241,10 +269,15 @@ export default async function handler(req, res) {
   }
 
   try {
+    /* Both exchanges, because neither lists everything: NSE Emerge SME issues
+       never appear on BSE, and BSE has issues NSE does not. Asking both and
+       taking the union is the only way to see them all — and it means one
+       exchange being unreachable degrades the list rather than emptying it. */
     const cookie = await nseCookie();
-    const [current, upcoming] = await Promise.all([
+    const [current, upcoming, bseRows] = await Promise.all([
       nseJson("/api/ipo-current-issue", cookie).catch(() => []),
       nseJson("/api/all-upcoming-issues?category=ipo", cookie).catch(() => []),
+      bsePublicIssues().catch(() => []),
     ]);
 
     const ipos = mergeNse(
@@ -252,17 +285,42 @@ export default async function handler(req, res) {
       Array.isArray(upcoming) ? upcoming : []
     );
 
+    // Add the issues only BSE knows about, skipping debt and rights.
+    const seen = new Set(ipos.map((i) => nameKey(i.company)));
+    bseRows.forEach((r) => {
+      if (!r.isIpo || seen.has(r.key)) return;
+      seen.add(r.key);
+      ipos.push({
+        symbol: r.key.replace(/\s+/g, "-").slice(0, 24).toUpperCase(),
+        company: r.company,
+        category: r.category,
+        priceMin: r.priceMin,
+        priceMax: r.priceMax,
+        openDate: r.openDate,
+        closeDate: r.closeDate,
+        issueSize: null,
+        subscription: null,
+        status: "",
+        live: !!r.openDate && r.openDate <= new Date().toISOString().slice(0, 10),
+        lotSize: null,
+        lotCost: null,
+        registrar: "",
+        categories: null,
+        source: "BSE",
+      });
+    });
+
+    ipos.sort((a, b) => (a.closeDate || "").localeCompare(b.closeDate || ""));
+
     if (!ipos.length) {
       return res.status(502).json({
-        error: "NSE did not return any IPOs. It may be blocking this server, or there may genuinely be none open.",
+        error: "Neither NSE nor BSE returned any IPOs. They may be blocking this server, or there may genuinely be none open.",
       });
     }
 
-    // Enrich with BSE's lot size. Best effort: if BSE is unreachable the IPOs
-    // still come back, just without a lot size, which the app already handles.
+    // Enrich with BSE's lot size and category demand.
     let lotSource = "none";
     try {
-      const bseRows = await bsePublicIssues();
       const byKey = new Map(bseRows.map((r) => [r.key, r]));
       const matched = ipos
         .map((ipo, idx) => ({ idx, hit: byKey.get(nameKey(ipo.company)) }))
@@ -284,6 +342,15 @@ export default async function handler(req, res) {
         if (e.categories && Object.values(e.categories).some((v) => v != null)) {
           ipo.categories = e.categories;
         }
+        // NSE omits the price band for some SME issues; BSE often has it.
+        const bse = matched[n].hit;
+        if (ipo.priceMax == null && bse.priceMax != null) {
+          ipo.priceMin = bse.priceMin;
+          ipo.priceMax = bse.priceMax;
+          if (ipo.lotSize) ipo.lotCost = ipo.lotSize * bse.priceMax;
+        }
+        if (!ipo.openDate && bse.openDate) ipo.openDate = bse.openDate;
+        if (!ipo.closeDate && bse.closeDate) ipo.closeDate = bse.closeDate;
       });
       if (enriched.some((e) => e.detail && e.detail.lotSize)) lotSource = "BSE";
     } catch {
