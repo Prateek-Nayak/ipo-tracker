@@ -123,6 +123,42 @@ function todayISO() {
 // "Listed" about a share that has not listed yet is simply wrong.
 const hasListed = (ipo) => !!ipo?.listingDate && ipo.listingDate <= todayISO();
 
+// Calendar arithmetic on a plain date, skipping weekends.
+function addWorkingDays(iso, n) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso || "")) return "";
+  const d = new Date(iso + "T00:00:00Z");
+  const step = n >= 0 ? 1 : -1;
+  let left = Math.abs(n);
+  while (left > 0) {
+    d.setUTCDate(d.getUTCDate() + step);
+    const wd = d.getUTCDay();
+    if (wd !== 0 && wd !== 6) left--;
+  }
+  return d.toISOString().slice(0, 10);
+}
+
+/* The day the basis of allotment is settled — the day there is something to
+   record. No exchange feed publishes it, so unless it has been entered by hand
+   it is worked out from SEBI's T+3 timetable: bidding closes on T, allotment is
+   settled on T+1, listing follows on T+3. Weekends are skipped but public
+   holidays are not, so a derived date is an expectation, not a fact, and is
+   labelled as one. */
+function allotmentDateOf(ipo) {
+  if (ipo?.allotmentDate) return { date: ipo.allotmentDate, exact: true };
+  if (ipo?.listingDate) return { date: addWorkingDays(ipo.listingDate, -2), exact: false };
+  if (ipo?.closeDate) return { date: addWorkingDays(ipo.closeDate, 1), exact: false };
+  return { date: "", exact: false };
+}
+
+/* Applications still sitting at Pending after the allotment should have been
+   settled. This is the ledger's real to-do list. */
+function awaitingAllotmentEntry(ipo) {
+  const apps = ipo?.applications || [];
+  if (!apps.some((a) => (a.allotmentStatus || "Pending") === "Pending")) return false;
+  const { date } = allotmentDateOf(ipo);
+  return !!date && date <= todayISO();
+}
+
 /* Where an issue is in its life, worked out from its own dates rather than from
    which feed it arrived in. An issue that closed yesterday is closed, however
    the exchange still files it. */
@@ -134,7 +170,21 @@ function issueStage(x) {
 
   if (listed && listed < today) return { label: "LISTED", color: COLORS.navy, bg: "#EAEFF5" };
   if (listed && listed === today) return { label: "LISTS TODAY", color: COLORS.green, bg: COLORS.greenSoft };
+
+  /* Allotment day sits between the close and the listing, and on the day itself
+     it is the nearer event — so it outranks a listing still days away. */
+  const allot = allotmentDateOf(x);
+  if (allot.date && allot.date === today) {
+    return {
+      label: allot.exact ? "ALLOTMENT TODAY" : "ALLOTMENT LIKELY TODAY",
+      color: COLORS.gold, bg: COLORS.goldSoft,
+    };
+  }
+
   if (listed && listed > today) return { label: "LISTS " + fmtDate(listed).toUpperCase().slice(0, 6), color: COLORS.navy, bg: "#EAEFF5" };
+  if (allot.date && allot.date > today && close && close < today) {
+    return { label: "ALLOTMENT " + fmtDate(allot.date).toUpperCase().slice(0, 6), color: COLORS.gold, bg: COLORS.goldSoft };
+  }
   if (close && close < today) return { label: "CLOSED", color: COLORS.inkSoft, bg: "#EFEDE7" };
   if (close && close === today) return { label: "CLOSES TODAY", color: COLORS.red, bg: COLORS.redSoft };
   if (open && open <= today) return { label: "OPEN NOW", color: COLORS.green, bg: COLORS.greenSoft };
@@ -1583,6 +1633,9 @@ function IpoCard({ ipo, accounts, onClick, onEdit, onDelete, showActions }) {
             </div>
             <div style={{ marginTop: 5, display: "flex", gap: 6, flexWrap: "wrap" }}>
               {stage && <Badge color={stage.color} bg={stage.bg}>{stage.label}</Badge>}
+              {awaitingAllotmentEntry(ipo) && (
+                <Badge color={COLORS.red} bg={COLORS.redSoft}>RECORD ALLOTMENT</Badge>
+              )}
               {missing.length > 0 && (
                 <Badge color={COLORS.gold} bg={COLORS.goldSoft}>NEEDS {missing.join(" & ").toUpperCase()}</Badge>
               )}
@@ -1665,6 +1718,12 @@ function IpoDetailSheet({ ipo, accounts, onClose, onEditIpo, onAddApplication, o
         {ipo.closeDate
           ? <span>Closes {fmtDate(ipo.closeDate)}</span>
           : ipo.applicationDate && <span>Applied {fmtDate(ipo.applicationDate)}</span>}
+        {!hasListed(ipo) && allotmentDateOf(ipo).date && (
+          <span>
+            Allotment {fmtDate(allotmentDateOf(ipo).date)}
+            {allotmentDateOf(ipo).exact ? "" : " (expected)"}
+          </span>
+        )}
         {ipo.listingDate && (
           <span>{hasListed(ipo) ? "Listed" : "Lists"} {fmtDate(ipo.listingDate)}</span>
         )}
@@ -2145,6 +2204,12 @@ function IpoFormSheet({ initial, onClose, onSave }) {
           </div>
           {f.openDate && <span>Opens {fmtDate(f.openDate)}</span>}
           {f.closeDate && <span>Closes {fmtDate(f.closeDate)} — last day to apply</span>}
+          {allotmentDateOf(f).date && (
+            <span>
+              Allotment {fmtDate(allotmentDateOf(f).date)}
+              {allotmentDateOf(f).exact ? "" : " (expected)"}
+            </span>
+          )}
           {f.listingDate && <span>{hasListed(f) ? "Listed" : "Lists"} {fmtDate(f.listingDate)}</span>}
           {!(f.openDate || f.closeDate || f.listingDate) && (
             <span style={{ fontFamily: "Inter, sans-serif" }}>
@@ -2159,6 +2224,7 @@ function IpoFormSheet({ initial, onClose, onSave }) {
           </div>
           <Field label="Opens"><Input type="date" value={f.openDate || ""} onChange={set("openDate")} /></Field>
           <Field label="Closes — last day to apply"><Input type="date" value={f.closeDate || ""} onChange={set("closeDate")} /></Field>
+          <Field label="Allotment date"><Input type="date" value={f.allotmentDate || ""} onChange={set("allotmentDate")} /></Field>
           <Field label="Listing date"><Input type="date" value={f.listingDate || ""} onChange={set("listingDate")} /></Field>
         </>
       )}
