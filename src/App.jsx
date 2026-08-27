@@ -2830,6 +2830,7 @@ function LiveIposSheet({ existing, onClose, onImport }) {
   const [state, setState] = useState({ status: "loading", rows: [], error: "", fetchedAt: "", note: "" });
   const [picked, setPicked] = useState({});
   const [search, setSearch] = useState("");
+  const [importing, setImporting] = useState(false);
 
   const known = useMemo(() => {
     const s = new Set();
@@ -2926,8 +2927,42 @@ function LiveIposSheet({ existing, onClose, onImport }) {
     });
   };
 
-  const doImport = () => {
-    onImport(chosen.map((r) => ({
+  /* Lot size and the day-one open are fetched per company, so the year listing
+     comes back without them. Ask for just the selected ones before importing —
+     otherwise every import from a year arrives with no lot size, and a blocked
+     amount cannot be worked out. */
+  const enrichChosen = async (rows) => {
+    if (mode !== "year" || !rows.length) return rows;
+    try {
+      const keys = rows.map((r) => r.company).filter(Boolean).join("|");
+      const res = await fetch(`/api/listings?from=${year}&keys=${encodeURIComponent(keys)}`);
+      if (!res.ok) return rows;
+      const data = JSON.parse(await res.text());
+      const byKey = new Map((data.listings || []).map((l) => [l.key, l]));
+      return rows.map((r) => {
+        const hit = byKey.get(normaliseName(r.company));
+        if (!hit) return r;
+        return {
+          ...r,
+          lotSize: hit.lotSize != null ? hit.lotSize : r.lotSize,
+          listingOpen: hit.listingOpen != null ? hit.listingOpen : r.listingOpen,
+          listingClose: hit.listingClose != null ? hit.listingClose : r.listingClose,
+        };
+      });
+    } catch {
+      return rows; // an import without lot sizes still beats no import
+    }
+  };
+
+  const doImport = async () => {
+    setImporting(true);
+    let rows;
+    try {
+      rows = await enrichChosen(chosen);
+    } finally {
+      setImporting(false);
+    }
+    onImport(rows.map((r) => ({
       id: uid(),
       symbol: r.symbol || "",
       company: r.company,
@@ -3081,8 +3116,12 @@ function LiveIposSheet({ existing, onClose, onImport }) {
             </div>
           )}
 
-          <PrimaryButton onClick={doImport} disabled={!chosen.length}>
-            {chosen.length ? `Import ${chosen.length} IPO${chosen.length === 1 ? "" : "s"}` : "Select IPOs to import"}
+          <PrimaryButton onClick={doImport} disabled={!chosen.length || importing}>
+            {importing
+              ? "Fetching lot sizes…"
+              : chosen.length
+                ? `Import ${chosen.length} IPO${chosen.length === 1 ? "" : "s"}`
+                : "Select IPOs to import"}
           </PrimaryButton>
         </>
       )}
