@@ -193,8 +193,10 @@ function parseBand(s) {
 async function bseIssue(ipoNo) {
   const url = `${BSE}/GetMkt_ISSUE_BBS_IPO/w?IPO_NO=${encodeURIComponent(ipoNo)}`;
   try {
-    const r = await bseFetch(url, 1);
-    return r?.IPONO_0?.[0] || null;
+    const res = await bseFetch(url, 1);
+    const text = await res.text();
+    if (!text.trim()) return null;
+    return JSON.parse(text)?.IPONO_0?.[0] || null;
   } catch {
     return null;
   }
