@@ -106,7 +106,19 @@ function valuationPrice(ipo) {
 }
 const isMarkedToMarket = (ipo) => Number(ipo?.currentPrice) > 0;
 
-const todayISO = () => new Date().toISOString().slice(0, 10);
+/* Today's date on the Indian market calendar. Every date in this app — bidding
+   windows, listing days — is an IST date, while toISOString() gives the UTC one.
+   Those disagree from 18:30 IST until midnight, which is exactly when someone
+   checks the day's listings, and made an issue listing today read as tomorrow.
+   Pinned to Asia/Kolkata rather than the device clock so it stays right abroad. */
+function todayISO() {
+  try {
+    return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date());
+  } catch {
+    // en-CA already yields YYYY-MM-DD; this is only for engines without tz data.
+    return new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
+  }
+}
 // A listing date in the future is a scheduled date, not a past event. Saying
 // "Listed" about a share that has not listed yet is simply wrong.
 const hasListed = (ipo) => !!ipo?.listingDate && ipo.listingDate <= todayISO();
@@ -2059,6 +2071,7 @@ function IpoFormSheet({ initial, onClose, onSave }) {
     id: undefined, company: "", category: "Mainboard", applicationDate: "", priceBand: "",
     lotSize: "", listingDate: "", listingPrice: "", remarks: "",
   });
+  const [editDates, setEditDates] = useState(false);
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   return (
     <Sheet title={initial ? "Edit IPO" : "New IPO"} onClose={onClose}>
@@ -2071,21 +2084,44 @@ function IpoFormSheet({ initial, onClose, onSave }) {
       <Field label="Price per Share (₹)"><Input type="number" inputMode="numeric" value={f.priceBand} onChange={set("priceBand")} placeholder="e.g. 285" /></Field>
       <Field label="Lot Size (shares)"><Input type="number" inputMode="numeric" value={f.lotSize} onChange={set("lotSize")} placeholder="e.g. 52" /></Field>
 
-      {/* Dates come from BSE and are shown rather than typed — every one of
-          them was a duplicate of something the exchange already publishes. */}
-      {(f.openDate || f.closeDate || f.listingDate) && (
+      {/* Dates come from BSE and are shown rather than typed — every one was a
+          duplicate of something the exchange already publishes. But BSE has no
+          record of some issues, and then a wrong date can only be corrected by
+          hand, so the inputs are a click away rather than gone. */}
+      {!editDates ? (
         <div style={{
           background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 10,
           padding: "10px 12px", marginBottom: 14, fontSize: 12, color: COLORS.inkSoft,
           fontFamily: "'JetBrains Mono', monospace", display: "flex", flexDirection: "column", gap: 3,
         }}>
-          <span style={{ fontFamily: "Inter, sans-serif", fontWeight: 600, color: COLORS.ink, fontSize: 11 }}>
-            DATES FROM BSE
-          </span>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+            <span style={{ fontFamily: "Inter, sans-serif", fontWeight: 600, color: COLORS.ink, fontSize: 11 }}>
+              {f.openDate || f.closeDate || f.listingDate ? "DATES" : "NO DATES YET"}
+            </span>
+            <button
+              type="button"
+              onClick={() => setEditDates(true)}
+              style={{ background: "none", border: 0, padding: 0, color: COLORS.navy, fontWeight: 600, fontSize: 11.5, cursor: "pointer", fontFamily: "Inter, sans-serif" }}
+            >Edit</button>
+          </div>
           {f.openDate && <span>Opens {fmtDate(f.openDate)}</span>}
           {f.closeDate && <span>Closes {fmtDate(f.closeDate)} — last day to apply</span>}
           {f.listingDate && <span>{hasListed(f) ? "Listed" : "Lists"} {fmtDate(f.listingDate)}</span>}
+          {!(f.openDate || f.closeDate || f.listingDate) && (
+            <span style={{ fontFamily: "Inter, sans-serif" }}>
+              BSE has none for this issue. Refreshing prices fills them in when it does.
+            </span>
+          )}
         </div>
+      ) : (
+        <>
+          <div style={{ fontSize: 11.5, color: COLORS.inkSoft, marginBottom: 10 }}>
+            A refresh overwrites these whenever BSE has its own value.
+          </div>
+          <Field label="Opens"><Input type="date" value={f.openDate || ""} onChange={set("openDate")} /></Field>
+          <Field label="Closes — last day to apply"><Input type="date" value={f.closeDate || ""} onChange={set("closeDate")} /></Field>
+          <Field label="Listing date"><Input type="date" value={f.listingDate || ""} onChange={set("listingDate")} /></Field>
+        </>
       )}
       <Field label={f.listingPriceSource === "bse-open" ? "Listing Price — day-one open (from BSE, ₹)" : f.listingPriceSource === "bse-close" ? "Listing Day Close (from BSE, ₹)" : "Listing Price (optional, ₹)"}>
         <Input
@@ -2210,7 +2246,7 @@ function AccountFormSheet({ initial, accounts = [], onClose, onSave }) {
 function TransferFormSheet({ initial, accounts, ipos, onClose, onSave }) {
   const [f, setF] = useState(initial || {
     id: undefined, fromAccountId: accounts[0]?.id || "", toAccountId: accounts[1]?.id || accounts[0]?.id || "",
-    amount: "", date: new Date().toISOString().slice(0, 10), relatedIpoId: "", remarks: "",
+    amount: "", date: todayISO(), relatedIpoId: "", remarks: "",
   });
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   return (
@@ -2269,7 +2305,7 @@ function DataSheet({ state, session, cloudOn, syncing, syncError, lastSync, onCl
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `ipo-ledger-${new Date().toISOString().slice(0, 10)}.json`;
+    a.download = `ipo-ledger-${todayISO()}.json`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);

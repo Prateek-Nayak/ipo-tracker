@@ -44,6 +44,16 @@ function parsePrice(s) {
   return { min: Math.min(...vals), max: Math.max(...vals) };
 }
 
+/* The market's calendar date. toISOString() would give the UTC one, which is
+   the previous day through the whole Indian evening. */
+function istToday() {
+  try {
+    return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date());
+  } catch {
+    return new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
+  }
+}
+
 function num(v) {
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
@@ -301,7 +311,7 @@ export default async function handler(req, res) {
         issueSize: null,
         subscription: null,
         status: "",
-        live: !!r.openDate && r.openDate <= new Date().toISOString().slice(0, 10),
+        live: !!r.openDate && r.openDate <= istToday(),
         lotSize: null,
         lotCost: null,
         registrar: "",
