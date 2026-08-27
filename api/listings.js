@@ -56,6 +56,50 @@ async function bseYear(year) {
   return Array.isArray(data?.Table) ? data.Table : [];
 }
 
+/* Bidding windows. flag=1 is live and forthcoming, flag=2 is closed issues;
+   between them they carry the open and close dates that the listing feed does
+   not. BSE only keeps the current year here, so older IPOs get a listing date
+   but no bidding window - there is nowhere to read one from. */
+async function bseIssueWindows() {
+  const pull = async (flag) => {
+    const url = `${BSE}/GetPublicIssue_par_updated/w?flag=${flag}`;
+    const r = await fetch(url, {
+      headers: {
+        "User-Agent": UA,
+        Accept: "application/json, text/plain, */*",
+        Referer: "https://www.bseindia.com/",
+        Origin: "https://www.bseindia.com",
+      },
+    });
+    if (!r.ok) return [];
+    const t = await r.text();
+    if (!t.trim()) return [];
+    try {
+      return JSON.parse(t)?.Table || [];
+    } catch {
+      return [];
+    }
+  };
+
+  const rows = (await Promise.all([pull(1), pull(2)])).flat();
+  const byKey = new Map();
+  rows.forEach((r) => {
+    const key = nameKey(r.Scrip_Name || r.LONG_NAME || r.short_name);
+    if (!key) return;
+    const openDate = isoDate(r.Start_Dt);
+    const closeDate = isoDate(r.End_Dt);
+    if (!openDate && !closeDate) return;
+    if (!byKey.has(key)) {
+      byKey.set(key, {
+        openDate,
+        closeDate,
+        company: String(r.Scrip_Name || r.LONG_NAME || "").replace(/\s+/g, " ").trim(),
+      });
+    }
+  });
+  return byKey;
+}
+
 function normalise(row) {
   return {
     company: String(row.CompanyName || "").replace(/\s+/g, " ").trim(),
@@ -89,7 +133,10 @@ export default async function handler(req, res) {
     : thisYear - 1;
 
   try {
-    const rows = await bseYear(from);
+    const [rows, windows] = await Promise.all([
+      bseYear(from),
+      bseIssueWindows().catch(() => new Map()),
+    ]);
 
     // One row per company. A row that actually carries a current price beats
     // one that does not; otherwise the more recent listing wins.
@@ -103,6 +150,23 @@ export default async function handler(req, res) {
         (row.currentPrice != null && prev.currentPrice == null) ||
         (row.listedOn || "") > (prev.listedOn || "");
       if (better) byKey.set(row.key, row);
+    });
+
+    // Attach bidding windows, and keep issues that have not listed yet — they
+    // have no price but they do have dates worth filling in.
+    windows.forEach((w, key) => {
+      const existing = byKey.get(key);
+      if (existing) {
+        existing.openDate = w.openDate;
+        existing.closeDate = w.closeDate;
+      } else {
+        byKey.set(key, {
+          company: w.company || "", key, shortName: "",
+          issuePrice: null, listedOn: "", listingClose: null, listingDayGain: null,
+          currentPrice: null, gainSinceIssue: null, bseUrl: "",
+          openDate: w.openDate, closeDate: w.closeDate,
+        });
+      }
     });
 
     const listings = [...byKey.values()].sort((a, b) => (b.listedOn || "").localeCompare(a.listedOn || ""));

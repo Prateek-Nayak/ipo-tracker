@@ -724,7 +724,18 @@ export default function App() {
         const patch = { priceAsOf: asOf };
         if (hit.currentPrice != null) patch.currentPrice = String(hit.currentPrice);
         if (isBlank(ipo.listingPrice) && hit.listingClose != null) patch.listingPrice = String(hit.listingClose);
+
+        // Every date we can source, but only where the field is empty — a date
+        // entered by hand is a record of what actually happened and stands.
         if (!ipo.listingDate && hit.listedOn) patch.listingDate = hit.listedOn;
+        if (!ipo.openDate && hit.openDate) patch.openDate = hit.openDate;
+        if (!ipo.closeDate && hit.closeDate) patch.closeDate = hit.closeDate;
+        // The application date is the one thing BSE cannot know. Falling back to
+        // the day bidding opened is a sensible placeholder, and editable.
+        if (!ipo.applicationDate && (hit.openDate || hit.listedOn)) {
+          patch.applicationDate = hit.openDate || "";
+        }
+        if (!patch.applicationDate) delete patch.applicationDate;
         const changed = Object.keys(patch).some((k) => String(ipo[k] ?? "") !== String(patch[k]));
         if (changed) updated++;
         return changed ? { ...ipo, ...patch } : ipo;
@@ -746,10 +757,13 @@ export default function App() {
   // Refresh once per session when there is something whose value can move.
   useEffect(() => {
     if (!loaded || pricedOnce.current) return;
-    const holdsShares = ipos.some((i) =>
+    // Worth doing whenever anything could be filled in: a live holding to
+    // value, or simply a date or listing price still missing.
+    const worthFetching = ipos.some((i) =>
       (i.applications || []).some((a) =>
-        !a.sold && (a.allotmentStatus === "Allotted" || a.allotmentStatus === "Partial")));
-    if (!holdsShares) return;
+        !a.sold && (a.allotmentStatus === "Allotted" || a.allotmentStatus === "Partial")) ||
+      !i.listingDate || !i.openDate || !i.closeDate || isBlank(i.listingPrice));
+    if (!worthFetching) return;
     pricedOnce.current = true;
     refreshPrices({ silent: true });
   }, [loaded, ipos, refreshPrices]);
@@ -2732,7 +2746,7 @@ function LiveIposSheet({ existing, onClose, onImport }) {
       symbol: r.symbol,
       company: r.company,
       category: r.category,
-      applicationDate: "",
+      applicationDate: r.openDate || "",
       priceBand: r.priceMax != null ? String(r.priceMax) : "",
       lotSize: r.lotSize != null ? String(r.lotSize) : "",
       openDate: r.openDate,
