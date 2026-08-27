@@ -82,6 +82,29 @@ const inr = (n) => "₹" + (Number(n) || 0).toLocaleString("en-IN", { maximumFra
    than saying nothing — so unknown values render as an em dash instead. */
 const isBlank = (v) => v === "" || v == null || !Number.isFinite(Number(v));
 const inrOrDash = (v) => (isBlank(v) ? "—" : inr(v));
+
+/* The same normalisation the price API uses, so a company matches across
+   sources: "Lumino Industries Limited" here, "LUMINO INDUSTRIES LTD" there. */
+function nameKey(s) {
+  return String(s || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]+/g, " ")
+    .replace(/\b(limited|ltd|private|pvt|india|the)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/* What shares still held are worth. Today's traded price when we have one,
+   otherwise the listing price. Valuing a holding at its listing price forever
+   is how a position that listed at 372 and now trades at 251 keeps reporting
+   a gain it no longer has. */
+function valuationPrice(ipo) {
+  const cur = Number(ipo?.currentPrice);
+  if (Number.isFinite(cur) && cur > 0) return cur;
+  const listed = Number(ipo?.listingPrice);
+  return Number.isFinite(listed) && listed > 0 ? listed : null;
+}
+const isMarkedToMarket = (ipo) => Number(ipo?.currentPrice) > 0;
 const fmtDate = (d) => {
   if (!d) return "—";
   const dt = new Date(d + "T00:00:00");
@@ -501,8 +524,11 @@ export default function App() {
   const [bulkApplyFor, setBulkApplyFor] = useState(null);   // ipo id
   const [bulkStatusFor, setBulkStatusFor] = useState(null); // ipo id
   const [liveOpen, setLiveOpen] = useState(false);
+  const [pricing, setPricing] = useState(false);
+  const [priceInfo, setPriceInfo] = useState({ asOf: "", matched: 0, total: 0, error: "" });
 
   const skipNextAutoSync = useRef(true);
+  const pricedOnce = useRef(false);
 
   // Keep React in step with the module-level session, which the token refresh
   // logic and any 401 response can also change.
@@ -662,6 +688,64 @@ export default function App() {
     return () => clearTimeout(t);
   }, [accounts, ipos, transfers, loaded, userId, pushToCloud]);
 
+  /* Pull listing and current market prices from BSE and apply them to every
+     IPO we can match by name. The current price is always refreshed; the
+     listing price and date are only filled in when blank, so anything typed
+     in by hand is never overwritten. */
+  const refreshPrices = useCallback(async (opts = {}) => {
+    if (!ipos.length) return { matched: 0, updated: 0 };
+    setPricing(true);
+    try {
+      const res = await fetch("/api/listings");
+      const text = await res.text();
+      let data = {};
+      try { data = JSON.parse(text); } catch { /* handled next */ }
+      if (!res.ok || data.error) throw new Error(data.error || `Request failed (${res.status})`);
+
+      const byKey = new Map();
+      (data.listings || []).forEach((l) => { if (l.key) byKey.set(l.key, l); });
+
+      const asOf = data.fetchedAt || new Date().toISOString();
+      let matched = 0;
+      let updated = 0;
+
+      const next = ipos.map((ipo) => {
+        const hit = byKey.get(nameKey(ipo.company));
+        if (!hit) return ipo;
+        matched++;
+        const patch = { priceAsOf: asOf };
+        if (hit.currentPrice != null) patch.currentPrice = String(hit.currentPrice);
+        if (isBlank(ipo.listingPrice) && hit.listingClose != null) patch.listingPrice = String(hit.listingClose);
+        if (!ipo.listingDate && hit.listedOn) patch.listingDate = hit.listedOn;
+        const changed = Object.keys(patch).some((k) => String(ipo[k] ?? "") !== String(patch[k]));
+        if (changed) updated++;
+        return changed ? { ...ipo, ...patch } : ipo;
+      });
+
+      if (updated) persistIpos(next);
+      setPriceInfo({ asOf, matched, total: ipos.length, error: "" });
+      return { matched, updated };
+    } catch (e) {
+      console.error("Price refresh failed", e);
+      setPriceInfo((p) => ({ ...p, error: e.message || "Could not update prices" }));
+      if (!opts.silent) throw e;
+      return { matched: 0, updated: 0 };
+    } finally {
+      setPricing(false);
+    }
+  }, [ipos, persistIpos]);
+
+  // Refresh once per session when there is something whose value can move.
+  useEffect(() => {
+    if (!loaded || pricedOnce.current) return;
+    const holdsShares = ipos.some((i) =>
+      (i.applications || []).some((a) =>
+        !a.sold && (a.allotmentStatus === "Allotted" || a.allotmentStatus === "Partial")));
+    if (!holdsShares) return;
+    pricedOnce.current = true;
+    refreshPrices({ silent: true });
+  }, [loaded, ipos, refreshPrices]);
+
   const replaceAll = useCallback((state) => {
     persistAccounts(state.accounts);
     persistIpos(state.ipos);
@@ -681,8 +765,9 @@ export default function App() {
           invested += shares * price;
           if (app.sold) {
             realized += shares * ((Number(app.sellPrice) || 0) - price);
-          } else if (ipo.listingPrice) {
-            unrealized += shares * ((Number(ipo.listingPrice) || 0) - price);
+          } else {
+            const mark = valuationPrice(ipo);
+            if (mark) unrealized += shares * (mark - price);
           }
         }
       });
@@ -905,6 +990,9 @@ export default function App() {
           lastSync={lastSync}
           onClose={() => setDataSheetOpen(false)}
           onSyncNow={pushToCloud}
+          pricing={pricing}
+          priceInfo={priceInfo}
+          onRefreshPrices={refreshPrices}
           onReplaceAll={replaceAll}
           onSignOut={async () => { setDataSheetOpen(false); await cloudSignOut(); }}
         />
@@ -1028,12 +1116,13 @@ function Dashboard({ stats, ipos, accounts, onOpenIpo }) {
   // Figures below are derived from price and lot size; say so when some are absent
   // rather than quietly reporting a total that leaves money out.
   const incomplete = ipos.filter((i) => (i.applications || []).length && missingIpoFields(i).length);
+  const marked = ipos.some((i) => isMarkedToMarket(i));
   return (
     <div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
         <StatCard label="Capital Deployed" value={inr(stats.invested)} icon={Landmark} tone="navy" />
         <StatCard label="Realized Gain" value={inr(stats.realized)} icon={stats.realized >= 0 ? TrendingUp : TrendingDown} tone={stats.realized >= 0 ? "green" : "red"} />
-        <StatCard label="Unrealized Gain" value={inr(stats.unrealized)} icon={stats.unrealized >= 0 ? TrendingUp : TrendingDown} tone={stats.unrealized >= 0 ? "green" : "red"} />
+        <StatCard label={marked ? "Unrealized (at today's price)" : "Unrealized (at listing)"} value={inr(stats.unrealized)} icon={stats.unrealized >= 0 ? TrendingUp : TrendingDown} tone={stats.unrealized >= 0 ? "green" : "red"} />
         <StatCard label="Pending Allotment" value={stats.pendingCount} icon={Clock} tone="gold" />
       </div>
 
@@ -1335,8 +1424,9 @@ function IpoCard({ ipo, accounts, onClick, onEdit, onDelete, showActions }) {
   const tally = allotmentTally(ipo);
   const apps = ipo.applications || [];
   const totalLots = apps.reduce((s, a) => s + (Number(a.lots) || 0), 0);
-  const gainPct = ipo.listingPrice && ipo.priceBand
-    ? (((Number(ipo.listingPrice) - Number(ipo.priceBand)) / Number(ipo.priceBand)) * 100)
+  const mark = valuationPrice(ipo);
+  const gainPct = mark && Number(ipo.priceBand) > 0
+    ? (((mark - Number(ipo.priceBand)) / Number(ipo.priceBand)) * 100)
     : null;
   const conflicts = panConflicts(ipo, accounts);
   const missing = missingIpoFields(ipo);
@@ -1387,7 +1477,7 @@ function IpoCard({ ipo, accounts, onClick, onEdit, onDelete, showActions }) {
               display: "flex", alignItems: "center", gap: 3,
             }}>
               {gainPct >= 0 ? <TrendingUp size={13} color={COLORS.green} /> : <TrendingDown size={13} color={COLORS.red} />}
-              {gainPct.toFixed(1)}% listing
+              {gainPct.toFixed(1)}% {isMarkedToMarket(ipo) ? "now" : "listing"}
             </span>
           )}
           {apps.some((a) => a.sold) && <Badge color={COLORS.navy} bg="#EAEFF5">SOLD {apps.filter((a) => a.sold).length}/{apps.length}</Badge>}
@@ -1425,9 +1515,12 @@ function IpoDetailSheet({ ipo, accounts, onClose, onEditIpo, onAddApplication, o
         <Badge color={COLORS.inkSoft} bg="#EFEDE7">Price ₹{ipo.priceBand || "—"}</Badge>
         <Badge color={COLORS.inkSoft} bg="#EFEDE7">Lot {ipo.lotSize || "—"} sh</Badge>
         {ipo.listingPrice && (
-          <Badge color={Number(ipo.listingPrice) >= Number(ipo.priceBand) ? COLORS.green : COLORS.red}
-            bg={Number(ipo.listingPrice) >= Number(ipo.priceBand) ? COLORS.greenSoft : COLORS.redSoft}>
-            Listed ₹{ipo.listingPrice}
+          <Badge color={COLORS.inkSoft} bg="#EFEDE7">Listed ₹{ipo.listingPrice}</Badge>
+        )}
+        {isMarkedToMarket(ipo) && (
+          <Badge color={Number(ipo.currentPrice) >= Number(ipo.priceBand) ? COLORS.green : COLORS.red}
+            bg={Number(ipo.currentPrice) >= Number(ipo.priceBand) ? COLORS.greenSoft : COLORS.redSoft}>
+            Now ₹{ipo.currentPrice}
           </Badge>
         )}
       </div>
@@ -1519,8 +1612,9 @@ function ApplicationRow({ app, ipo, accounts, onEdit, onDelete }) {
   const shares = Number(app.sharesAllotted) || 0;
   let pnl = null;
   if (app.sold) pnl = shares * ((Number(app.sellPrice) || 0) - price);
-  else if (ipo.listingPrice && (app.allotmentStatus === "Allotted" || app.allotmentStatus === "Partial")) {
-    pnl = shares * ((Number(ipo.listingPrice) || 0) - price);
+  else if (app.allotmentStatus === "Allotted" || app.allotmentStatus === "Partial") {
+    const mark = valuationPrice(ipo);
+    if (mark) pnl = shares * (mark - price);
   }
   const accountName = accounts.find((a) => a.id === app.accountId)?.name;
   return (
@@ -2043,7 +2137,7 @@ function TransferFormSheet({ initial, accounts, ipos, onClose, onSave }) {
 /* ---------------------------------------------------------
    SYNC & DATA
 ---------------------------------------------------------- */
-function DataSheet({ state, session, cloudOn, syncing, syncError, lastSync, onClose, onSyncNow, onReplaceAll, onSignOut }) {
+function DataSheet({ state, session, cloudOn, syncing, syncError, lastSync, onClose, onSyncNow, onReplaceAll, onSignOut, pricing, priceInfo, onRefreshPrices }) {
   const [importText, setImportText] = useState("");
   const [notice, setNotice] = useState("");
   const [showImport, setShowImport] = useState(false);
@@ -2130,6 +2224,23 @@ function DataSheet({ state, session, cloudOn, syncing, syncError, lastSync, onCl
           {syncing ? "Syncing…" : "Sync now"}
         </PrimaryButton>
       )}
+
+      <div style={{ height: 18 }} />
+      <SectionLabel>Market prices</SectionLabel>
+      <div style={{
+        background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 12,
+        padding: "12px 14px", marginBottom: 8, fontSize: 12,
+        color: priceInfo?.error ? COLORS.red : COLORS.inkSoft,
+      }}>
+        {priceInfo?.error
+          ? priceInfo.error
+          : priceInfo?.asOf
+            ? `${priceInfo.matched} of ${priceInfo.total} IPOs matched on BSE · as of ${fmtTime(new Date(priceInfo.asOf))}`
+            : "Not updated yet. Unrealised gains use the listing price until you do."}
+      </div>
+      <PrimaryButton ghost onClick={() => onRefreshPrices().catch(() => {})} disabled={pricing}>
+        {pricing ? "Fetching from BSE…" : "Update market prices"}
+      </PrimaryButton>
 
       <div style={{ height: 18 }} />
       <SectionLabel>Backup</SectionLabel>
@@ -2615,7 +2726,7 @@ function LiveIposSheet({ existing, onClose, onImport }) {
       category: r.category,
       applicationDate: "",
       priceBand: r.priceMax != null ? String(r.priceMax) : "",
-      lotSize: "",
+      lotSize: r.lotSize != null ? String(r.lotSize) : "",
       openDate: r.openDate,
       closeDate: r.closeDate,
       listingDate: "",
@@ -2644,8 +2755,8 @@ function LiveIposSheet({ existing, onClose, onImport }) {
       {state.status === "done" && (
         <>
           <div style={{ fontSize: 11.5, color: COLORS.inkSoft, marginBottom: 12 }}>
-            Straight from NSE{state.fetchedAt ? `, ${fmtTime(new Date(state.fetchedAt))}` : ""}. Lot size and listing
-            date are not published here, so add those yourself.
+            Issues and subscription from NSE{state.fetchedAt ? `, ${fmtTime(new Date(state.fetchedAt))}` : ""}; lot size and
+            the retail book from BSE. Listing date is not published while an issue is open.
           </div>
 
           <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
@@ -2671,6 +2782,8 @@ function LiveIposSheet({ existing, onClose, onImport }) {
                     <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: COLORS.inkSoft, marginTop: 4 }}>
                       {r.priceMin != null ? `₹${r.priceMin}–${r.priceMax}` : "price not published"}
                       {" · "}{r.openDate || "—"} → {r.closeDate || "—"}
+                      {r.lotSize ? ` · lot ${r.lotSize}` : ""}
+                      {r.lotCost ? ` · ${inr(r.lotCost)}/lot` : ""}
                     </div>
                     <div style={{ marginTop: 4, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
                       {r.subscription != null && (
@@ -2680,6 +2793,9 @@ function LiveIposSheet({ existing, onClose, onImport }) {
                         >
                           {r.subscription.toFixed(2)}× subscribed
                         </Badge>
+                      )}
+                      {r.categories && r.categories.retail != null && (
+                        <Badge color={COLORS.navy} bg="#EAEFF5">retail {r.categories.retail.toFixed(1)}×</Badge>
                       )}
                       {!r.live && <Badge color={COLORS.inkSoft} bg="#EFEDE7">UPCOMING</Badge>}
                       {already && <span style={{ fontSize: 11, color: COLORS.gold }}>already in your ledger</span>}

@@ -1,0 +1,122 @@
+/*
+ * Listing-day and current market prices for IPOs that have already listed,
+ * proxied from BSE.
+ *
+ * This is what turns `listingPrice` from a number typed once into something
+ * that stays true. BSE also gives the current traded price, which is the
+ * honest basis for an unrealised gain — a stock that listed at 372 and now
+ * trades at 251 has not gained anything.
+ *
+ * No API key: the data is public. BSE only requires browser-ish headers.
+ */
+
+const BSE = "https://api.bseindia.com/BseIndiaAPI/api";
+const UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+  "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+
+// Company names never match exactly across sources: "Aye Finance Limited" here,
+// "AYE FINANCE LTD" there. Reduce both sides to the same shape before comparing.
+function nameKey(s) {
+  return String(s || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]+/g, " ")
+    .replace(/\b(limited|ltd|private|pvt|india|the)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+const num = (v) => {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+};
+
+const isoDate = (v) => (typeof v === "string" && v.length >= 10 ? v.slice(0, 10) : "");
+
+async function bseYear(year) {
+  // type=1 covers mainboard and SME together; type=2 would be mainboard only.
+  const url = `${BSE}/MoreCompanyN/w?Fromdt=${year}&company=&flag=1&type=1`;
+  const r = await fetch(url, {
+    headers: {
+      "User-Agent": UA,
+      Accept: "application/json, text/plain, */*",
+      Referer: "https://www.bseindia.com/",
+      Origin: "https://www.bseindia.com",
+    },
+  });
+  if (!r.ok) throw new Error(`BSE responded ${r.status} for ${year}`);
+  const text = await r.text();
+  if (!text.trim()) return [];
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(`BSE returned a non-JSON body for ${year}`);
+  }
+  return Array.isArray(data?.Table) ? data.Table : [];
+}
+
+function normalise(row) {
+  return {
+    company: String(row.CompanyName || "").replace(/\s+/g, " ").trim(),
+    key: nameKey(row.CompanyName),
+    shortName: row.Company_Short_Name || "",
+    issuePrice: num(row.IssuePrice),
+    listedOn: isoDate(row.ListedOn),
+    listingClose: num(row.ListingDayClose),
+    listingDayGain: num(row.ListingDayGain),
+    currentPrice: num(row.CurrentPrice),
+    gainSinceIssue: num(row.GainLoss),
+    bseUrl: row.IMAGE || "",
+  };
+}
+
+export const config = { maxDuration: 20 };
+
+export default async function handler(req, res) {
+  if (req.method !== "GET") {
+    return res.status(405).json({ error: "Method not allowed" });
+  }
+
+  // Default to this year and last, which covers anything still worth tracking.
+  const thisYear = new Date().getFullYear();
+  const requested = String(req.query?.years || "")
+    .split(",")
+    .map((y) => parseInt(y, 10))
+    .filter((y) => Number.isFinite(y) && y >= 2000 && y <= thisYear + 1);
+  const years = requested.length ? requested.slice(0, 4) : [thisYear, thisYear - 1];
+
+  try {
+    const batches = await Promise.all(
+      years.map((y) => bseYear(y).catch(() => []))
+    );
+
+    // One row per company. A later year wins, and a row that actually carries a
+    // current price beats one that does not.
+    const byKey = new Map();
+    batches.flat().forEach((raw) => {
+      const row = normalise(raw);
+      if (!row.key) return;
+      const prev = byKey.get(row.key);
+      if (!prev || (row.currentPrice != null && prev.currentPrice == null)) {
+        byKey.set(row.key, row);
+      }
+    });
+
+    const listings = [...byKey.values()].sort((a, b) => (b.listedOn || "").localeCompare(a.listedOn || ""));
+
+    if (!listings.length) {
+      return res.status(502).json({ error: "BSE returned no listings. It may be blocking this server." });
+    }
+
+    res.setHeader("Cache-Control", "s-maxage=600, stale-while-revalidate=1800");
+    return res.status(200).json({
+      source: "BSE",
+      fetchedAt: new Date().toISOString(),
+      years,
+      listings,
+    });
+  } catch (error) {
+    return res.status(502).json({ error: error.message || "Could not reach BSE" });
+  }
+}
