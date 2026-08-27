@@ -753,6 +753,7 @@ export default function App() {
       (data.listings || []).forEach((l) => { if (l.key) byKey.set(l.key, l); });
 
       const asOf = data.fetchedAt || new Date().toISOString();
+      const listingsLoaded = data.listingsKnown !== false;
       let matched = 0;
       let updated = 0;
       let reblocked = 0;
@@ -776,7 +777,20 @@ export default function App() {
           patch.listingPriceSource = "bse-close";
         }
         if (hit.listingClose != null) patch.listingClosePrice = String(hit.listingClose);
-        if (hit.listedOn) patch.listingDate = hit.listedOn;
+        /* An issue BSE knows about but has no listing row for has not listed
+           yet, and that absence is itself information — otherwise a wrong
+           listing date entered long ago can never be cleared, because there is
+           nothing to overwrite it with. Only trusted when the listings dataset
+           actually loaded; a failed fetch must not wipe every listing date. */
+        if (hit.listedOn) {
+          patch.listingDate = hit.listedOn;
+        } else if (listingsLoaded) {
+          patch.listingDate = "";
+          patch.listingPrice = "";
+          patch.listingPriceSource = "";
+          patch.listingClosePrice = "";
+          patch.currentPrice = "";
+        }
         if (hit.openDate) patch.openDate = hit.openDate;
         if (hit.closeDate) {
           patch.closeDate = hit.closeDate;
@@ -2868,18 +2882,25 @@ function LiveIposSheet({ existing, onClose, onImport }) {
           rows = (data.ipos || []).map((r) => ({ ...r, listedOn: "" }));
           note = "Issues and subscription from NSE; lot size and the retail book from BSE.";
         } else {
-          // Only the chosen year, since the feed is cumulative from it.
+          /* Only the chosen year, since the feed is cumulative from it. Judged
+             on the listing date, or the close date for an issue that has closed
+             but not yet listed — those belong to neither the open-and-upcoming
+             view nor a list of what has listed, and would be invisible. */
           rows = (data.listings || [])
-            .filter((r) => r.listedOn && r.listedOn.slice(0, 4) === String(year))
+            .filter((r) => (r.listedOn || r.closeDate || "").slice(0, 4) === String(year))
             .map((r) => ({
-              symbol: "",
+              // BSE's short name is the ticker, and the only symbol on offer here.
+              symbol: r.shortName || "",
               company: r.company,
               category: r.category || "",
-              priceMin: null,
-              priceMax: r.issuePrice,
+              priceMin: r.priceMin != null ? r.priceMin : null,
+              /* The issue price for something that has listed; for one that has
+                 only closed there is no issue price yet, so the top of the band
+                 stands in — otherwise the price arrives empty. */
+              priceMax: r.issuePrice != null ? r.issuePrice : r.priceMax,
               openDate: r.openDate || "",
               closeDate: r.closeDate || "",
-              listedOn: r.listedOn,
+              listedOn: r.listedOn || "",
               listingOpen: r.listingOpen,
               listingClose: r.listingClose,
               currentPrice: r.currentPrice,
@@ -2889,7 +2910,7 @@ function LiveIposSheet({ existing, onClose, onImport }) {
             }));
           note = data.categoryKnown === false
             ? "Listed in " + year + ", from BSE. Mainboard/SME could not be determined this time."
-            : "Everything that listed in " + year + ", from BSE. Prices fill in on import.";
+            : "Everything from " + year + ", from BSE — listed, and closed awaiting listing. Lot size and listing price are fetched for what you select.";
         }
 
         rows.sort((a, b) => (b.listedOn || b.closeDate || "").localeCompare(a.listedOn || a.closeDate || ""));
@@ -2978,7 +2999,8 @@ function LiveIposSheet({ existing, onClose, onImport }) {
       listingPriceSource: r.listingOpen != null ? "bse-open" : r.listingClose != null ? "bse-close" : "",
       listingClosePrice: r.listingClose != null ? String(r.listingClose) : "",
       currentPrice: r.currentPrice != null ? String(r.currentPrice) : "",
-      remarks: r.symbol ? `NSE ${r.symbol}` : "",
+      priceAsOf: r.currentPrice != null ? new Date().toISOString() : "",
+      remarks: "",
       applications: [],
     })));
   };
@@ -2986,7 +3008,7 @@ function LiveIposSheet({ existing, onClose, onImport }) {
   const years = [thisYear, thisYear - 1, thisYear - 2];
 
   return (
-    <Sheet title={mode === "current" ? "Open & upcoming IPOs" : `IPOs listed in ${year}`} onClose={onClose}>
+    <Sheet title={mode === "current" ? "Open & upcoming IPOs" : `IPOs of ${year}`} onClose={onClose}>
       <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
         <button onClick={() => setMode("current")} style={{ ...chipBase, ...(mode === "current" ? chipOn : null) }}>
           Open &amp; upcoming

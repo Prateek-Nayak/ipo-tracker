@@ -114,7 +114,7 @@ async function bseYear(year) {
     };
   });
 
-  return { rows, mainboardKnown };
+  return { rows, mainboardKnown, listingsKnown: all.length > 0 };
 }
 
 /* Bidding windows. flag=1 is live and forthcoming, flag=2 is closed issues;
@@ -380,6 +380,7 @@ export default async function handler(req, res) {
       fetchedAt: new Date().toISOString(),
       from,
       categoryKnown: yearData.mainboardKnown,
+      listingsKnown: yearData.listingsKnown,
       listings,
     });
   } catch (error) {
