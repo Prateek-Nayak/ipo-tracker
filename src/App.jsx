@@ -975,8 +975,17 @@ export default function App() {
          everything is already filled in costs nothing extra. */
       const incomplete = (list) =>
         list.filter((i) => !i.lotSize || !i.closeDate || !i.openDate || isBlank(i.priceBand));
+      /* Capped, because the names travel in the query string: a ledger holding
+         a whole year of listings would otherwise build a URL long enough to be
+         refused outright. The server enriches a handful per call anyway, and
+         the rounds below work through the rest. Prices are unaffected — the
+         response carries every listing regardless of who was named. */
       const asking = incomplete(list);
-      const keys = (asking.length ? asking : list).map((i) => i.company).filter(Boolean).join("|");
+      const keys = (asking.length ? asking : list)
+        .map((i) => i.company)
+        .filter(Boolean)
+        .slice(0, 40)
+        .join("|");
       const res = await fetch(`/api/listings?from=${from}&keys=${encodeURIComponent(keys)}`);
       const text = await res.text();
       let data = {};
@@ -1191,6 +1200,7 @@ export default function App() {
         )}
         {tab === "accounts" && (
           <AccountList
+            transfers={transfers}
             accounts={accounts} ipos={ipos}
             onEdit={(account) => setAcctSheet({ account })}
             onDelete={(id) => persistAccounts(accounts.filter((x) => x.id !== id))}
@@ -1489,6 +1499,45 @@ function Dashboard({ stats, ipos, accounts, onOpenIpo }) {
   // rather than quietly reporting a total that leaves money out.
   const incomplete = ipos.filter((i) => (i.applications || []).length && missingIpoFields(i).length);
   const marked = ipos.some((i) => isMarkedToMarket(i));
+
+  /* The ledger already works out when each thing happens; this is simply the
+     part of it that concerns today. Without it the dates are only ever found by
+     opening an IPO, which is the wrong way round — the point of knowing the
+     allotment date is to be told on the day. */
+  const today = todayISO();
+  const todo = useMemo(() => {
+    const closing = [];
+    const allotting = [];
+    const listing = [];
+    ipos.forEach((i) => {
+      if (i.closeDate && i.closeDate === today) closing.push(i);
+      if (awaitingAllotmentEntry(i)) allotting.push(i);
+      const lists = i.listingDate || listingDateOf(i).date;
+      if (lists && lists === today) listing.push(i);
+    });
+    return { closing, allotting, listing };
+  }, [ipos, today]);
+
+  const lines = [
+    todo.closing.length && {
+      key: "closing",
+      text: `${todo.closing.length === 1 ? "1 issue closes" : todo.closing.length + " issues close"} today`,
+      detail: todo.closing.map((i) => i.company).join(", "),
+      tone: COLORS.gold,
+    },
+    todo.allotting.length && {
+      key: "allotting",
+      text: `${todo.allotting.length} allotment${todo.allotting.length === 1 ? "" : "s"} to record`,
+      detail: todo.allotting.map((i) => i.company).join(", "),
+      tone: COLORS.gold,
+    },
+    todo.listing.length && {
+      key: "listing",
+      text: `${todo.listing.length === 1 ? "1 issue lists" : todo.listing.length + " issues list"} today`,
+      detail: todo.listing.map((i) => i.company).join(", "),
+      tone: COLORS.green,
+    },
+  ].filter(Boolean);
   return (
     <div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
@@ -1510,6 +1559,29 @@ function Dashboard({ stats, ipos, accounts, onOpenIpo }) {
             above leave {incomplete.length === 1 ? "it" : "them"} out. The IPOs tab has a
             “Needs details” filter.
           </span>
+        </div>
+      )}
+
+      {lines.length > 0 && (
+        <div style={{ marginBottom: 18 }}>
+          <SectionLabel>Today</SectionLabel>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {lines.map((l) => (
+              <button
+                key={l.key}
+                onClick={() => onOpenIpo(todo[l.key][0].id)}
+                style={{
+                  textAlign: "left", width: "100%", cursor: "pointer",
+                  background: COLORS.surface, border: `1px solid ${COLORS.border}`,
+                  borderLeft: `3px solid ${l.tone}`, borderRadius: 10, padding: "10px 12px",
+                  fontFamily: "Inter, sans-serif",
+                }}
+              >
+                <div style={{ fontSize: 13, fontWeight: 700, color: COLORS.ink }}>{l.text}</div>
+                <div style={{ fontSize: 11.5, color: COLORS.inkSoft, marginTop: 2 }}>{l.detail}</div>
+              </button>
+            ))}
+          </div>
         </div>
       )}
 
@@ -1936,7 +2008,15 @@ function IpoCard({ ipo, accounts, onClick, onEdit, onDelete, showActions }) {
       {showActions && (
         <div style={{ display: "flex", flexDirection: "column", borderLeft: `1px solid ${COLORS.border}` }}>
           <button onClick={(e) => { e.stopPropagation(); onEdit(); }} aria-label="Edit IPO" style={iconBtnStyle}><Pencil size={14} color={COLORS.inkSoft} /></button>
-          <button onClick={(e) => { e.stopPropagation(); if (confirm("Delete this IPO entry?")) onDelete(); }} aria-label="Delete IPO" style={{ ...iconBtnStyle, borderTop: `1px solid ${COLORS.border}` }}><Trash2 size={14} color={COLORS.red} /></button>
+          <button onClick={(e) => {
+            e.stopPropagation();
+            // An IPO owns its applications, so deleting it deletes them too.
+            const n = apps.length;
+            const msg = n
+              ? `Delete ${ipo.company || "this IPO"} and its ${n} application${n === 1 ? "" : "s"}?`
+              : `Delete ${ipo.company || "this IPO entry"}?`;
+            if (confirm(msg)) onDelete();
+          }} aria-label="Delete IPO" style={{ ...iconBtnStyle, borderTop: `1px solid ${COLORS.border}` }}><Trash2 size={14} color={COLORS.red} /></button>
         </div>
       )}
     </div>
@@ -2114,7 +2194,7 @@ function ApplicationRow({ app, ipo, accounts, onEdit, onDelete }) {
   );
 }
 
-function AccountList({ accounts, ipos, onEdit, onDelete }) {
+function AccountList({ accounts, ipos, transfers = [], onEdit, onDelete }) {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
   const [sort, setSort] = useState("name");
@@ -2145,6 +2225,30 @@ function AccountList({ accounts, ipos, onEdit, onDelete }) {
   }, [accounts]);
 
   const missingPan = accounts.filter((a) => !panOf(a)).length;
+
+  /* Deleting an account does not delete what it applied for. Those applications
+     stay on their IPOs, still counted in every total, but with nobody's name
+     against them — so say so first rather than let the ledger quietly acquire
+     rows belonging to "Unknown account". */
+  const confirmAccountDelete = (acc) => {
+    const apps = ipos.reduce(
+      (n, i) => n + (i.applications || []).filter((a) => a.accountId === acc.id).length, 0
+    );
+    const moves = transfers.filter(
+      (t) => t.fromAccountId === acc.id || t.toAccountId === acc.id
+    ).length;
+    if (!apps && !moves) return confirm(`Delete ${acc.name || "this account"}?`);
+    const bits = [];
+    if (apps) bits.push(`${apps} application${apps === 1 ? "" : "s"}`);
+    if (moves) bits.push(`${moves} transfer${moves === 1 ? "" : "s"}`);
+    return confirm(
+      `${acc.name || "This account"} has ${bits.join(" and ")} on record.
+
+` +
+      "Deleting the account leaves them in the ledger with no holder against them. " +
+      "Delete anyway?"
+    );
+  };
 
   const shown = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -2216,7 +2320,7 @@ function AccountList({ accounts, ipos, onEdit, onDelete }) {
                 </div>
                 <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
                   <button onClick={() => onEdit(acc)} aria-label="Edit account" style={roundIconBtn}><Pencil size={14} color={COLORS.inkSoft} /></button>
-                  <button onClick={() => { if (confirm("Delete this account?")) onDelete(acc.id); }} aria-label="Delete account" style={roundIconBtn}><Trash2 size={14} color={COLORS.red} /></button>
+                  <button onClick={() => { if (confirmAccountDelete(acc)) onDelete(acc.id); }} aria-label="Delete account" style={roundIconBtn}><Trash2 size={14} color={COLORS.red} /></button>
                 </div>
               </div>
             );

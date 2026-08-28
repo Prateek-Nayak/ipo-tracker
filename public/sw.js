@@ -1,4 +1,4 @@
-const CACHE = "ipo-ledger-v2";
+const CACHE = "ipo-ledger-v3";
 const APP_SHELL = ["/", "/index.html", "/manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {
@@ -24,6 +24,12 @@ self.addEventListener("fetch", (event) => {
   // Only ever cache this app's own files. Supabase auth and REST calls must
   // always hit the network, otherwise a stale ledger could be served back.
   if (url.origin !== self.location.origin) return;
+
+  /* The app's own files, not its data. A cached /api/listings would be replayed
+     offline as though it were current, and the ledger treats BSE as
+     authoritative — stale prices and dates would overwrite good ones. A failed
+     request is handled; a convincing wrong answer is not. */
+  if (url.pathname.startsWith("/api/")) return;
 
   event.respondWith(
     fetch(request)
