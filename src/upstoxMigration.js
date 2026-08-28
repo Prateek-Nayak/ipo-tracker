@@ -46,11 +46,7 @@ function installApiGuard() {
       const data = await response.clone().json();
       if (!Array.isArray(data.ipos)) return response;
 
-      // Server-side /api/ipos applies the same rule, but keep a client guard so
-      // stale deployments or cached responses can never leak undated IPOs.
       data.ipos = data.ipos.filter((ipo) => ipo?.openDate && ipo?.closeDate);
-
-      // Subscription is meaningful only while bidding is actually open.
       const today = todayISO();
       data.ipos = data.ipos.map((ipo) => ({
         ...ipo,
@@ -137,8 +133,6 @@ async function migrateLocalAndCloud() {
     if (!changed) return;
     localStorage.setItem(`${STORAGE_PREFIX}ipos`, JSON.stringify(migrated));
 
-    // If the user is already signed in, update only the IPO row in Supabase so
-    // cloud data is not left carrying the legacy BSE source indefinitely.
     const session = JSON.parse(localStorage.getItem(`${STORAGE_PREFIX}session`) || "null");
     const url = (import.meta.env.VITE_SUPABASE_URL || "").replace(/\/+$/, "");
     const anon = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
@@ -153,12 +147,7 @@ async function migrateLocalAndCloud() {
         "Content-Type": "application/json",
         Prefer: "resolution=merge-duplicates,return=minimal",
       },
-      body: JSON.stringify({
-        user_id: userId,
-        kind: "ipos",
-        data: migrated,
-        updated_at: new Date().toISOString(),
-      }),
+      body: JSON.stringify({ user_id: userId, kind: "ipos", data: migrated, updated_at: new Date().toISOString() }),
     });
     if (!r.ok) console.warn("Could not push IPO source migration to cloud", r.status);
   } catch (e) {
@@ -172,16 +161,13 @@ function installUiRules() {
     document.querySelectorAll("button, span, div").forEach((el) => {
       const text = (el.textContent || "").trim();
       if (text === "2024" || text === "2025") {
-        const liveSheet = el.closest("div[style*='overflowY']");
-        if (liveSheet) el.style.display = "none";
+        el.style.display = "none";
       }
 
-      // The live IPO sheet's generic lifecycle badge says UPCOMING/LISTS.
-      // For a finalized upcoming IPO the useful deadline is its close date.
       if ((text === "UPCOMING" || /^LISTS\s/.test(text)) && el.children.length === 0) {
         const container = el.closest("label");
         const body = container?.textContent || "";
-        const match = body.match(/(\d{4}-\d{2}-\d{2})\s*$/);
+        const match = body.match(/→\s*(\d{4}-\d{2}-\d{2})/);
         if (match && match[1] > today) el.textContent = `Closes ${fmtDate(match[1])}`;
       }
 
