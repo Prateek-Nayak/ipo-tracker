@@ -300,7 +300,15 @@ const STATUS_META = {
   "Not Allotted": { color: COLORS.red, bg: COLORS.redSoft, icon: XCircle },
 };
 
-const TABLES = ["accounts", "ipos", "transfers"];
+/* "trash" is a table like the others so it syncs, exports and merges without
+   special handling. Nothing is ever removed from the ledger outright: a delete
+   moves the record here, where it keeps its own copy of everything it had. */
+const TABLES = ["accounts", "ipos", "transfers", "trash"];
+
+// The three that hold the ledger proper. Trash is deliberately excluded: a
+// device holding only deleted records is still an empty ledger, and must not
+// be pushed over a populated cloud.
+const LEDGER_TABLES = ["accounts", "ipos", "transfers"];
 
 /* ---------------------------------------------------------
    LOCAL STORAGE
@@ -326,10 +334,15 @@ function saveTable(key, data) {
   }
 }
 function loadLocalState() {
-  return { accounts: loadTable("accounts"), ipos: loadTable("ipos"), transfers: loadTable("transfers") };
+  return {
+    accounts: loadTable("accounts"),
+    ipos: loadTable("ipos"),
+    transfers: loadTable("transfers"),
+    trash: loadTable("trash"),
+  };
 }
 function isEmptyState(s) {
-  return !s.accounts.length && !s.ipos.length && !s.transfers.length;
+  return LEDGER_TABLES.every((k) => !(s[k] || []).length);
 }
 
 // Which account the data cached on this device belongs to. Absent means the
@@ -513,7 +526,7 @@ async function rest(path, options = {}) {
 
 async function cloudLoad() {
   const rows = await rest("user_data?select=kind,data");
-  const out = { accounts: [], ipos: [], transfers: [] };
+  const out = { accounts: [], ipos: [], transfers: [], trash: [] };
   (rows || []).forEach((row) => {
     if (TABLES.includes(row.kind) && Array.isArray(row.data)) out[row.kind] = row.data;
   });
@@ -574,10 +587,12 @@ function mergeIpos(current, incoming) {
 function parseImport(text) {
   const parsed = JSON.parse(text);
   const out = {};
-  TABLES.forEach((k) => {
+  LEDGER_TABLES.forEach((k) => {
     if (!Array.isArray(parsed[k])) throw new Error(`Missing or invalid "${k}" list in the pasted data.`);
     out[k] = parsed[k];
   });
+  // Backups taken before deleted records were kept simply have none.
+  out.trash = Array.isArray(parsed.trash) ? parsed.trash : [];
   return out;
 }
 
@@ -740,6 +755,7 @@ export default function App() {
   const [accounts, setAccounts] = useState([]);
   const [ipos, setIpos] = useState([]);
   const [transfers, setTransfers] = useState([]);
+  const [trash, setTrash] = useState([]);
   const [loaded, setLoaded] = useState(false);
 
   const [syncing, setSyncing] = useState(false);
@@ -850,6 +866,8 @@ export default function App() {
       const local = loadLocalState();
       const apply = (s) => {
         setAccounts(s.accounts); setIpos(s.ipos); setTransfers(s.transfers);
+        // A backup taken before deleted records were kept simply has none.
+        setTrash(s.trash || []);
       };
 
       if (!cloudEnabled() || !userId) {
@@ -860,7 +878,7 @@ export default function App() {
 
       const owner = localOwner();
       const localIsOurs = !owner || owner === userId;
-      const empty = { accounts: [], ipos: [], transfers: [] };
+      const empty = { accounts: [], ipos: [], transfers: [], trash: [] };
 
       apply(localIsOurs ? local : empty); // show something immediately, then reconcile
       setSyncing(true);
@@ -888,6 +906,7 @@ export default function App() {
             accounts: mergeById(remote.accounts, local.accounts),
             ipos: mergeIpos(remote.ipos, local.ipos),
             transfers: mergeById(remote.transfers, local.transfers),
+            trash: mergeById(remote.trash || [], local.trash || []),
           };
           commit(merged);
           if (TABLES.some((k) => merged[k].length !== remote[k].length)) {
@@ -916,12 +935,23 @@ export default function App() {
   const persistAccounts = useCallback((next) => { setAccounts(next); saveTable("accounts", next); }, []);
   const persistIpos = useCallback((next) => { setIpos(next); saveTable("ipos", next); }, []);
   const persistTransfers = useCallback((next) => { setTransfers(next); saveTable("transfers", next); }, []);
+  const persistTrash = useCallback((next) => { setTrash(next); saveTable("trash", next); }, []);
+
+  /* Deleting puts the whole record here, not in the bin. Restoring it later has
+     to work without anything else on the device, so the entry carries its own
+     copy — and, for an application, the IPO it belonged to. */
+  const discard = useCallback((kind, payload, label, parentId) => {
+    persistTrash([
+      { id: uid(), kind, label, parentId: parentId || "", deletedAt: new Date().toISOString(), payload },
+      ...trash,
+    ]);
+  }, [trash, persistTrash]);
 
   const pushToCloud = useCallback(async () => {
     if (!cloudEnabled() || !userId) return;
     setSyncing(true);
     try {
-      const state = { accounts, ipos, transfers };
+      const state = { accounts, ipos, transfers, trash };
       // Never let a device that has nothing wipe a cloud that has something.
       // Without this, opening the app somewhere new and hitting Sync now would
       // overwrite the real ledger with three empty arrays.
@@ -1130,7 +1160,33 @@ export default function App() {
     persistAccounts(state.accounts);
     persistIpos(state.ipos);
     persistTransfers(state.transfers);
-  }, [persistAccounts, persistIpos, persistTransfers]);
+    persistTrash(state.trash || []);
+  }, [persistAccounts, persistIpos, persistTransfers, persistTrash]);
+
+  /* Putting a record back. An application needs its IPO to still be there; if
+     that went too, the IPO has to come back first — so say so rather than drop
+     the application into nothing. */
+  const restore = useCallback((entryId) => {
+    const entry = trash.find((t) => t.id === entryId);
+    if (!entry) return;
+    const rest = trash.filter((t) => t.id !== entryId);
+    const put = (list, item) => (list.some((x) => x.id === item.id) ? list : [item, ...list]);
+
+    if (entry.kind === "account") persistAccounts(put(accounts, entry.payload));
+    else if (entry.kind === "ipo") persistIpos(put(ipos, entry.payload));
+    else if (entry.kind === "transfer") persistTransfers(put(transfers, entry.payload));
+    else if (entry.kind === "application") {
+      const owner = ipos.find((i) => i.id === entry.parentId);
+      if (!owner) {
+        alert("That IPO was deleted too. Restore it first, then restore this application.");
+        return;
+      }
+      persistIpos(ipos.map((i) =>
+        i.id !== owner.id ? i : { ...i, applications: put(i.applications || [], entry.payload) }
+      ));
+    }
+    persistTrash(rest);
+  }, [trash, accounts, ipos, transfers, persistAccounts, persistIpos, persistTransfers, persistTrash]);
 
   /* ---------- derived numbers ---------- */
   const stats = useMemo(() => {
@@ -1195,7 +1251,12 @@ export default function App() {
             ipos={ipos} accounts={accounts}
             onOpen={(id) => setIpoDetail(id)}
             onEdit={(ipo) => setIpoSheet({ ipo })}
-            onDelete={(id) => persistIpos(ipos.filter((x) => x.id !== id))}
+            onDelete={(id) => {
+              const gone = ipos.find((x) => x.id === id);
+              if (!gone) return;
+              discard("ipo", gone, gone.company || "Untitled IPO");
+              persistIpos(ipos.filter((x) => x.id !== id));
+            }}
           />
         )}
         {tab === "accounts" && (
@@ -1203,14 +1264,25 @@ export default function App() {
             transfers={transfers}
             accounts={accounts} ipos={ipos}
             onEdit={(account) => setAcctSheet({ account })}
-            onDelete={(id) => persistAccounts(accounts.filter((x) => x.id !== id))}
+            onDelete={(id) => {
+              const gone = accounts.find((x) => x.id === id);
+              if (!gone) return;
+              discard("account", gone, gone.name || "Unnamed account");
+              persistAccounts(accounts.filter((x) => x.id !== id));
+            }}
           />
         )}
         {tab === "transfers" && (
           <TransfersScreen
             transfers={transfers} accounts={accounts} ipos={ipos}
             onEdit={(transfer) => setTransferSheet({ transfer })}
-            onDelete={(id) => persistTransfers(transfers.filter((x) => x.id !== id))}
+            onDelete={(id) => {
+              const gone = transfers.find((x) => x.id === id);
+              if (!gone) return;
+              const who = (aid) => accounts.find((a) => a.id === aid)?.name || "Unknown";
+              discard("transfer", gone, `${inr(gone.amount)} · ${who(gone.fromAccountId)} to ${who(gone.toAccountId)}`);
+              persistTransfers(transfers.filter((x) => x.id !== id));
+            }}
           />
         )}
       </div>
@@ -1228,6 +1300,11 @@ export default function App() {
           onBulkStatus={(ipoId) => { setIpoDetail(null); setBulkStatusFor(ipoId); }}
           onEditApplication={(ipoId, application) => setAppSheet({ ipoId, application })}
           onDeleteApplication={(ipoId, appId) => {
+            const owner = ipos.find((i) => i.id === ipoId);
+            const gone = (owner?.applications || []).find((a) => a.id === appId);
+            if (!gone) return;
+            const who = accounts.find((a) => a.id === gone.accountId)?.name || "Unknown account";
+            discard("application", gone, `${who} · ${owner.company || "an IPO"}`, ipoId);
             persistIpos(ipos.map((i) => (i.id === ipoId
               ? { ...i, applications: (i.applications || []).filter((a) => a.id !== appId) }
               : i)));
@@ -1364,7 +1441,8 @@ export default function App() {
 
       {dataSheetOpen && (
         <DataSheet
-          state={{ accounts, ipos, transfers }}
+          state={{ accounts, ipos, transfers, trash }}
+          onRestore={restore}
           session={session}
           cloudOn={cloudEnabled()}
           syncing={syncing}
@@ -1423,13 +1501,13 @@ function Header({ tab, onAdd, onOpenData, onFetchLive, syncing, syncError, cloud
       </div>
       <div style={{ display: "flex", gap: 8, flexShrink: 0, marginLeft: "auto" }}>
         {tab === "ipos" && (
-          <button onClick={onFetchLive} aria-label="Live IPOs" style={{
+          <button onClick={onFetchLive} aria-label="Add IPOs from the exchanges" style={{
             display: "flex", alignItems: "center", gap: 5, height: 36, padding: "0 10px",
             borderRadius: 18, border: `1px solid ${COLORS.gold}`, background: "transparent",
             cursor: "pointer", flexShrink: 0,
           }}>
             <Sparkles size={14} color={COLORS.gold} />
-            <span style={{ color: COLORS.gold, fontSize: 12, fontWeight: 600, fontFamily: "Inter, sans-serif", whiteSpace: "nowrap" }}>Live</span>
+            <span style={{ color: COLORS.gold, fontSize: 12, fontWeight: 600, fontFamily: "Inter, sans-serif", whiteSpace: "nowrap" }}>Add from exchange</span>
           </button>
         )}
         <button
@@ -2014,7 +2092,8 @@ function IpoCard({ ipo, accounts, onClick, onEdit, onDelete, showActions }) {
             const n = apps.length;
             const msg = n
               ? `Delete ${ipo.company || "this IPO"} and its ${n} application${n === 1 ? "" : "s"}?`
-              : `Delete ${ipo.company || "this IPO entry"}?`;
+                + " It is kept, and can be put back from Sync & Data."
+              : `Delete ${ipo.company || "this IPO entry"}? It can be put back from Sync & Data.`;
             if (confirm(msg)) onDelete();
           }} aria-label="Delete IPO" style={{ ...iconBtnStyle, borderTop: `1px solid ${COLORS.border}` }}><Trash2 size={14} color={COLORS.red} /></button>
         </div>
@@ -2143,7 +2222,7 @@ function IpoDetailSheet({ ipo, accounts, onClose, onEditIpo, onAddApplication, o
           {apps.map((app) => (
             <ApplicationRow key={app.id} app={app} ipo={ipo} accounts={accounts}
               onEdit={() => onEditApplication(ipo.id, app)}
-              onDelete={() => { if (confirm("Delete this application?")) onDeleteApplication(ipo.id, app.id); }} />
+              onDelete={() => { if (confirm("Delete this application? It can be put back from Sync & Data.")) onDeleteApplication(ipo.id, app.id); }} />
           ))}
         </div>
       )}
@@ -2237,16 +2316,16 @@ function AccountList({ accounts, ipos, transfers = [], onEdit, onDelete }) {
     const moves = transfers.filter(
       (t) => t.fromAccountId === acc.id || t.toAccountId === acc.id
     ).length;
-    if (!apps && !moves) return confirm(`Delete ${acc.name || "this account"}?`);
+    if (!apps && !moves) {
+      return confirm(`Delete ${acc.name || "this account"}? You can put it back from Sync & Data.`);
+    }
     const bits = [];
     if (apps) bits.push(`${apps} application${apps === 1 ? "" : "s"}`);
     if (moves) bits.push(`${moves} transfer${moves === 1 ? "" : "s"}`);
     return confirm(
-      `${acc.name || "This account"} has ${bits.join(" and ")} on record.
-
-` +
-      "Deleting the account leaves them in the ledger with no holder against them. " +
-      "Delete anyway?"
+      `${acc.name || "This account"} has ${bits.join(" and ")} on record.\n\n` +
+      "Those stay in the ledger but will have no holder against them. " +
+      "The account itself is kept and can be put back from Sync & Data.\n\nDelete it?"
     );
   };
 
@@ -2521,7 +2600,7 @@ function TransferList({ transfers, accounts, ipos = [], onEdit, onDelete }) {
           {t.remarks && <div style={{ fontSize: 12.5, color: COLORS.ink, marginTop: 6, fontStyle: "italic" }}>“{t.remarks}”</div>}
           <div style={{ display: "flex", gap: 6, marginTop: 8, justifyContent: "flex-end" }}>
             <button onClick={() => onEdit(t)} aria-label="Edit transfer" style={roundIconBtn}><Pencil size={14} color={COLORS.inkSoft} /></button>
-            <button onClick={() => { if (confirm("Delete this transfer?")) onDelete(t.id); }} aria-label="Delete transfer" style={roundIconBtn}><Trash2 size={14} color={COLORS.red} /></button>
+            <button onClick={() => { if (confirm("Delete this transfer? It can be put back from Sync & Data.")) onDelete(t.id); }} aria-label="Delete transfer" style={roundIconBtn}><Trash2 size={14} color={COLORS.red} /></button>
           </div>
         </div>
       ))}
@@ -2777,12 +2856,22 @@ function TransferFormSheet({ initial, accounts, ipos, onClose, onSave }) {
 /* ---------------------------------------------------------
    SYNC & DATA
 ---------------------------------------------------------- */
-function DataSheet({ state, session, cloudOn, syncing, syncError, lastSync, onClose, onSyncNow, onReplaceAll, onSignOut, pricing, priceInfo, onRefreshPrices }) {
+
+const TRASH_KINDS = {
+  ipo: "IPO",
+  account: "Account",
+  transfer: "Transfer",
+  application: "Application",
+};
+
+function DataSheet({ state, session, cloudOn, syncing, syncError, lastSync, onClose, onSyncNow, onReplaceAll, onRestore, onSignOut, pricing, priceInfo, onRefreshPrices }) {
   const [importText, setImportText] = useState("");
   const [notice, setNotice] = useState("");
   const [showImport, setShowImport] = useState(false);
+  const [showTrash, setShowTrash] = useState(false);
 
-  const counts = `${state.accounts.length} accounts · ${state.ipos.length} IPOs · ${state.transfers.length} transfers`;
+  const counts = `${state.accounts.length} accounts · ${state.ipos.length} IPOs · ${state.transfers.length} transfers`
+    + ((state.trash || []).length ? ` · ${state.trash.length} deleted` : "");
 
   const copyExport = async () => {
     try {
@@ -2894,6 +2983,50 @@ function DataSheet({ state, session, cloudOn, syncing, syncError, lastSync, onCl
           </PrimaryButton>
         </div>
       </div>
+
+      <div style={{ height: 12 }} />
+
+      {/* Deleted records are kept, not removed, so this is the way back. */}
+      <SectionLabel>Deleted ({(state.trash || []).length})</SectionLabel>
+      {(state.trash || []).length === 0 ? (
+        <div style={{ fontSize: 12, color: COLORS.inkSoft, marginBottom: 12 }}>
+          Nothing deleted. When you do delete something it is kept here, and can be put back.
+        </div>
+      ) : (
+        <>
+          <div style={{ fontSize: 12, color: COLORS.inkSoft, marginBottom: 8 }}>
+            Kept in full, and included in every backup and sync.
+          </div>
+          {!showTrash ? (
+            <PrimaryButton ghost onClick={() => setShowTrash(true)}>
+              Show {(state.trash || []).length} deleted item{(state.trash || []).length === 1 ? "" : "s"}
+            </PrimaryButton>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 12 }}>
+              {(state.trash || []).map((t) => (
+                <div key={t.id} style={{
+                  background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 10,
+                  padding: "10px 12px", display: "flex", alignItems: "center", gap: 10,
+                }}>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: COLORS.ink, overflowWrap: "anywhere" }}>
+                      {t.label || "Untitled"}
+                    </div>
+                    <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: COLORS.inkSoft, marginTop: 2 }}>
+                      {TRASH_KINDS[t.kind] || t.kind}
+                      {t.deletedAt ? ` · ${fmtDate(String(t.deletedAt).slice(0, 10))}` : ""}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => onRestore(t.id)}
+                    style={{ ...chipBase, padding: "6px 10px", flexShrink: 0 }}
+                  >Restore</button>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
 
       <div style={{ height: 12 }} />
       {!showImport ? (
