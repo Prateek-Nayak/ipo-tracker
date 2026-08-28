@@ -129,9 +129,6 @@ export default async function handler(req, res) {
     });
     const items = [...byId.values()];
 
-    // Optional year filter. The UI now exposes only the current year, but the
-    // endpoint remains reusable for a specific year without retaining the old
-    // hard-coded 2025/2024 restriction.
     const requestedYear = String(req.query?.from || "").trim();
     const filtered = requestedYear
       ? items.filter((item) => (item.bidding_start_date || "").slice(0, 4) === requestedYear)
@@ -155,15 +152,10 @@ export default async function handler(req, res) {
       .slice(0, 120);
     const wanted = new Set(rawKeys.flatMap((k) => [nameKey(k), compactKey(k)]).filter(Boolean));
 
-    // With no explicit keys, enrich the listed set and a bounded recent closed set.
-    // With keys, enrich every matching item so legacy BSE-imported records can be
-    // migrated even when they are not in the first 50 rows.
     let toEnrich = filtered;
     if (wanted.size > 0) {
       toEnrich = filtered.filter((item) => {
-        const aliases = [
-          nameKey(item.name), compactKey(item.symbol), compactKey(item.isin),
-        ];
+        const aliases = [nameKey(item.name), compactKey(item.symbol), compactKey(item.isin)];
         return aliases.some((a) => wanted.has(a));
       });
     } else {
@@ -193,6 +185,7 @@ export default async function handler(req, res) {
 
       return {
         source: "Upstox",
+        upstoxId: item.id || "",
         company: (item.name || "").replace(/\s*ipo\s*$/i, "").trim(),
         key,
         shortName: item.symbol || "",
