@@ -183,3 +183,4 @@ CRITICAL INFO TO REPORT BACK:
 2. What is the key format in Full Quote response data?
 3. Does listing_price show up for listed IPOs in detail?
 4. Any unexpected errors or missing fields?
+
