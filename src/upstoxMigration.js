@@ -236,6 +236,7 @@ function patchBadgesAndText() {
   nodes.forEach((textNode) => {
     let text = textNode.nodeValue || "";
     replacements.forEach(([a, b]) => { text = text.split(a).join(b); });
+    text = text.replace(/\s*·\s*\d+\s+deleted\b/gi, "");
     if (!/subscription/i.test(textNode.parentElement?.textContent || "")) text = text.replace(/\bBSE\b/g, "Upstox");
     if (text !== textNode.nodeValue) textNode.nodeValue = text;
   });
@@ -252,13 +253,10 @@ function patchBadgesAndText() {
 
     let allot = "";
     try {
-      const session = readSession();
       const raw = JSON.parse(localStorage.getItem(`${STORAGE_PREFIX}ipos`) || "[]");
-      const company = (body.match(/^[\s\S]*?/) || [""])[0];
       const candidates = raw.filter((i) => i?.company && body.includes(i.company));
       const exact = candidates.find((i) => i.allotmentDate) || candidates.find((i) => i.company);
       allot = exact?.allotmentDate || "";
-      void session;
     } catch {}
 
     if (allot && allot >= today) {
