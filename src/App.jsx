@@ -2269,7 +2269,7 @@ function IpoCard({ ipo, accounts, onClick, onEdit, onDelete, showActions }) {
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
             <AllotmentCounts tally={tally} />
             <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-              {apps.some((a) => a.sold) && <Badge color={COLORS.navy} bg="#EAEFF5">SOLD {apps.filter((a) => a.sold).length}/{tally}</Badge>}
+              {apps.some((a) => a.sold) && <Badge color={COLORS.navy} bg="#EAEFF5">SOLD {apps.filter((a) => a.sold).length}/{tally.allotted}</Badge>}
               {gainPct !== null && (
                 <span style={{
                   fontFamily: "'JetBrains Mono', monospace", fontSize: 12, fontWeight: 700,
