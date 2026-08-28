@@ -9,7 +9,6 @@ permissions:
 
 jobs:
   fix:
-    if: ${{ !startsWith(github.event.head_commit.message, 'chore: apply Upstox migration fixes') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -44,10 +43,9 @@ jobs:
         [i.company, i.symbol, i.isin].forEach((v) => { if (v) aliases.push(String(v)); });
       });
       const keys = [...new Set(aliases)].slice(0, 120).join('|');
-      const bust = opts.silent
-        ? `&at=${Math.floor(Date.now() / 30000)}`
-        : `&at=${Date.now()}`;
-      const res = await fetch(`/api/listings?${keys ? `keys=${encodeURIComponent(keys)}&` : ''}at=${bust.slice(4)}`);
+      const at = opts.silent ? Math.floor(Date.now() / 30000) : Date.now();
+      const query = keys ? `keys=${encodeURIComponent(keys)}&at=${at}` : `at=${at}`;
+      const res = await fetch(`/api/listings?${query}`);
       const text = await res.text();
       let data = {};
       try { data = JSON.parse(text); } catch { /* handled next */ }
@@ -56,7 +54,7 @@ jobs:
       const byAlias = new Map();
       (data.listings || []).forEach((l) => {
         [l.key, l.shortName, l.symbol, l.isin].filter(Boolean).forEach((v) => {
-          byAlias.set(nameKey(v));
+          byAlias.set(nameKey(v), l);
           byAlias.set(String(v).toUpperCase(), l);
         });
       });
@@ -128,7 +126,6 @@ jobs:
 '''
           s = s[:start] + replacement + s[end:]
 
-          # Remove stale BSE source wording in the IPO form and data sheet.
           replacements = {
             'Dates come from BSE and are shown rather than typed — every one was': 'Dates are supplied by Upstox and are shown rather than typed — every one is',
             'duplicate of something the exchange already publishes. But BSE has no': 'supplied by the exchange already publishes. If Upstox has no',
@@ -151,12 +148,9 @@ jobs:
           for a, b in replacements.items():
             s = s.replace(a, b)
 
-          # The year picker must never expose 2024/2025; current year only plus
-          # future years that become relevant later are generated dynamically.
           old = '  const years = [thisYear, thisYear - 1, thisYear - 2];'
-          new = '  const years = [thisYear, thisYear + 1, thisYear + 2];'
           if old in s:
-            s = s.replace(old, new)
+            s = s.replace(old, '  const years = [thisYear];')
 
           p.write_text(s)
 
@@ -167,17 +161,14 @@ jobs:
           p = Path('src/App.jsx')
           s = p.read_text()
 
-          # Enforce finalized dates in the UI as a second guard; the API already
-          # applies the same rule server-side.
           marker = '  const visible = useMemo(() => {'
-          inject = '''  const visible = useMemo(() => {
+          if marker in s and 'const datedRows = state.rows.filter' not in s:
+            inject = '''  const visible = useMemo(() => {
     const datedRows = state.rows.filter((r) => r.openDate && r.closeDate);
 '''
-          if marker in s and 'const datedRows = state.rows.filter' not in s:
             s = s.replace(marker, inject, 1)
             s = s.replace('    return state.rows.filter((r) => {', '    return datedRows.filter((r) => {', 1)
 
-          # Subscription badge is valid only while the IPO is actually open.
           old = '''                        {r.subscription != null && (
                           <Badge
                             color={r.subscription >= 1 ? COLORS.green : COLORS.gold}
