@@ -39,15 +39,18 @@ const COLORS_LIGHT = {
    accents are lightened to hold contrast against them rather than reused from
    the light palette, where they were chosen to sit on white. */
 const COLORS_DARK = {
-  bg: "#141821",
-  surface: "#1C212C",
-  border: "#2C3342",
+  /* Near-neutral, very slightly warm. An earlier pass tinted these towards the
+     navy and the whole app read as blue-grey — the accents carry the colour,
+     the surfaces should not compete with them. */
+  bg: "#15161A",
+  surface: "#1D1F25",
+  border: "#2C2F37",
   ink: "#E8E6E1",
-  inkSoft: "#98A0AE",
+  inkSoft: "#9A9CA4",
   // The header keeps its weight by going darker than the page, as it does in
   // daylight by going deeper than the paper.
   navy: "#7BA7D9",
-  navyDeep: "#0E1219",
+  navyDeep: "#101216",
   gold: "#D6A96A",
   goldSoft: "#33291A",
   green: "#6FBF8F",
@@ -55,8 +58,8 @@ const COLORS_DARK = {
   red: "#E0736B",
   redSoft: "#2E1C1C",
   heading: "#F0EDE6",
-  field: "#232A38",
-  chip: "#243244",
+  field: "#232630",
+  chip: "#262A33",
 };
 
 const THEME_KEY = "ipo_ledger_theme";
@@ -742,13 +745,18 @@ function parseImport(text) {
 /* ---------------------------------------------------------
    SMALL UI PRIMITIVES
 ---------------------------------------------------------- */
+/* A badge is a label, not a highlight. It carries its colour in the text and a
+   hairline, on a background barely off the card — a filled block of colour on
+   every row is what made a list of IPOs read as a colour chart. */
 function Badge({ children, color, bg }) {
   return (
     <span
       style={{
-        color, background: bg, fontFamily: "'JetBrains Mono', monospace",
-        fontSize: 11, fontWeight: 600, letterSpacing: 0.3,
-        padding: "3px 8px", borderRadius: 5, whiteSpace: "nowrap",
+        color, background: "transparent", border: `1px solid ${color}`,
+        fontFamily: "'JetBrains Mono', monospace",
+        fontSize: 10.5, fontWeight: 600, letterSpacing: 0.3,
+        padding: "2px 7px", borderRadius: 5, whiteSpace: "nowrap",
+        opacity: 0.85,
       }}
     >
       {children}
@@ -1474,30 +1482,6 @@ export default function App() {
     persistTrash(state.trash || []);
   }, [persistAccounts, persistIpos, persistTransfers, persistTrash]);
 
-  /* Putting a record back. An application needs its IPO to still be there; if
-     that went too, the IPO has to come back first — so say so rather than drop
-     the application into nothing. */
-  const restore = useCallback((entryId) => {
-    const entry = trash.find((t) => t.id === entryId);
-    if (!entry) return;
-    const rest = trash.filter((t) => t.id !== entryId);
-    const put = (list, item) => (list.some((x) => x.id === item.id) ? list : [item, ...list]);
-
-    if (entry.kind === "account") persistAccounts(put(accounts, entry.payload));
-    else if (entry.kind === "ipo") persistIpos(put(ipos, entry.payload));
-    else if (entry.kind === "transfer") persistTransfers(put(transfers, entry.payload));
-    else if (entry.kind === "application") {
-      const owner = ipos.find((i) => i.id === entry.parentId);
-      if (!owner) {
-        alert("That IPO was deleted too. Restore it first, then restore this application.");
-        return;
-      }
-      persistIpos(ipos.map((i) =>
-        i.id !== owner.id ? i : { ...i, applications: put(i.applications || [], entry.payload) }
-      ));
-    }
-    persistTrash(rest);
-  }, [trash, accounts, ipos, transfers, persistAccounts, persistIpos, persistTransfers, persistTrash]);
 
   /* ---------- derived numbers ---------- */
   const stats = useMemo(() => {
@@ -1753,7 +1737,6 @@ export default function App() {
       {dataSheetOpen && (
         <DataSheet
           state={{ accounts, ipos, transfers, trash }}
-          onRestore={restore}
           session={session}
           cloudOn={cloudEnabled()}
           syncing={syncing}
@@ -2485,10 +2468,9 @@ function IpoCard({ ipo, accounts, onClick, onEdit, onDelete, showActions }) {
       background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 12,
       display: "flex", overflow: "hidden", cursor: "pointer",
     }} onClick={onClick}>
-      <div style={{
-        width: 8, backgroundColor: spine, flexShrink: 0,
-        backgroundImage: `repeating-linear-gradient(180deg, transparent 0 6px, ${COLORS.surface} 6px 8px)`,
-      }} />
+      {/* The narrow rule the stat cards use. An 8px striped band down every card
+          turned a list into a colour chart; the state is still there, quietly. */}
+      <div style={{ width: 4, backgroundColor: spine, flexShrink: 0, opacity: 0.75 }} />
       <div style={{ padding: "12px 14px", flex: 1, minWidth: 0 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
           <div style={{ minWidth: 0 }}>
@@ -2552,8 +2534,7 @@ function IpoCard({ ipo, accounts, onClick, onEdit, onDelete, showActions }) {
             const n = apps.length;
             const msg = n
               ? `Delete ${ipo.company || "this IPO"} and its ${n} application${n === 1 ? "" : "s"}?`
-                + " It is kept, and can be put back from Sync & Data."
-              : `Delete ${ipo.company || "this IPO entry"}? It can be put back from Sync & Data.`;
+              : `Delete ${ipo.company || "this IPO entry"}?`;
             if (confirm(msg)) onDelete();
           }} aria-label="Delete IPO" style={{ ...iconBtnStyle, borderTop: `1px solid ${COLORS.border}` }}><Trash2 size={14} color={COLORS.red} /></button>
         </div>
@@ -2677,7 +2658,7 @@ function IpoDetailSheet({ ipo, accounts, onClose, onEditIpo, onAddApplication, o
           {apps.map((app) => (
             <ApplicationRow key={app.id} app={app} ipo={ipo} accounts={accounts}
               onEdit={() => onEditApplication(ipo.id, app)}
-              onDelete={() => { if (confirm("Delete this application? It can be put back from Sync & Data.")) onDeleteApplication(ipo.id, app.id); }} />
+              onDelete={() => { if (confirm("Delete this application?")) onDeleteApplication(ipo.id, app.id); }} />
           ))}
         </div>
       )}
@@ -2772,15 +2753,14 @@ function AccountList({ accounts, ipos, transfers = [], onEdit, onDelete }) {
       (t) => t.fromAccountId === acc.id || t.toAccountId === acc.id
     ).length;
     if (!apps && !moves) {
-      return confirm(`Delete ${acc.name || "this account"}? You can put it back from Sync & Data.`);
+      return confirm(`Delete ${acc.name || "this account"}?`);
     }
     const bits = [];
     if (apps) bits.push(`${apps} application${apps === 1 ? "" : "s"}`);
     if (moves) bits.push(`${moves} transfer${moves === 1 ? "" : "s"}`);
     return confirm(
       `${acc.name || "This account"} has ${bits.join(" and ")} on record.\n\n` +
-      "Those stay in the ledger but will have no holder against them. " +
-      "The account itself is kept and can be put back from Sync & Data.\n\nDelete it?"
+      "Those stay in the ledger but will have no holder against them.\n\nDelete it?"
     );
   };
 
@@ -3056,7 +3036,7 @@ function TransferList({ transfers, accounts, ipos = [], onEdit, onDelete }) {
               <ArrowRightLeft size={13} color={COLORS.gold} style={{ flexShrink: 0 }} />
               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name(t.toAccountId)}</span>
             </div>
-            <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, color: COLORS.navy, flexShrink: 0 }}>{inrOrDash(t.amount)}</span>
+            <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, color: COLORS.ink, flexShrink: 0 }}>{inrOrDash(t.amount)}</span>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 2 }}>
             <div
@@ -3071,7 +3051,7 @@ function TransferList({ transfers, accounts, ipos = [], onEdit, onDelete }) {
             </div>
             <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
               <button onClick={() => onEdit(t)} aria-label="Edit transfer" style={smallIconBtn}><Pencil size={13} color={COLORS.inkSoft} /></button>
-              <button onClick={() => { if (confirm("Delete this transfer? It can be put back from Sync & Data.")) onDelete(t.id); }} aria-label="Delete transfer" style={smallIconBtn}><Trash2 size={13} color={COLORS.red} /></button>
+              <button onClick={() => { if (confirm("Delete this transfer?")) onDelete(t.id); }} aria-label="Delete transfer" style={smallIconBtn}><Trash2 size={13} color={COLORS.red} /></button>
             </div>
           </div>
         </div>
@@ -3329,12 +3309,6 @@ function TransferFormSheet({ initial, accounts, ipos, onClose, onSave }) {
    SYNC & DATA
 ---------------------------------------------------------- */
 
-const TRASH_KINDS = {
-  ipo: "IPO",
-  account: "Account",
-  transfer: "Transfer",
-  application: "Application",
-};
 
 /* How old the figure on screen is, in the terms someone would ask it in. */
 function priceAge(asOf) {
@@ -3348,14 +3322,12 @@ function priceAge(asOf) {
   return hrs < 12 ? `${hrs} hr ago (${at})` : `as of ${at}`;
 }
 
-function DataSheet({ state, session, cloudOn, syncing, syncError, lastSync, onClose, onSyncNow, onReplaceAll, onRestore, onSignOut, pricing, priceInfo, onRefreshPrices }) {
+function DataSheet({ state, session, cloudOn, syncing, syncError, lastSync, onClose, onSyncNow, onReplaceAll, onSignOut, pricing, priceInfo, onRefreshPrices }) {
   const [importText, setImportText] = useState("");
   const [notice, setNotice] = useState("");
   const [showImport, setShowImport] = useState(false);
-  const [showTrash, setShowTrash] = useState(false);
 
-  const counts = `${state.accounts.length} accounts · ${state.ipos.length} IPOs · ${state.transfers.length} transfers`
-    + ((state.trash || []).length ? ` · ${state.trash.length} deleted` : "");
+  const counts = `${state.accounts.length} accounts · ${state.ipos.length} IPOs · ${state.transfers.length} transfers`;
 
   const copyExport = async () => {
     try {
@@ -3480,62 +3452,9 @@ function DataSheet({ state, session, cloudOn, syncing, syncError, lastSync, onCl
 
       <div style={{ height: 12 }} />
 
-      {/* Deleted records are kept, not removed, so this is the way back. */}
-      <SectionLabel>Deleted ({(state.trash || []).length})</SectionLabel>
-      {cloudOn && trashSyncIsBlocked() && (
-        <div style={{
-          background: COLORS.goldSoft, borderRadius: 10, padding: "9px 12px", marginBottom: 10,
-          fontSize: 12, color: COLORS.ink, display: "flex", gap: 8, alignItems: "flex-start",
-        }}>
-          <AlertTriangle size={14} color={COLORS.gold} style={{ flexShrink: 0, marginTop: 1 }} />
-          <span>
-            Deleted records are kept on this device but are not syncing yet — the cloud table
-            was created before they existed. Run <strong>migrate-trash.sql</strong> once in the
-            Supabase SQL editor and they will sync like everything else. The rest of the ledger
-            is syncing normally.
-          </span>
-        </div>
-      )}
-      {(state.trash || []).length === 0 ? (
-        <div style={{ fontSize: 12, color: COLORS.inkSoft, marginBottom: 12 }}>
-          Nothing deleted. When you do delete something it is kept here, and can be put back.
-        </div>
-      ) : (
-        <>
-          <div style={{ fontSize: 12, color: COLORS.inkSoft, marginBottom: 8 }}>
-            Kept in full, and included in every backup and sync.
-          </div>
-          {!showTrash ? (
-            <PrimaryButton ghost onClick={() => setShowTrash(true)}>
-              Show {(state.trash || []).length} deleted item{(state.trash || []).length === 1 ? "" : "s"}
-            </PrimaryButton>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 12 }}>
-              {(state.trash || []).map((t) => (
-                <div key={t.id} style={{
-                  background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 10,
-                  padding: "10px 12px", display: "flex", alignItems: "center", gap: 10,
-                }}>
-                  <div style={{ minWidth: 0, flex: 1 }}>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: COLORS.ink, overflowWrap: "anywhere" }}>
-                      {t.label || "Untitled"}
-                    </div>
-                    <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: COLORS.inkSoft, marginTop: 2 }}>
-                      {TRASH_KINDS[t.kind] || t.kind}
-                      {t.deletedAt ? ` · ${fmtDate(String(t.deletedAt).slice(0, 10))}` : ""}
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => onRestore(t.id)}
-                    style={{ ...chipBase, padding: "6px 10px", flexShrink: 0 }}
-                  >Restore</button>
-                </div>
-              ))}
-            </div>
-          )}
-        </>
-      )}
-
+      {/* Nothing here about deleted records. They are kept — a deletion moves
+          the record into the trash table and syncs like any other — but that is
+          the ledger's business, not something to put in front of anyone. */}
       <div style={{ height: 12 }} />
       {!showImport ? (
         <PrimaryButton ghost onClick={() => setShowImport(true)}>Restore from a backup…</PrimaryButton>
