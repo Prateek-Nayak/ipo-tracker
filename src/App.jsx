@@ -130,6 +130,10 @@ const hasListed = (ipo) => !!ipo?.listingDate && ipo.listingDate <= todayISO();
    "undefinedholidays". */
 const STORAGE_PREFIX = "ipo_ledger_";
 
+// The four screens, in nav order. Named here so a remembered tab can be checked
+// against them before it is trusted.
+const TABS = ["dashboard", "ipos", "transfers", "accounts"];
+
 /* NSE's holiday calendars, kept module-wide because every date calculation
    needs them. Both are required, and which one applies depends on the event:
    allotment is settled by the clearing corporation, listing happens on the
@@ -717,7 +721,22 @@ export default function App() {
   const [linkBusy, setLinkBusy] = useState(() => cloudEnabled() && !!readAuthHash());
   const [linkNotice, setLinkNotice] = useState("");
 
-  const [tab, setTab] = useState("dashboard");
+  /* Which tab you were on survives a reload. The app is a single screen with no
+     routing, so without this every refresh — and every return from the home
+     screen on a phone, where the PWA is reloaded rather than resumed — dropped
+     you back on Overview with the list you were reading two taps away. */
+  const [tab, setTab] = useState(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_PREFIX + "tab");
+      return TABS.includes(saved) ? saved : "dashboard";
+    } catch {
+      return "dashboard";
+    }
+  });
+
+  useEffect(() => {
+    try { localStorage.setItem(STORAGE_PREFIX + "tab", tab); } catch { /* not worth failing over */ }
+  }, [tab]);
   const [accounts, setAccounts] = useState([]);
   const [ipos, setIpos] = useState([]);
   const [transfers, setTransfers] = useState([]);
@@ -936,21 +955,28 @@ export default function App() {
      IPO we can match by name. The current price is always refreshed; the
      listing price and date are only filled in when blank, so anything typed
      in by hand is never overwritten. */
-  const refreshPrices = useCallback(async (opts = {}) => {
-    if (!ipos.length) return { matched: 0, updated: 0 };
+  const refreshPricesFrom = useCallback(async (list, opts = {}) => {
+    if (!list.length) return { matched: 0, updated: 0 };
     setPricing(true);
     try {
       /* Ask BSE back as far as this ledger actually reaches. Without this the
          window defaults to the last year or so, and anything older simply
          never matches. */
-      const years = ipos
+      const years = list
         .map((i) => parseInt(String(i.listingDate || i.applicationDate || i.openDate || "").slice(0, 4), 10))
         .filter((y) => Number.isFinite(y) && y >= 2010);
       const from = years.length ? Math.min(...years) : new Date().getFullYear() - 1;
 
       // Naming the companies lets BSE's per-issue lot sizes come back with the
       // response; without a lot size the blocked amount cannot be worked out.
-      const keys = ipos.map((i) => i.company).filter(Boolean).join("|");
+      /* Only the issues that still want something. Naming them lets BSE's
+         per-issue lot sizes come back with the response, and the server only
+         goes hunting for the ones it is asked about — so a ledger where
+         everything is already filled in costs nothing extra. */
+      const incomplete = (list) =>
+        list.filter((i) => !i.lotSize || !i.closeDate || !i.openDate || isBlank(i.priceBand));
+      const asking = incomplete(list);
+      const keys = (asking.length ? asking : list).map((i) => i.company).filter(Boolean).join("|");
       const res = await fetch(`/api/listings?from=${from}&keys=${encodeURIComponent(keys)}`);
       const text = await res.text();
       let data = {};
@@ -966,7 +992,7 @@ export default function App() {
       let updated = 0;
       let reblocked = 0;
 
-      const next = ipos.map((ipo) => {
+      const next = list.map((ipo) => {
         const hit = byKey.get(nameKey(ipo.company));
         if (!hit) return ipo;
         matched++;
@@ -1039,8 +1065,28 @@ export default function App() {
       });
 
       if (updated) persistIpos(next);
-      setPriceInfo({ asOf, matched, total: ipos.length, reblocked, error: "" });
-      return { matched, updated, reblocked };
+      /* Counts are cumulative across rounds: a later pass that recalculates
+         nothing must not erase what an earlier one reported. */
+      const totalReblocked = (opts.reblockedSoFar || 0) + reblocked;
+      setPriceInfo({ asOf, matched, total: list.length, reblocked: totalReblocked, error: "" });
+
+      /* Recovering an issue that has aged out of BSE's window feed costs about
+         a dozen requests, so the server only does a handful per call. Go round
+         again while that is still making progress, rather than making you press
+         refresh once per batch. Bounded, and it stops the moment a pass fills
+         nothing in — which is also what happens when BSE simply has no more. */
+      const before = incomplete(list).length;
+      const after = incomplete(next).length;
+      if (after > 0 && after < before && (opts.round || 0) < 4) {
+        // The next pass reads the list it just wrote, not React's stale copy.
+        return refreshPricesFrom(next, {
+          ...opts,
+          round: (opts.round || 0) + 1,
+          reblockedSoFar: totalReblocked,
+        });
+      }
+
+      return { matched, updated, reblocked: totalReblocked };
     } catch (e) {
       console.error("Price refresh failed", e);
       setPriceInfo((p) => ({ ...p, error: e.message || "Could not update prices" }));
@@ -1049,7 +1095,13 @@ export default function App() {
     } finally {
       setPricing(false);
     }
-  }, [ipos, persistIpos]);
+  }, [persistIpos]);
+
+  // The entry point everything else uses: start from what React is holding.
+  const refreshPrices = useCallback(
+    (opts = {}) => refreshPricesFrom(ipos, opts),
+    [ipos, refreshPricesFrom]
+  );
 
   // Refresh once per session when there is something whose value can move.
   useEffect(() => {
@@ -1204,6 +1256,7 @@ export default function App() {
       {appSheet && (
         <ApplicationFormSheet
           initial={appSheet.application}
+          ipo={ipos.find((i) => i.id === appSheet.ipoId)}
           accounts={accounts}
           onClose={() => setAppSheet(null)}
           onSave={(data) => {
@@ -2000,7 +2053,7 @@ function IpoDetailSheet({ ipo, accounts, onClose, onEditIpo, onAddApplication, o
         <button onClick={() => onAddApplication(ipo.id)} style={{
           display: "flex", alignItems: "center", gap: 4, background: "transparent", color: COLORS.navy,
           border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: "8px 10px", fontSize: 12, fontWeight: 600, cursor: "pointer",
-        }}><Plus size={13} color={COLORS.navy} /> One</button>
+        }}><Plus size={13} color={COLORS.navy} /> Add one</button>
       </div>
 
       {apps.length === 0 ? (
@@ -2461,13 +2514,29 @@ function IpoFormSheet({ initial, onClose, onSave }) {
   );
 }
 
-function ApplicationFormSheet({ initial, accounts, onClose, onSave }) {
+function ApplicationFormSheet({ initial, ipo, accounts, onClose, onSave }) {
   const [f, setF] = useState(initial || {
     id: undefined, accountId: accounts[0]?.id || "", appliedFor: "", lots: "1", amountBlocked: "",
     allotmentStatus: "Pending", sharesAllotted: "", sold: false, sellPrice: "", sellDate: "", remarks: "",
   });
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   const setBool = (k) => (e) => setF({ ...f, [k]: e.target.checked });
+
+  /* A full allotment is the whole application: lots x lot size. Left blank it
+     silently values the holding at nothing — no shares, no capital deployed, no
+     gain — so it is filled in the moment the status says allotted, exactly as
+     the bulk sheet does. Still editable, for the odd partial. */
+  const setStatus = (e) => {
+    const allotmentStatus = e.target.value;
+    const lot = Number(ipo?.lotSize) || 0;
+    const next = { ...f, allotmentStatus };
+    if (allotmentStatus === "Allotted" && lot > 0) {
+      next.sharesAllotted = String(lot * (Number(f.lots) || 1));
+    } else if (allotmentStatus === "Not Allotted" || allotmentStatus === "Pending") {
+      next.sharesAllotted = "";
+    }
+    setF(next);
+  };
 
   return (
     <Sheet title={initial ? "Edit Application" : "New Application"} onClose={onClose}>
@@ -2485,7 +2554,7 @@ function ApplicationFormSheet({ initial, accounts, onClose, onSave }) {
         <div style={{ flex: 1 }}><Field label="Amount Blocked (₹)"><Input type="number" inputMode="numeric" value={f.amountBlocked} onChange={set("amountBlocked")} /></Field></div>
       </div>
       <Field label="Allotment Status">
-        <Select value={f.allotmentStatus} onChange={set("allotmentStatus")}>
+        <Select value={f.allotmentStatus} onChange={setStatus}>
           {ALLOTMENT_STATUSES.map((s) => <option key={s}>{s}</option>)}
         </Select>
       </Field>
