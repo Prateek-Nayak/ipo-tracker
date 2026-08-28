@@ -1068,15 +1068,18 @@ export default function App() {
     } finally {
       setSyncing(false);
     }
-  }, [userId, accounts, ipos, transfers]);
+  }, [userId, accounts, ipos, transfers, trash]);
 
-  // Push edits to Supabase, debounced so a burst of edits collapses into one write.
+  /* Push edits to Supabase, debounced so a burst of edits collapses into one
+     write. Trash counts as an edit like any other: today every deletion also
+     changes one of the three ledger tables, so leaving it out happened to work,
+     but a restore that only moved something back would have gone unsynced. */
   useEffect(() => {
     if (!loaded || !cloudEnabled() || !userId) return;
     if (skipNextAutoSync.current) { skipNextAutoSync.current = false; return; }
     const t = setTimeout(() => { pushToCloud(); }, 1000);
     return () => clearTimeout(t);
-  }, [accounts, ipos, transfers, loaded, userId, pushToCloud]);
+  }, [accounts, ipos, transfers, trash, loaded, userId, pushToCloud]);
 
   /* Pull listing and current market prices from BSE and apply them to every
      IPO we can match by name. The current price is always refreshed; the
@@ -1094,21 +1097,21 @@ export default function App() {
         .filter((y) => Number.isFinite(y) && y >= 2010);
       const from = years.length ? Math.min(...years) : new Date().getFullYear() - 1;
 
-      // Naming the companies lets BSE's per-issue lot sizes come back with the
-      // response; without a lot size the blocked amount cannot be worked out.
-      /* Only the issues that still want something. Naming them lets BSE's
-         per-issue lot sizes come back with the response, and the server only
-         goes hunting for the ones it is asked about — so a ledger where
-         everything is already filled in costs nothing extra. */
+      /* Naming a company asks the server to go and fetch its lot size and its
+         day-one opening price — a request each, and neither ever changes once
+         known. Prices come back for every listing regardless of who is named,
+         so the only names worth sending are those still missing something: a
+         settled ledger names none, and the whole refresh is one request.
+
+         Capped as well, since the names travel in the query string and a ledger
+         holding a year of listings would build a URL long enough to be refused.
+         The rounds below work through anything left over. */
       const incomplete = (list) =>
-        list.filter((i) => !i.lotSize || !i.closeDate || !i.openDate || isBlank(i.priceBand));
-      /* Capped, because the names travel in the query string: a ledger holding
-         a whole year of listings would otherwise build a URL long enough to be
-         refused outright. The server enriches a handful per call anyway, and
-         the rounds below work through the rest. Prices are unaffected — the
-         response carries every listing regardless of who was named. */
+        list.filter((i) =>
+          !i.lotSize || !i.closeDate || !i.openDate || isBlank(i.priceBand) ||
+          (hasListed(i) && isBlank(i.listingPrice)));
       const asking = incomplete(list);
-      const keys = (asking.length ? asking : list)
+      const keys = asking
         .map((i) => i.company)
         .filter(Boolean)
         .slice(0, 40)
