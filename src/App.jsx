@@ -1862,35 +1862,34 @@ const selectStyle = {
   fontSize: 12, fontWeight: 600,
 };
 
-/* A short, mutually exclusive choice — one pill track rather than loose chips,
-   so it reads as a single control and cannot be mistaken for the filters. */
-function Segmented({ options, value, onChange, label }) {
+
+/* Boards are not mutually exclusive — you may want one, or both. Turning the
+   last one off would ask for nothing at all, so the last one on cannot be
+   turned off; it is the only state the control refuses. */
+function BoardToggles({ options, selected, onToggle }) {
   return (
-    <div
-      role="group"
-      aria-label={label}
-      style={{
-        display: "inline-flex", alignItems: "center", gap: 2, flexShrink: 0,
-        background: COLORS.surface, border: `1px solid ${COLORS.border}`,
-        borderRadius: 999, padding: 2,
-      }}
-    >
-      {options.map((o) => {
-        const on = value === o.id;
+    <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+      {options.map((b) => {
+        const on = selected.includes(b.id);
+        const last = on && selected.length === 1;
         return (
           <button
-            key={o.id}
-            onClick={() => onChange(o.id)}
+            key={b.id}
+            onClick={() => onToggle(b.id)}
             aria-pressed={on}
+            aria-label={`${b.label}${on ? " (showing)" : ""}`}
+            title={last ? "At least one board has to be shown" : b.label}
             style={{
-              border: 0, borderRadius: 999, padding: "5px 11px", cursor: "pointer",
-              fontFamily: "Inter, sans-serif", fontSize: 12, fontWeight: 600,
-              whiteSpace: "nowrap",
-              background: on ? COLORS.navy : "transparent",
+              border: `1px solid ${on ? COLORS.navy : COLORS.border}`,
+              background: on ? COLORS.navy : COLORS.surface,
               color: on ? "#fff" : COLORS.inkSoft,
+              borderRadius: 999, padding: "7px 11px", minHeight: 36,
+              fontFamily: "Inter, sans-serif", fontSize: 12, fontWeight: 600,
+              whiteSpace: "nowrap", cursor: last ? "default" : "pointer",
+              opacity: last ? 0.92 : 1,
             }}
           >
-            {o.label}{o.count != null ? ` ${o.count}` : ""}
+            {b.label}{b.count != null ? ` ${b.count}` : ""}
           </button>
         );
       })}
@@ -1898,33 +1897,44 @@ function Segmented({ options, value, onChange, label }) {
   );
 }
 
+/* Only worth a control when it can actually narrow anything: with every issue
+   on one board the choice is between everything and nothing. */
+function boardIsWorthAsking(boards) {
+  if (!boards) return false;
+  return boards.filter((b) => b.count > 0).length > 1;
+}
+
 /* `boards` is a second, independent dimension. Which board an issue is on says
    nothing about how the application went, so folding it into the status chips
    would make "pending, mainboard only" unaskable. */
-function ListControls({ search, setSearch, placeholder, filters, filter, setFilter, sorts, sort, setSort, boards, board, setBoard }) {
+function ListControls({ search, setSearch, placeholder, filters, filter, setFilter, sorts, sort, setSort, boards, board, toggleBoard }) {
   return (
     <div style={{ marginBottom: 12 }}>
-      <div style={{ position: "relative", marginBottom: 8 }}>
-        <span style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)", display: "flex", pointerEvents: "none" }}>
-          <Search size={15} color={COLORS.inkSoft} />
-        </span>
-        <Input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder={placeholder}
-          style={{ paddingLeft: 34 }}
-        />
+      {/* The board sits beside the search rather than under it: two toggles are
+          narrow, the search box has width to spare, and it keeps the controls
+          below to a single row. */}
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
+        <div style={{ position: "relative", flex: "1 1 0", minWidth: 0 }}>
+          <span style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)", display: "flex", pointerEvents: "none" }}>
+            <Search size={15} color={COLORS.inkSoft} />
+          </span>
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder={placeholder}
+            style={{ paddingLeft: 34 }}
+          />
+        </div>
+        {boardIsWorthAsking(boards) && (
+          <BoardToggles options={boards} selected={board} onToggle={toggleBoard} />
+        )}
       </div>
-      {/* One bar: the board in view stays on show, since it is the choice worth
-          seeing at a glance, and the rest fold into their own controls rather
-          than a second and third row of chips that has to be scrolled. */}
-      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-        {boards && <Segmented options={boards} value={board} onChange={setBoard} label="Board" />}
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
         <select
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
           aria-label="Filter"
-          style={{ ...selectStyle, flex: "1 1 116px" }}
+          style={{ ...selectStyle, flex: "1 1 0" }}
         >
           {filters.map((f) => (
             <option key={f.id} value={f.id}>{f.label}{f.count != null ? ` ${f.count}` : ""}</option>
@@ -1934,7 +1944,7 @@ function ListControls({ search, setSearch, placeholder, filters, filter, setFilt
           value={sort}
           onChange={(e) => setSort(e.target.value)}
           aria-label="Sort order"
-          style={{ ...selectStyle, flex: "1 1 116px" }}
+          style={{ ...selectStyle, flex: "1 1 0" }}
         >
           {sorts.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
         </select>
@@ -1946,13 +1956,21 @@ function ListControls({ search, setSearch, placeholder, filters, filter, setFilt
 function IpoList({ ipos, accounts, onOpen, onEdit, onDelete }) {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
-  const [board, setBoard] = useState("any");
+  /* Which boards are showing. Mainboard is what this ledger is mostly made of,
+     so that is where it opens; both can be on at once, and never neither. */
+  const [board, setBoard] = useState(["Mainboard"]);
+  const toggleBoard = (id) =>
+    setBoard((cur) =>
+      cur.includes(id)
+        ? (cur.length === 1 ? cur : cur.filter((b) => b !== id))   // never nothing
+        : [...cur, id]
+    );
   const [sort, setSort] = useState("recent");
 
   /* Status counts follow the board in view, so a chip never promises rows the
      board filter is about to hide. The board counts stay whole. */
   const onBoard = useMemo(
-    () => (board === "any" ? ipos : ipos.filter((i) => boardOf(i) === board)),
+    () => ipos.filter((i) => board.includes(boardOf(i))),
     [ipos, board]
   );
 
@@ -1967,10 +1985,19 @@ function IpoList({ ipos, accounts, onOpen, onEdit, onDelete }) {
   }, [onBoard]);
 
   const boardCounts = useMemo(() => {
-    const c = { any: ipos.length, Mainboard: 0, SME: 0 };
+    const c = { Mainboard: 0, SME: 0 };
     ipos.forEach((i) => { c[boardOf(i)]++; });
     return c;
   }, [ipos]);
+
+  /* An SME-only ledger would open on an empty screen, so the default gives way
+     to whatever is actually there. */
+  useEffect(() => {
+    if (!ipos.length) return;
+    if (board.some((b) => boardCounts[b] > 0)) return;
+    const present = Object.keys(boardCounts).filter((k) => boardCounts[k] > 0);
+    if (present.length) setBoard(present);
+  }, [board, ipos.length, boardCounts]);
 
   const shown = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -2008,13 +2035,10 @@ function IpoList({ ipos, accounts, onOpen, onEdit, onDelete }) {
           { id: "incomplete", label: "Needs details", count: counts.incomplete },
         ]}
         boards={[
-          /* Not "All": the status row already has one, and two chips reading
-             All on the same screen is a coin toss. */
-          { id: "any", label: "Any", count: boardCounts.any },
           { id: "Mainboard", label: "Mainboard", count: boardCounts.Mainboard },
           { id: "SME", label: "SME", count: boardCounts.SME },
         ]}
-        board={board} setBoard={setBoard}
+        board={board} toggleBoard={toggleBoard}
         sort={sort} setSort={setSort}
         sorts={[
           { id: "recent", label: "Newest" },
@@ -3634,8 +3658,14 @@ function LiveIposSheet({ existing, onClose, onImport }) {
   const [state, setState] = useState({ status: "loading", rows: [], error: "", fetchedAt: "", note: "" });
   const [picked, setPicked] = useState({});
   const [search, setSearch] = useState("");
-  const [board, setBoard] = useState("any");
+  const [board, setBoard] = useState(["Mainboard"]);
   const [importing, setImporting] = useState(false);
+  const toggleBoard = (id) =>
+    setBoard((cur) =>
+      cur.includes(id)
+        ? (cur.length === 1 ? cur : cur.filter((b) => b !== id))
+        : [...cur, id]
+    );
 
   const known = useMemo(() => {
     const s = new Set();
@@ -3653,7 +3683,7 @@ function LiveIposSheet({ existing, onClose, onImport }) {
     let cancelled = false;
     setState((s) => ({ ...s, status: "loading", error: "" }));
     setPicked({});
-    setBoard("any");
+    setBoard(["Mainboard"]);
 
     (async () => {
       try {
@@ -3705,7 +3735,29 @@ function LiveIposSheet({ existing, onClose, onImport }) {
             : "Everything from " + year + ", from BSE — listed, and closed awaiting listing. Lot size and listing price are fetched for what you select.";
         }
 
-        rows.sort((a, b) => (b.listedOn || b.closeDate || "").localeCompare(a.listedOn || a.closeDate || ""));
+        if (mode === "current") {
+          /* What is open comes first, then what is coming, then anything that
+             has already closed — the order you would work down if you were
+             deciding what to apply for. Within each, the nearest deadline
+             leads: the issue closing soonest, then the one opening soonest. */
+          const today = todayISO();
+          const rank = (r) => {
+            if (!r.openDate && !r.closeDate) return 3;
+            if (r.openDate && r.openDate > today) return 1;      // not open yet
+            if (r.closeDate && r.closeDate < today) return 2;    // already closed
+            return 0;                                            // taking bids
+          };
+          rows.sort((a, b) => {
+            const ra = rank(a);
+            const rb = rank(b);
+            if (ra !== rb) return ra - rb;
+            if (ra === 0) return (a.closeDate || "").localeCompare(b.closeDate || "");
+            if (ra === 1) return (a.openDate || "").localeCompare(b.openDate || "");
+            return (b.closeDate || "").localeCompare(a.closeDate || "");
+          });
+        } else {
+          rows.sort((a, b) => (b.listedOn || b.closeDate || "").localeCompare(a.listedOn || a.closeDate || ""));
+        }
         setState({ status: "done", rows, error: "", fetchedAt: data.fetchedAt || "", note });
 
         // Pre-tick only what is genuinely new, and only for the current view —
@@ -3729,15 +3781,24 @@ function LiveIposSheet({ existing, onClose, onImport }) {
   const boardOfRow = (r) => (r.category ? boardOf(r) : "unknown");
 
   const boardCounts = useMemo(() => {
-    const c = { any: state.rows.length, Mainboard: 0, SME: 0, unknown: 0 };
+    const c = { Mainboard: 0, SME: 0, unknown: 0 };
     state.rows.forEach((r) => { c[boardOfRow(r)]++; });
     return c;
   }, [state.rows]);
 
+  /* The list opens on Mainboard, but a year BSE left unlabelled — or a week of
+     nothing but SME issues — would then open on an empty screen. */
+  useEffect(() => {
+    if (!state.rows.length) return;
+    if (board.some((b) => boardCounts[b] > 0)) return;
+    const present = Object.keys(boardCounts).filter((k) => boardCounts[k] > 0);
+    if (present.length) setBoard(present);
+  }, [board, state.rows.length, boardCounts]);
+
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase();
     return state.rows.filter((r) => {
-      if (board !== "any" && boardOfRow(r) !== board) return false;
+      if (!board.includes(boardOfRow(r))) return false;
       return !q || `${r.company} ${r.symbol || ""}`.toLowerCase().includes(q);
     });
   }, [state.rows, search, board]);
@@ -3873,14 +3934,12 @@ function LiveIposSheet({ existing, onClose, onImport }) {
             </div>
           )}
 
-          {(boardCounts.Mainboard > 0 || boardCounts.SME > 0) && (
+          {[boardCounts.Mainboard, boardCounts.SME, boardCounts.unknown].filter(Boolean).length > 1 && (
             <div style={{ display: "flex", marginBottom: 10, overflowX: "auto", paddingBottom: 2 }}>
-              <Segmented
-                label="Board"
-                value={board}
-                onChange={setBoard}
+              <BoardToggles
+                selected={board}
+                onToggle={toggleBoard}
                 options={[
-                  { id: "any", label: "Any", count: boardCounts.any },
                   { id: "Mainboard", label: "Mainboard", count: boardCounts.Mainboard },
                   { id: "SME", label: "SME", count: boardCounts.SME },
                   // Only worth offering when BSE actually left some rows unlabelled.
@@ -3909,7 +3968,7 @@ function LiveIposSheet({ existing, onClose, onImport }) {
           </div>
 
           {visible.length === 0 ? (
-            <EmptyState text={board === "any" ? "Nothing matches that search." : "Nothing on that board matches."} />
+            <EmptyState text={board.length > 1 ? "Nothing matches that search." : "Nothing on that board matches."} />
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
               {visible.map((r) => {
