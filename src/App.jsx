@@ -1094,34 +1094,40 @@ export default function App() {
 
   const pushToCloud = useCallback(async () => {
     if (!cloudEnabled() || !userId) return;
+    if (syncing) return; // Already syncing — don't stack calls
     setSyncing(true);
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15000); // 15s max
     try {
       const state = { accounts, ipos, transfers, trash };
-      // Never let a device that has nothing wipe a cloud that has something.
-      // Without this, opening the app somewhere new and hitting Sync now would
-      // overwrite the real ledger with three empty arrays.
-      if (isEmptyState(state)) {
-        const remote = await cloudLoad();
-        if (!isEmptyState(remote)) {
-          setSyncError("This device is empty but your cloud ledger is not. Nothing was overwritten — reload to pull it down.");
-          return;
-        }
-      }
-      await cloudSave(userId, state);
-      setSyncError("");
-      setLastSync(new Date());
-      // Invalidate any browser/SW cache of the REST response so next load is fresh
-      try { localStorage.setItem(STORAGE_PREFIX + "lastSyncTs", Date.now().toString()); } catch {}
+
+      // Race the actual sync against a timeout to prevent indefinite freezes
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("Sync timed out after 15 seconds. Try again.")), 15000)
+      );
+
+      await Promise.race([
+        (async () => {
+          // Never let a device that has nothing wipe a cloud that has something.
+          if (isEmptyState(state)) {
+            const remote = await cloudLoad();
+            if (!isEmptyState(remote)) {
+              setSyncError("This device is empty but your cloud ledger is not. Nothing was overwritten — reload to pull it down.");
+              return;
+            }
+          }
+          await cloudSave(userId, state);
+          setSyncError("");
+          setLastSync(new Date());
+          try { localStorage.setItem(STORAGE_PREFIX + "lastSyncTs", Date.now().toString()); } catch {}
+        })(),
+        timeoutPromise,
+      ]);
     } catch (e) {
       console.error("Cloud save failed", e);
-      setSyncError(e.name === "AbortError" ? "Sync timed out. Try again." : (e.message || "Sync failed."));
+      setSyncError(e.message || "Sync failed.");
     } finally {
-      clearTimeout(timeout);
       setSyncing(false);
     }
-  }, [userId, accounts, ipos, transfers, trash]);
+  }, [userId, accounts, ipos, transfers, trash, syncing]);
 
   /* Push edits to Supabase, debounced so a burst of edits collapses into one
      write. Trash counts as an edit like any other: today every deletion also
@@ -4098,9 +4104,10 @@ function LiveIposSheet({ existing, onClose, onImport }) {
     })));
   };
 
-  /* Only show years that actually have IPO data from the API.
-     The Upstox API returns 2025+ data, so 2024 and older will be empty. */
-  const years = [thisYear, thisYear - 1].filter((y) => y >= 2025);
+  /* Only show the current year in the year tabs — the Upstox API returns
+     open/upcoming/listed/closed for the current period, not historical archives.
+     Past years like 2025 return empty from the /api/listings endpoint. */
+  const years = [thisYear];
 
   return (
     <Sheet title={mode === "current" ? "Open & upcoming IPOs" : `IPOs of ${year}`} onClose={onClose}>
