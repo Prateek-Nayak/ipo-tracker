@@ -856,6 +856,7 @@ export default function App() {
   const [priceInfo, setPriceInfo] = useState({ asOf: "", matched: 0, total: 0, error: "" });
 
   const skipNextAutoSync = useRef(true);
+  const syncingRef = useRef(false);
   const pricedOnce = useRef(false);
   const [, bumpHolidays] = useState(0);
 
@@ -1094,7 +1095,8 @@ export default function App() {
 
   const pushToCloud = useCallback(async () => {
     if (!cloudEnabled() || !userId) return;
-    if (syncing) return; // Already syncing — don't stack calls
+    if (syncingRef.current) return; // Already syncing — don't stack calls
+    syncingRef.current = true;
     setSyncing(true);
     try {
       const state = { accounts, ipos, transfers, trash };
@@ -1125,9 +1127,10 @@ export default function App() {
       console.error("Cloud save failed", e);
       setSyncError(e.message || "Sync failed.");
     } finally {
+      syncingRef.current = false;
       setSyncing(false);
     }
-  }, [userId, accounts, ipos, transfers, trash, syncing]);
+  }, [userId, accounts, ipos, transfers, trash]);
 
   /* Push edits to Supabase, debounced so a burst of edits collapses into one
      write. Trash counts as an edit like any other: today every deletion also
