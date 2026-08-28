@@ -66,6 +66,7 @@ const CloudOff = (p) => <SvgIcon {...p}><path d="m2 2 20 20" /><path d="M5.782 5
 const DownloadIcon = (p) => <SvgIcon {...p}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" x2="12" y1="15" y2="3" /></SvgIcon>;
 const LogOut = (p) => <SvgIcon {...p}><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><polyline points="16 17 21 12 16 7" /><line x1="21" x2="9" y1="12" y2="12" /></SvgIcon>;
 const AlertTriangle = (p) => <SvgIcon {...p}><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" /><line x1="12" x2="12" y1="9" y2="13" /><line x1="12" x2="12.01" y1="17" y2="17" /></SvgIcon>;
+const ChevronRight = (p) => <SvgIcon {...p}><path d="m9 18 6-6-6-6" /></SvgIcon>;
 const Sparkles = (p) => <SvgIcon {...p}><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z" /></SvgIcon>;
 const Search = (p) => <SvgIcon {...p}><circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" /></SvgIcon>;
 const Layers = (p) => <SvgIcon {...p}><path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z" /><path d="m22 12.18-9.17 4.16a2 2 0 0 1-1.66 0L2 12.18" /><path d="m22 17.18-9.17 4.16a2 2 0 0 1-1.66 0L2 17.18" /></SvgIcon>;
@@ -533,19 +534,43 @@ async function cloudLoad() {
   return out;
 }
 
+/* The cloud table was created before deleted records were kept, and its `kind`
+   column only accepts the original three. Widening it is one statement
+   (migrate-trash.sql), but until that is run the whole sync would fail on the
+   fourth — taking the ledger down with it over the one table that matters
+   least. So a rejection on `kind` falls back to the three, and says so. */
+let trashSyncBlocked = false;
+const isKindRejection = (e) => /user_data_kind_check|violates check constraint/i.test(e?.message || "");
+
 async function cloudSave(userId, state) {
-  const rows = TABLES.map((kind) => ({
-    user_id: userId,
-    kind,
-    data: state[kind] || [],
-    updated_at: new Date().toISOString(),
-  }));
-  await rest("user_data?on_conflict=user_id,kind", {
-    method: "POST",
-    headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
-    body: JSON.stringify(rows),
-  });
+  const send = async (kinds) => {
+    const rows = kinds.map((kind) => ({
+      user_id: userId,
+      kind,
+      data: state[kind] || [],
+      updated_at: new Date().toISOString(),
+    }));
+    await rest("user_data?on_conflict=user_id,kind", {
+      method: "POST",
+      headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+      body: JSON.stringify(rows),
+    });
+  };
+
+  if (trashSyncBlocked) return send(LEDGER_TABLES);
+
+  try {
+    await send(TABLES);
+    trashSyncBlocked = false;
+  } catch (e) {
+    if (!isKindRejection(e)) throw e;
+    trashSyncBlocked = true;
+    await send(LEDGER_TABLES);
+  }
 }
+
+// Whether deleted records are being left out, so the UI can say why.
+const trashSyncIsBlocked = () => trashSyncBlocked;
 
 /* ---------------------------------------------------------
    IMPORT / EXPORT
@@ -930,6 +955,57 @@ export default function App() {
 
     return () => { cancelled = true; };
   }, [userId]);
+
+  /* Android's back gesture closed the whole app from anywhere, because a single
+     screen with no routing has no history to go back through. Back now peels
+     off one layer at a time — the sheet on top, then any sheet under it, then
+     back to Overview — and only leaves once there is nothing left to close.
+
+     The handler reads through a ref so the listener can be registered once and
+     still see current state; re-registering on every state change would drop
+     the buffered history entry. */
+  const backLayers = { appSheet, bulkApplyFor, bulkStatusFor, ipoSheet, acctSheet,
+    transferSheet, liveOpen, dataSheetOpen, ipoDetail, tab };
+  const backRef = useRef(backLayers);
+  backRef.current = backLayers;
+
+  const closeTopLayer = useCallback(() => {
+    const v = backRef.current;
+    // Innermost first: a bulk sheet sits on top of the IPO detail behind it.
+    if (v.appSheet) { setAppSheet(null); return true; }
+    // These replace the IPO's detail rather than sitting over it, so closing
+    // one puts that detail back — the same as saving from it does.
+    if (v.bulkApplyFor) { setBulkApplyFor(null); setIpoDetail(v.bulkApplyFor); return true; }
+    if (v.bulkStatusFor) { setBulkStatusFor(null); setIpoDetail(v.bulkStatusFor); return true; }
+    if (v.ipoSheet) { setIpoSheet(null); return true; }
+    if (v.acctSheet) { setAcctSheet(null); return true; }
+    if (v.transferSheet) { setTransferSheet(null); return true; }
+    if (v.liveOpen) { setLiveOpen(false); return true; }
+    if (v.dataSheetOpen) { setDataSheetOpen(false); return true; }
+    if (v.ipoDetail) { setIpoDetail(null); return true; }
+    if (v.tab !== "dashboard") { setTab("dashboard"); return true; }
+    return false;
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.history) return;
+    // One buffered entry to absorb the first back press.
+    window.history.replaceState({ ledger: "root" }, "");
+    window.history.pushState({ ledger: "layer" }, "");
+
+    const onPop = () => {
+      if (closeTopLayer()) {
+        // Something closed, so put the buffer back for the next press.
+        window.history.pushState({ ledger: "layer" }, "");
+      } else {
+        // Nothing left: let the press do what it would have done anyway.
+        window.history.back();
+      }
+    };
+
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, [closeTopLayer]);
 
   /* ---------- writes ---------- */
   const persistAccounts = useCallback((next) => { setAccounts(next); saveTable("accounts", next); }, []);
@@ -1364,7 +1440,7 @@ export default function App() {
         <BulkApplySheet
           ipo={ipos.find((i) => i.id === bulkApplyFor)}
           accounts={accounts}
-          onClose={() => setBulkApplyFor(null)}
+          onClose={() => { setBulkApplyFor(null); setIpoDetail(bulkApplyFor); }}
           onSave={(newApps) => {
             persistIpos(ipos.map((i) => (i.id === bulkApplyFor
               ? { ...i, applications: [...(i.applications || []), ...newApps] }
@@ -1379,7 +1455,7 @@ export default function App() {
         <BulkStatusSheet
           ipo={ipos.find((i) => i.id === bulkStatusFor)}
           accounts={accounts}
-          onClose={() => setBulkStatusFor(null)}
+          onClose={() => { setBulkStatusFor(null); setIpoDetail(bulkStatusFor); }}
           onSave={(draft) => {
             persistIpos(ipos.map((i) => (i.id === bulkStatusFor
               ? {
@@ -1643,21 +1719,35 @@ function Dashboard({ stats, ipos, accounts, onOpenIpo }) {
       {lines.length > 0 && (
         <div style={{ marginBottom: 18 }}>
           <SectionLabel>Today</SectionLabel>
+          {/* Each issue is its own row. Naming three and opening whichever came
+              first is worse than not being tappable at all. */}
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {lines.map((l) => (
-              <button
-                key={l.key}
-                onClick={() => onOpenIpo(todo[l.key][0].id)}
-                style={{
-                  textAlign: "left", width: "100%", cursor: "pointer",
-                  background: COLORS.surface, border: `1px solid ${COLORS.border}`,
-                  borderLeft: `3px solid ${l.tone}`, borderRadius: 10, padding: "10px 12px",
+              <div key={l.key} style={{
+                background: COLORS.surface, border: `1px solid ${COLORS.border}`,
+                borderLeft: `3px solid ${l.tone}`, borderRadius: 10, overflow: "hidden",
+              }}>
+                <div style={{
+                  fontSize: 13, fontWeight: 700, color: COLORS.ink, padding: "10px 12px 6px",
                   fontFamily: "Inter, sans-serif",
-                }}
-              >
-                <div style={{ fontSize: 13, fontWeight: 700, color: COLORS.ink }}>{l.text}</div>
-                <div style={{ fontSize: 11.5, color: COLORS.inkSoft, marginTop: 2 }}>{l.detail}</div>
-              </button>
+                }}>{l.text}</div>
+                {todo[l.key].map((i, n) => (
+                  <button
+                    key={i.id}
+                    onClick={() => onOpenIpo(i.id)}
+                    style={{
+                      display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
+                      textAlign: "left", width: "100%", cursor: "pointer", background: "transparent",
+                      border: 0, borderTop: n === 0 ? "none" : `1px solid ${COLORS.border}`,
+                      padding: "8px 12px", fontFamily: "Inter, sans-serif",
+                      fontSize: 12.5, color: COLORS.inkSoft,
+                    }}
+                  >
+                    <span style={{ minWidth: 0, overflowWrap: "anywhere" }}>{i.company || "Untitled IPO"}</span>
+                    <ChevronRight size={14} color={COLORS.inkSoft} style={{ flexShrink: 0 }} />
+                  </button>
+                ))}
+              </div>
             ))}
           </div>
         </div>
@@ -2988,6 +3078,20 @@ function DataSheet({ state, session, cloudOn, syncing, syncError, lastSync, onCl
 
       {/* Deleted records are kept, not removed, so this is the way back. */}
       <SectionLabel>Deleted ({(state.trash || []).length})</SectionLabel>
+      {cloudOn && trashSyncIsBlocked() && (
+        <div style={{
+          background: COLORS.goldSoft, borderRadius: 10, padding: "9px 12px", marginBottom: 10,
+          fontSize: 12, color: COLORS.ink, display: "flex", gap: 8, alignItems: "flex-start",
+        }}>
+          <AlertTriangle size={14} color={COLORS.gold} style={{ flexShrink: 0, marginTop: 1 }} />
+          <span>
+            Deleted records are kept on this device but are not syncing yet — the cloud table
+            was created before they existed. Run <strong>migrate-trash.sql</strong> once in the
+            Supabase SQL editor and they will sync like everything else. The rest of the ledger
+            is syncing normally.
+          </span>
+        </div>
+      )}
       {(state.trash || []).length === 0 ? (
         <div style={{ fontSize: 12, color: COLORS.inkSoft, marginBottom: 12 }}>
           Nothing deleted. When you do delete something it is kept here, and can be put back.
