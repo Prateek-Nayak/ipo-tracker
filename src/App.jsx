@@ -1122,14 +1122,30 @@ export default function App() {
         /* The listing price is the opening print on debut day. The close can be
            far from it — Innovision opened at 466 and closed at 372.8 the same
            day — so the close is only a fallback when the open is unavailable. */
+        /* There is no closing price until the day has closed. On listing day
+           BSE simply has not filled it in, and treating that as a figure priced
+           the share at nothing on the one day everyone is watching it. Until
+           the day is over the share has an opening print and a last trade, and
+           that is all it has. */
+        /* Only when BSE positively says it listed today. A row with no listing
+           date at all says nothing about the day, and must be left to the
+           has-it-listed check further down rather than wiped here. */
+        const listingToday = !!hit.listedOn && hit.listedOn >= todayISO();
+        const listingClose = listingToday ? null : hit.listingClose;
+
         if (hit.listingOpen != null) {
           patch.listingPrice = String(hit.listingOpen);
           patch.listingPriceSource = "bse-open";
-        } else if (hit.listingClose != null) {
-          patch.listingPrice = String(hit.listingClose);
+        } else if (listingClose != null) {
+          patch.listingPrice = String(listingClose);
           patch.listingPriceSource = "bse-close";
+        } else if (listingToday) {
+          // Listed today with nothing settled yet: leave no stale figure behind.
+          patch.listingPrice = "";
+          patch.listingPriceSource = "";
         }
-        if (hit.listingClose != null) patch.listingClosePrice = String(hit.listingClose);
+        if (listingClose != null) patch.listingClosePrice = String(listingClose);
+        else if (listingToday) patch.listingClosePrice = "";
         /* An issue BSE knows about but has no listing row for has not listed
            yet, and that absence is itself information — otherwise a wrong
            listing date entered long ago can never be cleared, because there is
@@ -2244,10 +2260,10 @@ function IpoDetailSheet({ ipo, accounts, onClose, onEditIpo, onAddApplication, o
         <Badge color={COLORS.navy} bg="#EAEFF5">{ipo.category || "Mainboard"}</Badge>
         <Badge color={COLORS.inkSoft} bg="#EFEDE7">Price ₹{ipo.priceBand || "—"}</Badge>
         <Badge color={COLORS.inkSoft} bg="#EFEDE7">Lot {ipo.lotSize || "—"} sh</Badge>
-        {ipo.listingPrice && hasListed(ipo) && (
+        {Number(ipo.listingPrice) > 0 && hasListed(ipo) && (
           <Badge color={COLORS.inkSoft} bg="#EFEDE7">{ipo.listingPriceSource === "bse-close" ? "Listing close" : "Listed"} ₹{ipo.listingPrice}</Badge>
         )}
-        {hasListed(ipo) && ipo.listingClosePrice && ipo.listingPriceSource === "bse-open"
+        {hasListed(ipo) && Number(ipo.listingClosePrice) > 0 && ipo.listingPriceSource === "bse-open"
           && ipo.listingClosePrice !== ipo.listingPrice && (
           <Badge color={COLORS.inkSoft} bg="#EFEDE7">closed ₹{ipo.listingClosePrice}</Badge>
         )}
@@ -3789,10 +3805,17 @@ function LiveIposSheet({ existing, onClose, onImport }) {
       openDate: r.openDate || "",
       closeDate: r.closeDate || "",
       listingDate: r.listedOn || "",
-      listingPrice: r.listingOpen != null ? String(r.listingOpen)
-        : r.listingClose != null ? String(r.listingClose) : "",
-      listingPriceSource: r.listingOpen != null ? "bse-open" : r.listingClose != null ? "bse-close" : "",
-      listingClosePrice: r.listingClose != null ? String(r.listingClose) : "",
+      // Same rule as a refresh: no closing price until the day has closed.
+      ...(() => {
+        const listingToday = !!r.listedOn && r.listedOn >= todayISO();
+        const close = listingToday ? null : r.listingClose;
+        return {
+          listingPrice: r.listingOpen != null ? String(r.listingOpen)
+            : close != null ? String(close) : "",
+          listingPriceSource: r.listingOpen != null ? "bse-open" : close != null ? "bse-close" : "",
+          listingClosePrice: close != null ? String(close) : "",
+        };
+      })(),
       currentPrice: r.currentPrice != null ? String(r.currentPrice) : "",
       priceAsOf: r.currentPrice != null ? new Date().toISOString() : "",
       remarks: "",

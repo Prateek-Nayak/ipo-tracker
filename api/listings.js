@@ -32,8 +32,19 @@ function nameKey(s) {
 }
 
 const num = (v) => {
+  // Number(null) and Number("") are both 0, which is how "BSE has not said yet"
+  // arrived as a real figure of zero.
+  if (v === null || v === undefined || String(v).trim() === "") return null;
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
+};
+
+/* A traded price is never zero. BSE reports one it does not have yet as null or
+   blank, and a gain of zero is meaningful where a price of zero is not — so
+   prices go through this and gains do not. */
+const price = (v) => {
+  const n = num(v);
+  return n != null && n > 0 ? n : null;
 };
 
 const isoDate = (v) => (typeof v === "string" && v.length >= 10 ? v.slice(0, 10) : "");
@@ -345,9 +356,10 @@ async function bseListingOpen(scripCode, isoDay) {
 }
 
 const money = (v) => {
-  // Number("") is 0, so an absent price would otherwise become a confident zero.
+  // Number("") is 0, so an absent price would otherwise become a confident zero,
+  // and BSE writes anything over a thousand as "1,193.80".
   const s = String(v ?? "").replace(/,/g, "").trim();
-  return s ? num(s) : null;
+  return s ? price(s) : null;
 };
 
 // The scrip code is embedded in the company link BSE returns: .../aye/544699/
@@ -376,15 +388,15 @@ function normalise(row) {
     key: nameKey(row.CompanyName),
     shortName: row.Company_Short_Name || "",
     category: row.__category || "",
-    issuePrice: num(row.IssuePrice),
+    issuePrice: price(row.IssuePrice),
     listedOn: isoDate(row.ListedOn),
-    listingClose: num(row.ListingDayClose),
+    listingClose: price(row.ListingDayClose),
     lotSize: null,
     listingOpen: null,
     priceMin: null,
     priceMax: null,
     listingDayGain: num(row.ListingDayGain),
-    currentPrice: num(row.CurrentPrice),
+    currentPrice: price(row.CurrentPrice),
     gainSinceIssue: num(row.GainLoss),
     bseUrl: row.IMAGE || "",
   };
