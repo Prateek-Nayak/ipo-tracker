@@ -1,0 +1,61 @@
+{
+    "status": "success",
+    "data": {
+        "id": "symbiotec-pharmalab-limited-ipo",
+        "symbol": "SYMBIOTEC",
+        "name": "Symbiotec Pharmalab IPO",
+        "status": "closed",
+        "isin": "INE899I01028",
+        "issue_type": "regular",
+        "issue_size": 1757.0,
+        "industry": "Pharmaceuticals & Drugs",
+        "minimum_price": 938.0,
+        "maximum_price": 988.0,
+        "bidding_start_date": "2026-08-24",
+        "bidding_end_date": "2026-08-27",
+        "daily_start_time": "10:00:00",
+        "daily_end_time": "17:00:00",
+        "face_value": 2.0,
+        "tick_size": null,
+        "lot_size": 15,
+        "minimum_quantity": 15,
+        "cut_off_price": 988.0,
+        "listing_price": null,
+        "listing_exchange": "BSE,NSE",
+        "rhp_url": "https://assets.upstox.com/ipo/documents/rhp/symbiotec-rhp.pdf",
+        "drhp_url": null,
+        "timeline": {
+            "pre_apply_start_date": "2026-08-21",
+            "application_start_date": "2026-08-24",
+            "application_end_date": "2026-08-27",
+            "allotment_start_date": "2026-08-28",
+            "allotment_date": "2026-08-31",
+            "refund_initiation_date": "2026-08-31",
+            "listing_date": "2026-09-01",
+            "mandate_end_date": "2026-10-08"
+        },
+        "registrar_info": {
+            "name": "MUFG Intime India Private Limited",
+            "email": "symbiotecpharmalab.ipo@in.mpms.mufg.com",
+            "contact_name": "Shanti Gopalkrishnan",
+            "contact_number": "+91 810 811 4949",
+            "website": "https://in.mpms.mufg.com/",
+            "registrar": "MUFG"
+        },
+        "total_subscription": "82.94",
+        "investors": [
+            {
+                "category": "IND",
+                "description": null
+            },
+            {
+                "category": "EMP",
+                "description": null
+            },
+            {
+                "category": "HNI",
+                "description": null
+            }
+        ]
+    }
+}

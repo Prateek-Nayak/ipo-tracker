@@ -23,20 +23,29 @@ const COLORS_LIGHT = {
   redSoft: "#F5E4E2",
 };
 
+/* The same ledger after dark, not a different app: warm paper becomes warm
+   ink, and the brass, forest and brick keep their jobs. The greys are tinted
+   towards the navy rather than neutral — a flat #121212 under warm accents is
+   what makes a dark theme look like a bug report. Surfaces lift as they come
+   forward (bg < surface < border) so a card still reads as a card, and the
+   accents are lightened to hold contrast against them rather than reused from
+   the light palette, where they were chosen to sit on white. */
 const COLORS_DARK = {
-  bg: "#121212",
-  surface: "#1E1E1E",
-  border: "#333333",
-  ink: "#E0E0E0",
-  inkSoft: "#9E9E9E",
-  navy: "#90CAF9",
-  navyDeep: "#1E1E1E",
-  gold: "#FFB74D",
-  goldSoft: "#2C2416",
-  green: "#81C784",
-  greenSoft: "#1B2E1B",
-  red: "#EF5350",
-  redSoft: "#2E1B1B",
+  bg: "#141821",
+  surface: "#1C212C",
+  border: "#2C3342",
+  ink: "#E8E6E1",
+  inkSoft: "#98A0AE",
+  // The header keeps its weight by going darker than the page, as it does in
+  // daylight by going deeper than the paper.
+  navy: "#7BA7D9",
+  navyDeep: "#0E1219",
+  gold: "#D6A96A",
+  goldSoft: "#33291A",
+  green: "#6FBF8F",
+  greenSoft: "#182A22",
+  red: "#E0736B",
+  redSoft: "#2E1C1C",
 };
 
 const THEME_KEY = "ipo_ledger_theme";
@@ -89,6 +98,8 @@ const LogOut = (p) => <SvgIcon {...p}><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1
 const AlertTriangle = (p) => <SvgIcon {...p}><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" /><line x1="12" x2="12" y1="9" y2="13" /><line x1="12" x2="12.01" y1="17" y2="17" /></SvgIcon>;
 const ChevronRight = (p) => <SvgIcon {...p}><path d="m9 18 6-6-6-6" /></SvgIcon>;
 const Sparkles = (p) => <SvgIcon {...p}><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z" /></SvgIcon>;
+const Moon = (p) => <SvgIcon {...p}><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" /></SvgIcon>;
+const Sun = (p) => <SvgIcon {...p}><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" /></SvgIcon>;
 const Search = (p) => <SvgIcon {...p}><circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" /></SvgIcon>;
 const Layers = (p) => <SvgIcon {...p}><path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z" /><path d="m22 12.18-9.17 4.16a2 2 0 0 1-1.66 0L2 12.18" /><path d="m22 17.18-9.17 4.16a2 2 0 0 1-1.66 0L2 17.18" /></SvgIcon>;
 const ClipboardCheck = (p) => <SvgIcon {...p}><rect width="8" height="4" x="8" y="2" rx="1" ry="1" /><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" /><path d="m9 14 2 2 4-4" /></SvgIcon>;
@@ -812,6 +823,12 @@ export default function App() {
   const [transfers, setTransfers] = useState([]);
   const [trash, setTrash] = useState([]);
   const [loaded, setLoaded] = useState(false);
+  /* Drawn and settled are different moments now. The ledger is drawn from the
+     copy on this device straight away; it is settled once the cloud has been
+     heard from. Anything that writes to the ledger has to wait for settled, or
+     it races the reconcile and loses — a price refresh that finished first had
+     its results overwritten by the cloud copy landing after it. */
+  const [reconciled, setReconciled] = useState(false);
 
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState("");
@@ -915,6 +932,7 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
     setLoaded(false);
+    setReconciled(false);
     skipNextAutoSync.current = true;
 
     (async () => {
@@ -928,6 +946,7 @@ export default function App() {
       if (!cloudEnabled() || !userId) {
         apply(local);
         setLoaded(true);
+        setReconciled(true);
         return;
       }
 
@@ -935,7 +954,16 @@ export default function App() {
       const localIsOurs = !owner || owner === userId;
       const empty = { accounts: [], ipos: [], transfers: [], trash: [] };
 
-      apply(localIsOurs ? local : empty); // show something immediately, then reconcile
+      apply(localIsOurs ? local : empty);
+
+      /* Show the ledger the moment there is one worth showing. The copy on this
+         device is the same ledger the cloud holds, so waiting for the round trip
+         before drawing anything meant staring at "Loading ledger…" for as long
+         as Supabase took — several seconds — with the answer already in hand.
+
+         Only when this device holds nothing, or holds somebody else's, is there
+         genuinely nothing to draw, and only then is the wait real. */
+      if (localIsOurs && !isEmptyState(local)) setLoaded(true);
       setSyncing(true);
       try {
         const remote = await cloudLoad();
@@ -979,7 +1007,7 @@ export default function App() {
           setSyncError(e.message || "Could not reach the cloud.");
         }
       } finally {
-        if (!cancelled) { setSyncing(false); setLoaded(true); }
+        if (!cancelled) { setSyncing(false); setLoaded(true); setReconciled(true); }
       }
     })();
 
@@ -1291,46 +1319,47 @@ export default function App() {
     [ipos, refreshPricesFrom]
   );
 
-  // Refresh once per session when there is something whose value can move.
-  // Disabled for now — the Upstox listings endpoint is slow on cold start and
-  // blocks the browser's connection pool, which makes Supabase sync hang.
-  // Users can refresh manually from the Settings panel.
-  // useEffect(() => {
-  //   if (!loaded || pricedOnce.current) return;
-  //   const worthFetching = ipos.some((i) =>
-  //     (i.applications || []).some((a) =>
-  //       !a.sold && (a.allotmentStatus === "Allotted" || a.allotmentStatus === "Partial")) ||
-  //     !i.listingDate || !i.openDate || !i.closeDate || isBlank(i.listingPrice));
-  //   if (!worthFetching) return;
-  //   pricedOnce.current = true;
-  //   refreshPrices({ silent: true });
-  // }, [loaded, ipos, refreshPrices]);
+  /* Refresh once per session when there is something whose value can move.
+     It runs after the ledger is on screen, never before it: a slow price feed
+     delays a number, and must never delay the page. */
+  useEffect(() => {
+    if (!reconciled || pricedOnce.current) return;
+    // Worth doing whenever anything could be filled in: a live holding to
+    // value, or simply a date or listing price still missing.
+    const worthFetching = ipos.some((i) =>
+      (i.applications || []).some((a) =>
+        !a.sold && (a.allotmentStatus === "Allotted" || a.allotmentStatus === "Partial")) ||
+      !i.listingDate || !i.openDate || !i.closeDate || isBlank(i.listingPrice));
+    if (!worthFetching) return;
+    pricedOnce.current = true;
+    refreshPrices({ silent: true });
+  }, [reconciled, ipos, refreshPrices]);
 
   /* The figure on the cards is the last traded price, so it goes stale simply
-     by being looked at later. Disabled auto-refresh on resume — the listings
-     endpoint is slow and blocks sync. Users can refresh manually. */
+     by being looked at later. Coming back to the app is the moment that shows,
+     and it is also the only moment worth spending a request on — a tab sitting
+     in the background needs nothing. */
   const priceAsOfRef = useRef("");
   priceAsOfRef.current = priceInfo.asOf;
   const refreshRef = useRef(refreshPrices);
   refreshRef.current = refreshPrices;
 
-  // Disabled: auto-refresh on tab resume blocks sync
-  // useEffect(() => {
-  //   if (!loaded || typeof document === "undefined") return;
-  //   const onVisible = () => {
-  //     if (document.visibilityState !== "visible") return;
-  //     const asOf = priceAsOfRef.current;
-  //     if (!asOf) return;
-  //     const age = Date.now() - Date.parse(asOf);
-  //     if (Number.isFinite(age) && age > 3 * 60 * 1000) refreshRef.current({ silent: true });
-  //   };
-  //   document.addEventListener("visibilitychange", onVisible);
-  //   window.addEventListener("focus", onVisible);
-  //   return () => {
-  //     document.removeEventListener("visibilitychange", onVisible);
-  //     window.removeEventListener("focus", onVisible);
-  //   };
-  // }, [loaded]);
+  useEffect(() => {
+    if (!reconciled || typeof document === "undefined") return;
+    const onVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      const asOf = priceAsOfRef.current;
+      if (!asOf) return;
+      const age = Date.now() - Date.parse(asOf);
+      if (Number.isFinite(age) && age > 3 * 60 * 1000) refreshRef.current({ silent: true });
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
+    };
+  }, [reconciled]);
 
   const replaceAll = useCallback((state) => {
     persistAccounts(state.accounts);
@@ -1394,7 +1423,7 @@ export default function App() {
     return <AuthScreen mode={authMode} setMode={setAuthMode} notice={linkNotice} />;
   }
 
-  if (!loaded) return <Splash text="Loading ledger…" />;
+  if (!loaded) return <LedgerSkeleton text="LOADING YOUR LEDGER" />;
 
   return (
     <div style={{
@@ -1644,6 +1673,98 @@ function Splash({ text }) {
       display: "flex", alignItems: "center", justifyContent: "center",
     }}>
       <div style={{ fontFamily: "'Fraunces', serif", color: COLORS.navy, fontSize: 18 }}>{text}</div>
+    </div>
+  );
+}
+
+/* A block standing in for something not here yet. Breathing rather than
+   sliding: a shimmer sweeping across a phone is a lot of movement to look at
+   for something that is only going to be replaced. */
+function Bone({ w = "100%", h = 12, r = 6, style = {} }) {
+  return (
+    <div style={{
+      width: w, height: h, borderRadius: r, background: COLORS.border,
+      animation: "ledgerPulse 1.4s ease-in-out infinite", ...style,
+    }} />
+  );
+}
+
+/* The first load on a new device has nothing cached to draw, and a blank page
+   for the length of a network round trip reads as a broken app. This is the
+   same furniture the ledger has — header, four figures, a list of cards, the
+   nav — so what arrives fills the shape that was already there instead of
+   replacing a white screen. */
+function LedgerSkeleton({ text }) {
+  return (
+    <div style={{
+      minHeight: "100dvh", background: COLORS.bg, fontFamily: "Inter, sans-serif",
+      maxWidth: 520, margin: "0 auto", position: "relative",
+      paddingBottom: "calc(78px + env(safe-area-inset-bottom))",
+    }}>
+      <style>{FONT_IMPORT}</style>
+      <style>{`@keyframes ledgerPulse { 0%,100% { opacity: .45 } 50% { opacity: .85 } }`}</style>
+
+      <div style={{
+        background: COLORS.navyDeep,
+        padding: "calc(18px + env(safe-area-inset-top)) 14px 14px",
+        borderBottom: `3px double ${COLORS.gold}`,
+      }}>
+        <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 700, fontSize: 21, color: "#fff" }}>
+          The Ledger
+        </div>
+        <div style={{
+          fontFamily: "'JetBrains Mono', monospace", fontSize: 10.5, color: COLORS.gold,
+          marginTop: 2, letterSpacing: 0.5,
+        }}>{text}</div>
+      </div>
+
+      <div style={{ padding: 14 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
+          {[0, 1, 2, 3].map((i) => (
+            <div key={i} style={{
+              background: COLORS.surface, border: `1px solid ${COLORS.border}`,
+              borderRadius: 12, padding: "14px 12px",
+            }}>
+              <Bone w={18} h={18} r={5} />
+              <Bone w="72%" h={20} style={{ marginTop: 10 }} />
+              <Bone w="52%" h={10} style={{ marginTop: 8 }} />
+            </div>
+          ))}
+        </div>
+
+        <Bone w={110} h={11} style={{ marginBottom: 10 }} />
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {[0, 1, 2].map((i) => (
+            <div key={i} style={{
+              background: COLORS.surface, border: `1px solid ${COLORS.border}`,
+              borderRadius: 12, display: "flex", overflow: "hidden",
+            }}>
+              <div style={{ width: 8, background: COLORS.border, flexShrink: 0 }} />
+              <div style={{ padding: "12px 14px", flex: 1 }}>
+                <Bone w="62%" h={15} />
+                <Bone w="80%" h={10} style={{ marginTop: 7 }} />
+                <Bone w={72} h={16} r={8} style={{ marginTop: 9 }} />
+                <Bone h={5} r={3} style={{ marginTop: 10 }} />
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div style={{
+        position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)",
+        width: "100%", maxWidth: 520, background: COLORS.navyDeep,
+        display: "flex", justifyContent: "space-around",
+        padding: "10px 6px calc(14px + env(safe-area-inset-bottom))",
+        borderTop: `1px solid ${COLORS.navy}`,
+      }}>
+        {["Overview", "IPOs", "Transfers", "Accounts"].map((label) => (
+          <div key={label} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4, padding: "4px 10px" }}>
+            <div style={{ width: 20, height: 20, borderRadius: 5, background: COLORS.navy, opacity: 0.35 }} />
+            <span style={{ fontSize: 10, color: "#8592A6", fontWeight: 500 }}>{label}</span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -3214,72 +3335,52 @@ function DataSheet({ state, session, cloudOn, syncing, syncError, lastSync, onCl
       )}
 
       <div style={{ height: 18 }} />
-      <SectionLabel>Appearance</SectionLabel>
-      <div style={{
-        background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 12,
-        padding: "12px 14px", display: "flex", justifyContent: "space-between", alignItems: "center",
-        marginBottom: 8,
-      }}>
-        <div>
-          <div style={{ fontSize: 13, fontWeight: 600, color: COLORS.ink }}>Dark mode</div>
-          <div style={{ fontSize: 12, color: COLORS.inkSoft, marginTop: 2 }}>
-            {COLORS === COLORS_DARK ? "On" : "Off"}
-          </div>
-        </div>
-        <button
-          onClick={() => {
-            const next = COLORS === COLORS_DARK ? "light" : "dark";
-            try { localStorage.setItem(THEME_KEY, next); } catch {}
-            window.location.reload();
-          }}
-          style={{
-            width: 48, height: 26, borderRadius: 13, border: "none", cursor: "pointer",
-            background: COLORS === COLORS_DARK ? COLORS.navy : COLORS.border,
-            position: "relative",
-          }}
-        >
-          <div style={{
-            width: 20, height: 20, borderRadius: 10, background: "#fff",
-            position: "absolute", top: 3,
-            left: COLORS === COLORS_DARK ? 25 : 3,
-            transition: "left 0.2s",
-          }} />
-        </button>
-      </div>
-
-      <div style={{ height: 18 }} />
+      {/* Prices refresh on their own, but a manual pull belongs here: it says
+          what the figure is, how old, and gives you a way to insist. */}
       <SectionLabel>Market prices</SectionLabel>
       <div style={{
         background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 12,
-        padding: "12px 14px", marginBottom: 8, fontSize: 12,
+        padding: "10px 12px", marginBottom: 8, fontSize: 12,
         color: priceInfo?.error ? COLORS.red : COLORS.inkSoft,
       }}>
         {priceInfo?.error
           ? priceInfo.error
           : priceInfo?.asOf
-            ? `${priceInfo.matched} of ${priceInfo.total} IPOs matched on BSE`
+            ? `${priceInfo.matched} of ${priceInfo.total} IPOs matched`
               + `${priceInfo.reblocked ? ` · ${priceInfo.reblocked} blocked amounts recalculated` : ""}`
-              // Say which price it is. "Now" on a card is the last trade, which
-              // outside market hours is simply where the day closed.
               + ` · last traded price, ${priceAge(priceInfo.asOf)}`
             : "Not updated yet. Unrealised gains use the listing price until you do."}
       </div>
       <PrimaryButton ghost onClick={() => onRefreshPrices().catch(() => {})} disabled={pricing}>
-        {pricing ? "Fetching from BSE…" : "Update market prices"}
+        {pricing ? "Fetching prices…" : "Update market prices"}
       </PrimaryButton>
 
-      <div style={{ height: 18 }} />
-      <SectionLabel>Backup</SectionLabel>
-      <div style={{ display: "flex", gap: 10 }}>
-        <div style={{ flex: 1 }}><PrimaryButton ghost onClick={copyExport}>Copy JSON</PrimaryButton></div>
-        <div style={{ flex: 1 }}>
-          <PrimaryButton ghost onClick={downloadExport}>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-              <DownloadIcon size={14} color={COLORS.ink} /> Download
-            </span>
-          </PrimaryButton>
-        </div>
-      </div>
+      <div style={{ height: 12 }} />
+      <SectionLabel>Appearance</SectionLabel>
+      {/* One button that says what pressing it does, rather than a switch you
+          have to read the state of. The theme is baked into a module-level
+          palette, so changing it reloads — quick, and it keeps every colour in
+          the app consistent without threading a context through all of it. */}
+      <button
+        onClick={() => {
+          const next = COLORS === COLORS_DARK ? "light" : "dark";
+          try { localStorage.setItem(THEME_KEY, next); } catch { /* the reload still applies it */ }
+          window.location.reload();
+        }}
+        style={{
+          width: "100%", background: COLORS.surface, border: `1px solid ${COLORS.border}`,
+          borderRadius: 12, padding: "12px 14px", marginBottom: 8, cursor: "pointer",
+          display: "flex", alignItems: "center", gap: 10, textAlign: "left",
+          fontFamily: "Inter, sans-serif",
+        }}
+      >
+        {COLORS === COLORS_DARK
+          ? <Sun size={16} color={COLORS.gold} />
+          : <Moon size={16} color={COLORS.navy} />}
+        <span style={{ fontSize: 13, fontWeight: 600, color: COLORS.ink }}>
+          {COLORS === COLORS_DARK ? "Switch to light" : "Switch to dark"}
+        </span>
+      </button>
 
       <div style={{ height: 12 }} />
 

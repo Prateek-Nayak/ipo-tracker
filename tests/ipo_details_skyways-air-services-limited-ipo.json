@@ -1,0 +1,57 @@
+{
+    "status": "success",
+    "data": {
+        "id": "skyways-air-services-limited-ipo",
+        "symbol": "SKYWAYS",
+        "name": "Skyways Air Services Limited",
+        "status": "closed",
+        "isin": "INE0PX301025",
+        "issue_type": "regular",
+        "issue_size": 583.0,
+        "industry": "Logistics",
+        "minimum_price": 131.0,
+        "maximum_price": 138.0,
+        "bidding_start_date": "2026-08-24",
+        "bidding_end_date": "2026-08-27",
+        "daily_start_time": "10:00:00",
+        "daily_end_time": "17:00:00",
+        "face_value": 10.0,
+        "tick_size": null,
+        "lot_size": 100,
+        "minimum_quantity": 100,
+        "cut_off_price": 138.0,
+        "listing_price": null,
+        "listing_exchange": "BSE,NSE",
+        "rhp_url": "https://r2.skyways-air.in/RHP-Skyways.pdf",
+        "drhp_url": null,
+        "timeline": {
+            "pre_apply_start_date": "2026-08-20",
+            "application_start_date": "2026-08-24",
+            "application_end_date": "2026-08-27",
+            "allotment_start_date": "2026-08-28",
+            "allotment_date": "2026-08-31",
+            "refund_initiation_date": "2026-08-31",
+            "listing_date": "2026-09-01",
+            "mandate_end_date": "2026-10-08"
+        },
+        "registrar_info": {
+            "name": "Bigshare Services Private Limited",
+            "email": "ipo@bigshareonline.com",
+            "contact_name": "Mr. Vinayak Morbale",
+            "contact_number": "+91 22-62638200",
+            "website": "https://www.bigshareonline.com/",
+            "registrar": "BIGSHARE"
+        },
+        "total_subscription": "82.71",
+        "investors": [
+            {
+                "category": "IND",
+                "description": null
+            },
+            {
+                "category": "HNI",
+                "description": null
+            }
+        ]
+    }
+}
