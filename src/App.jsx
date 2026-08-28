@@ -535,8 +535,6 @@ async function rest(path, options = {}) {
       apikey: CLOUD.anonKey,
       Authorization: `Bearer ${session.access_token}`,
       "Content-Type": "application/json",
-      "Cache-Control": "no-cache, no-store",
-      Pragma: "no-cache",
       ...(options.headers || {}),
     },
   });
@@ -856,7 +854,6 @@ export default function App() {
   const [priceInfo, setPriceInfo] = useState({ asOf: "", matched: 0, total: 0, error: "" });
 
   const skipNextAutoSync = useRef(true);
-  const syncingRef = useRef(false);
   const pricedOnce = useRef(false);
   const [, bumpHolidays] = useState(0);
 
@@ -963,7 +960,6 @@ export default function App() {
       const empty = { accounts: [], ipos: [], transfers: [], trash: [] };
 
       apply(localIsOurs ? local : empty); // show something immediately, then reconcile
-      setLoaded(true); // Show the UI immediately with local data
       setSyncing(true);
       try {
         const remote = await cloudLoad();
@@ -1007,7 +1003,7 @@ export default function App() {
           setSyncError(e.message || "Could not reach the cloud.");
         }
       } finally {
-        if (!cancelled) { setSyncing(false); }
+        if (!cancelled) { setSyncing(false); setLoaded(true); }
       }
     })();
 
@@ -1095,39 +1091,24 @@ export default function App() {
 
   const pushToCloud = useCallback(async () => {
     if (!cloudEnabled() || !userId) return;
-    if (syncingRef.current) return; // Already syncing — don't stack calls
-    syncingRef.current = true;
     setSyncing(true);
     try {
       const state = { accounts, ipos, transfers, trash };
-
-      // Race the actual sync against a timeout to prevent indefinite freezes
-      const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("Sync timed out after 15 seconds. Try again.")), 15000)
-      );
-
-      await Promise.race([
-        (async () => {
-          // Never let a device that has nothing wipe a cloud that has something.
-          if (isEmptyState(state)) {
-            const remote = await cloudLoad();
-            if (!isEmptyState(remote)) {
-              setSyncError("This device is empty but your cloud ledger is not. Nothing was overwritten — reload to pull it down.");
-              return;
-            }
-          }
-          await cloudSave(userId, state);
-          setSyncError("");
-          setLastSync(new Date());
-          try { localStorage.setItem(STORAGE_PREFIX + "lastSyncTs", Date.now().toString()); } catch {}
-        })(),
-        timeoutPromise,
-      ]);
+      // Never let a device that has nothing wipe a cloud that has something.
+      if (isEmptyState(state)) {
+        const remote = await cloudLoad();
+        if (!isEmptyState(remote)) {
+          setSyncError("This device is empty but your cloud ledger is not. Nothing was overwritten — reload to pull it down.");
+          return;
+        }
+      }
+      await cloudSave(userId, state);
+      setSyncError("");
+      setLastSync(new Date());
     } catch (e) {
       console.error("Cloud save failed", e);
       setSyncError(e.message || "Sync failed.");
     } finally {
-      syncingRef.current = false;
       setSyncing(false);
     }
   }, [userId, accounts, ipos, transfers, trash]);
@@ -1435,6 +1416,8 @@ export default function App() {
     return <AuthScreen mode={authMode} setMode={setAuthMode} notice={linkNotice} />;
   }
 
+  if (!loaded) return <Splash text="Loading ledger…" />;
+
   return (
     <ThemeContext.Provider value={{ theme, colors, toggle: toggleTheme }}>
     <div style={{
@@ -1460,12 +1443,6 @@ export default function App() {
       />
 
       <div style={{ padding: "14px 14px 0" }}>
-        {!loaded && syncing ? (
-          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "40px 0", gap: 12 }}>
-            <Loader2 size={28} color={colors.navy} className="spin" />
-            <div style={{ color: colors.inkSoft, fontSize: 13, fontFamily: "Inter, sans-serif" }}>Loading your ledger…</div>
-          </div>
-        ) : (<>
         {tab === "dashboard" && (
           <Dashboard stats={stats} ipos={ipos} accounts={accounts} onOpenIpo={(id) => setIpoDetail(id)} />
         )}
@@ -1508,7 +1485,6 @@ export default function App() {
             }}
           />
         )}
-        </>)}
       </div>
 
       <BottomNav tab={tab} setTab={setTab} />
