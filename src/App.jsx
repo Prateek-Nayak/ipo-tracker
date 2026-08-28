@@ -1092,7 +1092,11 @@ export default function App() {
         .filter(Boolean)
         .slice(0, 40)
         .join("|");
-      const res = await fetch(`/api/listings?from=${from}&keys=${encodeURIComponent(keys)}`);
+      /* A refresh you asked for should not be answered from a cache. The
+         automatic one on load is happy with a recent copy; pressing the button
+         is a request for the price right now. */
+      const bust = opts.silent ? "" : `&at=${Date.now()}`;
+      const res = await fetch(`/api/listings?from=${from}${bust}&keys=${encodeURIComponent(keys)}`);
       const text = await res.text();
       let data = {};
       try { data = JSON.parse(text); } catch { /* handled next */ }
@@ -1231,6 +1235,33 @@ export default function App() {
     pricedOnce.current = true;
     refreshPrices({ silent: true });
   }, [loaded, ipos, refreshPrices]);
+
+  /* The figure on the cards is the last traded price, so it goes stale simply
+     by being looked at later. Coming back to the app is the moment that shows,
+     and it is also the only moment worth spending a request on — a tab sitting
+     in the background needs nothing. Refetched when what is on screen is more
+     than a few minutes old and the market could have moved since. */
+  const priceAsOfRef = useRef("");
+  priceAsOfRef.current = priceInfo.asOf;
+  const refreshRef = useRef(refreshPrices);
+  refreshRef.current = refreshPrices;
+
+  useEffect(() => {
+    if (!loaded || typeof document === "undefined") return;
+    const onVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      const asOf = priceAsOfRef.current;
+      if (!asOf) return;
+      const age = Date.now() - Date.parse(asOf);
+      if (Number.isFinite(age) && age > 3 * 60 * 1000) refreshRef.current({ silent: true });
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
+    };
+  }, [loaded]);
 
   const replaceAll = useCallback((state) => {
     persistAccounts(state.accounts);
@@ -2954,6 +2985,18 @@ const TRASH_KINDS = {
   application: "Application",
 };
 
+/* How old the figure on screen is, in the terms someone would ask it in. */
+function priceAge(asOf) {
+  const t = Date.parse(asOf || "");
+  if (!Number.isFinite(t)) return "time unknown";
+  const mins = Math.round((Date.now() - t) / 60000);
+  if (mins <= 1) return "just now";
+  if (mins < 60) return `${mins} min ago`;
+  const at = fmtTime(new Date(t));
+  const hrs = Math.round(mins / 60);
+  return hrs < 12 ? `${hrs} hr ago (${at})` : `as of ${at}`;
+}
+
 function DataSheet({ state, session, cloudOn, syncing, syncError, lastSync, onClose, onSyncNow, onReplaceAll, onRestore, onSignOut, pricing, priceInfo, onRefreshPrices }) {
   const [importText, setImportText] = useState("");
   const [notice, setNotice] = useState("");
@@ -3054,7 +3097,11 @@ function DataSheet({ state, session, cloudOn, syncing, syncError, lastSync, onCl
         {priceInfo?.error
           ? priceInfo.error
           : priceInfo?.asOf
-            ? `${priceInfo.matched} of ${priceInfo.total} IPOs matched on BSE${priceInfo.reblocked ? ` · ${priceInfo.reblocked} blocked amounts recalculated` : ""} · as of ${fmtTime(new Date(priceInfo.asOf))}`
+            ? `${priceInfo.matched} of ${priceInfo.total} IPOs matched on BSE`
+              + `${priceInfo.reblocked ? ` · ${priceInfo.reblocked} blocked amounts recalculated` : ""}`
+              // Say which price it is. "Now" on a card is the last trade, which
+              // outside market hours is simply where the day closed.
+              + ` · last traded price, ${priceAge(priceInfo.asOf)}`
             : "Not updated yet. Unrealised gains use the listing price until you do."}
       </div>
       <PrimaryButton ghost onClick={() => onRefreshPrices().catch(() => {})} disabled={pricing}>

@@ -513,7 +513,11 @@ export default async function handler(req, res) {
       return res.status(502).json({ error: "BSE returned no listings. It may be blocking this server." });
     }
 
-    res.setHeader("Cache-Control", "s-maxage=600, stale-while-revalidate=1800");
+    /* These rows carry the last traded price, so ten minutes of edge cache made
+       a live number look like yesterday's. A minute is short enough that the
+       figure on screen is the market's, and long enough that a burst of
+       refreshes still costs BSE one request. */
+    res.setHeader("Cache-Control", "s-maxage=60, stale-while-revalidate=300");
     return res.status(200).json({
       source: "BSE",
       fetchedAt: new Date().toISOString(),
