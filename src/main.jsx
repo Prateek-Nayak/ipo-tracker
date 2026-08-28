@@ -7,7 +7,7 @@ import { inject } from "@vercel/analytics";
 import { bootstrapUpstoxMigration } from "./upstoxMigration.js";
 
 async function bootstrap() {
-  const cleanupUiRules = await bootstrapUpstoxMigration();
+  await bootstrapUpstoxMigration();
 
   createRoot(document.getElementById("root")).render(
     <React.StrictMode><App /></React.StrictMode>
@@ -16,7 +16,6 @@ async function bootstrap() {
   registerSW();
   inject();
 
-  return cleanupUiRules;
 }
 
 bootstrap().catch((error) => {

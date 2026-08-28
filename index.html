@@ -15,6 +15,22 @@
     <title>The Ledger — Family IPO Register</title>
   </head>
   <body>
+    <!--
+      Runs before the stylesheet paints and long before React exists. Without it
+      a dark install shows a cream page for as long as the bundle takes to load
+      and parse — which on a phone is the most visible moment there is.
+    -->
+    <script>
+      (function () {
+        try {
+          var dark = localStorage.getItem("ipo_ledger_theme") === "dark";
+          document.documentElement.style.setProperty("--ledger-bg", dark ? "#141821" : "#F7F5F0");
+          document.documentElement.style.colorScheme = dark ? "dark" : "light";
+          var meta = document.querySelector('meta[name="theme-color"]');
+          if (meta) meta.setAttribute("content", dark ? "#0E1219" : "#152A44");
+        } catch (e) { /* the default in the stylesheet stands */ }
+      })();
+    </script>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
   </body>

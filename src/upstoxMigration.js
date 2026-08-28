@@ -166,152 +166,22 @@ async function pullCloudLedger() {
   return true;
 }
 
-function installDeleteCopyGuard() {
-  if (window.__ipoDeleteCopyGuard) return;
-  window.__ipoDeleteCopyGuard = true;
-  const originalConfirm = window.confirm.bind(window);
-  window.confirm = (message) => {
-    let text = String(message || "");
-    text = text
-      .replace(/\s*It is kept, and can be put back from Sync & Data\.?/gi, "")
-      .replace(/\s*It can be put back from Sync & Data\.?/gi, "")
-      .replace(/\s*You can put it back from Sync & Data\.?/gi, "")
-      .replace(/\s*The account itself is kept and can be put back from Sync & Data\.?/gi, "")
-      .replace(/\s*The account itself is kept and can be put back from Sync & Data\.*/gi, "")
-      .replace(/\s+/g, " ")
-      .trim();
-    return originalConfirm(text);
-  };
-}
+/* The UI layer that used to live here — a MutationObserver rewriting badges and
+   text, a click handler hijacking "Sync now", and a pass that hid the deleted
+   records — has been removed.
 
-function hideDeletedUi() {
-  const elements = Array.from(document.querySelectorAll("body *"));
-  const deletedLabel = elements.find((el) => /^Deleted\s*\(/i.test((el.textContent || "").trim()) && el.children.length === 1);
-  if (deletedLabel) {
-    deletedLabel.style.display = "none";
-    let sibling = deletedLabel.nextElementSibling;
-    while (sibling) {
-      const text = (sibling.textContent || "").trim();
-      if (/^Restore from a backup/i.test(text)) break;
-      sibling.style.display = "none";
-      sibling = sibling.nextElementSibling;
-    }
-  }
-  elements.forEach((el) => {
-    const text = (el.textContent || "").trim();
-    if (/^Restore from a backup/i.test(text)) {
-      el.style.display = "none";
-      if (el.parentElement && el.parentElement.children.length <= 2) el.parentElement.style.display = "none";
-    }
-    if (/^(Show \d+ deleted item|Show \d+ deleted items|Restore|Restore all|Deleted items|Trash)$/i.test(text) || /^Restore\b/i.test(text)) {
-      el.style.display = "none";
-    }
-  });
-}
+   It could not work: the observer watched characterData and the patch wrote
+   text nodes, so every rewrite triggered the next one, and each pass walked
+   every element in the document. That is the freeze. The "Sync now" handler
+   called stopImmediatePropagation and then reloaded the page, which is why
+   syncing reloaded the screen.
 
-function patchMarketStatusText() {
-  const raw = JSON.parse(localStorage.getItem(`${STORAGE_PREFIX}ipos`) || "[]");
-  if (!Array.isArray(raw)) return;
-  const total = raw.length;
-  const matched = raw.filter((ipo) => Number(ipo?.currentPrice) > 0).length;
-  const nodes = Array.from(document.querySelectorAll("body *"));
-  nodes.forEach((el) => {
-    if (el.children.length) return;
-    const text = (el.textContent || "").trim();
-    if (!/^\d+\s+of\s+\d+\s+IPOs\s+matched\s+on\s+Upstox/i.test(text)) return;
-    el.textContent = `${matched} of ${total} IPOs matched on Upstox`;
-  });
-}
-
-function patchBadgesAndText() {
-  const today = todayISO();
-  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-  const replacements = [
-    ["Fetching from BSE…", "Fetching from Upstox…"],
-    ["matched on BSE", "matched on Upstox"],
-    ["from BSE, ₹", "from Upstox, ₹"],
-    ["whenever BSE has its own value", "whenever Upstox has its own value"],
-    ["Pull listing and current market prices from BSE", "Pull listing and current market prices from Upstox"],
-  ];
-  const nodes = []; let node; while ((node = walker.nextNode())) nodes.push(node);
-  nodes.forEach((textNode) => {
-    let text = textNode.nodeValue || "";
-    replacements.forEach(([a, b]) => { text = text.split(a).join(b); });
-    text = text.replace(/\s*·\s*\d+\s+deleted\b/gi, "");
-    if (!/subscription/i.test(textNode.parentElement?.textContent || "")) text = text.replace(/\bBSE\b/g, "Upstox");
-    if (text !== textNode.nodeValue) textNode.nodeValue = text;
-  });
-
-  document.querySelectorAll("span, div, button").forEach((el) => {
-    const text = (el.textContent || "").trim();
-    if (!/^LISTS(?:\s|$)/i.test(text) || el.children.length) return;
-    const container = el.closest("article, li, label, section, div");
-    const body = container?.textContent || "";
-    if (!/RECORD ALLOTMENT/i.test(body)) return;
-
-    let allot = "";
-    try {
-      const raw = JSON.parse(localStorage.getItem(`${STORAGE_PREFIX}ipos`) || "[]");
-      const candidates = raw.filter((i) => i?.company && body.includes(i.company));
-      const exact = candidates.find((i) => i.allotmentDate) || candidates.find((i) => i.company);
-      allot = exact?.allotmentDate || "";
-    } catch {}
-
-    if (allot && allot >= today) {
-      el.textContent = allot === today ? "ALLOTMENT TODAY" : `ALLOTMENT ${fmtDate(allot).toUpperCase()}`;
-      el.style.display = "inline-block";
-    }
-  });
-
-  /* On the listing date, the badge remains "LISTS TODAY" until an actual LTP
-     is available. Once Upstox supplies a positive LTP, use the normal listed
-     wording and let the existing card valuation show the LTP/gain. */
-  document.querySelectorAll("span, div, button").forEach((el) => {
-    const text = (el.textContent || "").trim();
-    if (text !== "LISTS TODAY" || el.children.length) return;
-    const container = el.closest("article, li, label, section, div");
-    const body = container?.textContent || "";
-    let hasLtp = false;
-    try {
-      const raw = JSON.parse(localStorage.getItem(`${STORAGE_PREFIX}ipos`) || "[]");
-      const candidates = raw.filter((i) => i?.company && body.includes(i.company));
-      hasLtp = candidates.some((i) => Number(i?.currentPrice) > 0);
-    } catch {}
-    if (hasLtp) el.textContent = "LISTED TODAY";
-  });
-
-  patchMarketStatusText();
-}
-
-function installUiRules() {
-  if (window.__ipoUpstoxUiRules) return () => {};
-  window.__ipoUpstoxUiRules = true;
-  let syncingPull = false;
-  installDeleteCopyGuard();
-
-  const patch = () => {
-    hideDeletedUi();
-    patchBadgesAndText();
-  };
-  patch();
-  const observer = new MutationObserver(patch);
-  observer.observe(document.body, { childList: true, subtree: true, characterData: true });
-
-  document.addEventListener("click", async (event) => {
-    if (syncingPull) return;
-    const button = event.target?.closest?.("button"); if (!button) return;
-    const text = (button.textContent || "").trim();
-    if (!/^Sync now$/i.test(text)) return;
-    event.preventDefault(); event.stopImmediatePropagation(); syncingPull = true;
-    button.disabled = true;
-    try { if (await pullCloudLedger()) window.location.reload(); }
-    finally { syncingPull = false; button.disabled = false; }
-  }, true);
-  return () => observer.disconnect();
-}
+   Everything it was for now lives in the app itself, where React can be
+   responsible for its own DOM: the wording says Upstox because the source says
+   Upstox, and syncing pulls the cloud in state rather than through a reload.
+   What remains here is the one-time data migration, which touches data only. */
 
 export async function bootstrapUpstoxMigration() {
   installApiGuard();
   await migrateLocalAndCloud();
-  return installUiRules();
 }

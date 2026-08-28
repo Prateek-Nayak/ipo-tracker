@@ -21,6 +21,14 @@ const COLORS_LIGHT = {
   greenSoft: "#E4F0E9",
   red: "#A13D3D",
   redSoft: "#F5E4E2",
+  /* Headings are the deep navy on paper, but that same colour is the header's
+     background — so it needs a name of its own, or a dark theme has to choose
+     between an invisible heading and a washed-out header. */
+  heading: "#152A44",
+  // What you type into, a shade off the surface it sits on.
+  field: "#FDFCFA",
+  // The quiet blue a neutral badge sits on.
+  chip: "#EAEFF5",
 };
 
 /* The same ledger after dark, not a different app: warm paper becomes warm
@@ -46,12 +54,85 @@ const COLORS_DARK = {
   greenSoft: "#182A22",
   red: "#E0736B",
   redSoft: "#2E1C1C",
+  heading: "#F0EDE6",
+  field: "#232A38",
+  chip: "#243244",
 };
 
 const THEME_KEY = "ipo_ledger_theme";
-let COLORS = (function() {
-  try { return localStorage.getItem(THEME_KEY) === "dark" ? COLORS_DARK : COLORS_LIGHT; } catch { return COLORS_LIGHT; }
-})();
+
+function storedTheme() {
+  try { return localStorage.getItem(THEME_KEY) === "dark" ? "dark" : "light"; } catch { return "light"; }
+}
+
+/* One object, mutated in place, that every style in the app reads. Reassigning
+   it would leave the styles built at module load pointing at the old palette,
+   which is why changing theme used to need a reload. */
+let themeName = storedTheme();
+const COLORS = { ...(themeName === "dark" ? COLORS_DARK : COLORS_LIGHT) };
+const themeListeners = new Set();
+const isDark = () => themeName === "dark";
+
+function applyTheme(next) {
+  themeName = next === "dark" ? "dark" : "light";
+  Object.assign(COLORS, themeName === "dark" ? COLORS_DARK : COLORS_LIGHT);
+  buildStyles();
+  paintDocument();
+  try { localStorage.setItem(THEME_KEY, themeName); } catch { /* it still applies for this session */ }
+  themeListeners.forEach((fn) => fn());
+}
+
+/* Styles that quote the palette have to be rebuilt when it changes. They are
+   module bindings rather than fixed objects, so every component picks up the
+   new one on its next render without any of them being touched. */
+function buildStyles() {
+  inputStyle = {
+    width: "100%", boxSizing: "border-box", padding: "10px 12px",
+    minHeight: 44, WebkitAppearance: "none",
+    border: `1px solid ${COLORS.border}`, borderRadius: 8, fontSize: 16,
+    fontFamily: "Inter, sans-serif", color: COLORS.ink, background: COLORS.field,
+    outline: "none",
+  };
+  selectStyle = {
+    ...inputStyle, width: "auto", minWidth: 0, minHeight: 36, padding: "6px 8px",
+    fontSize: 12, fontWeight: 600,
+  };
+  chipBase = {
+    border: `1px solid ${COLORS.border}`, background: COLORS.surface, color: COLORS.inkSoft,
+    borderRadius: 999, padding: "7px 12px", fontSize: 12, fontWeight: 600,
+    fontFamily: "Inter, sans-serif", cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0,
+  };
+  // Reads on both: white on deep navy in daylight, dark on pale blue after it.
+  chipOn = { background: COLORS.navy, border: `1px solid ${COLORS.navy}`, color: COLORS.surface };
+  iconBtnStyle = {
+    border: "none", background: COLORS.surface, width: 44, flex: 1, cursor: "pointer",
+    display: "flex", alignItems: "center", justifyContent: "center",
+  };
+  smallIconBtn = {
+    width: 30, height: 30, borderRadius: 8, border: `1px solid ${COLORS.border}`, background: COLORS.bg,
+    display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0,
+  };
+  roundIconBtn = {
+    width: 36, height: 36, borderRadius: 8, border: `1px solid ${COLORS.border}`, background: COLORS.bg,
+    display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer",
+  };
+}
+buildStyles();
+paintDocument();
+
+/* The page behind React, which is painted before any of it runs and shows
+   through wherever the app does not reach. */
+function paintDocument() {
+  if (typeof document === "undefined") return;
+  const root = document.documentElement;
+  if (root) root.style.background = COLORS.bg;
+  if (document.body) {
+    document.body.style.background = COLORS.bg;
+    document.body.style.colorScheme = themeName;
+  }
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute("content", COLORS.navyDeep);
+}
 
 const FONT_IMPORT = `@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');`;
 
@@ -683,13 +764,7 @@ function Field({ label, children }) {
   );
 }
 
-const inputStyle = {
-  width: "100%", boxSizing: "border-box", padding: "10px 12px",
-  minHeight: 44, WebkitAppearance: "none",
-  border: `1px solid ${COLORS.border}`, borderRadius: 8, fontSize: 16,
-  fontFamily: "Inter, sans-serif", color: COLORS.ink, background: "#FDFCFA",
-  outline: "none",
-};
+let inputStyle;
 
 function Input(props) {
   return <input {...props} style={{ ...inputStyle, ...(props.style || {}) }} />;
@@ -725,7 +800,7 @@ function Sheet({ title, onClose, children }) {
           padding: "18px 18px 16px", flexShrink: 0,
         }}>
           <h2 style={{
-            fontFamily: "'Fraunces', serif", fontWeight: 600, fontSize: 20, color: COLORS.navyDeep, margin: 0,
+            fontFamily: "'Fraunces', serif", fontWeight: 600, fontSize: 20, color: COLORS.heading, margin: 0,
           }}>{title}</h2>
           <button onClick={onClose} aria-label="Close" style={{
             background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 20,
@@ -775,7 +850,7 @@ function PrimaryButton({ children, onClick, danger, ghost, disabled, type = "but
         width: "100%", padding: "13px 16px", borderRadius: 10,
         border: ghost ? `1px solid ${COLORS.border}` : "none",
         background: ghost ? COLORS.surface : danger ? COLORS.red : COLORS.navy,
-        color: ghost ? COLORS.ink : "#fff",
+        color: ghost ? COLORS.ink : COLORS.surface,
         fontFamily: "Inter, sans-serif", fontWeight: 600, fontSize: 15,
         cursor: disabled ? "default" : "pointer", marginTop: 6,
         opacity: disabled ? 0.6 : 1,
@@ -849,6 +924,14 @@ export default function App() {
   const skipNextAutoSync = useRef(true);
   const pricedOnce = useRef(false);
   const [, bumpHolidays] = useState(0);
+
+  // The palette is mutated in place, so a theme change needs a nudge to redraw.
+  const [, bumpTheme] = useState(0);
+  useEffect(() => {
+    const listener = () => bumpTheme((n) => n + 1);
+    themeListeners.add(listener);
+    return () => { themeListeners.delete(listener); };
+  }, []);
 
   /* The holiday calendar changes about once a year, so it is cached and only
      refetched when a day old. Every date shown is computed from it, hence the
@@ -1361,6 +1444,25 @@ export default function App() {
     };
   }, [reconciled]);
 
+  /* Sync now sends what is here and then takes what is there, so a change made
+     on another device arrives without waiting for a reload — which is what the
+     old handler achieved by reloading the page out from under you. */
+  const syncNow = useCallback(async () => {
+    await pushToCloud();
+    if (!cloudEnabled() || !userId) return;
+    try {
+      const remote = await cloudLoad();
+      if (isEmptyState(remote)) return;
+      setAccounts(remote.accounts); setIpos(remote.ipos);
+      setTransfers(remote.transfers); setTrash(remote.trash || []);
+      TABLES.forEach((k) => saveTable(k, remote[k] || []));
+      // Already in step with the cloud; no need to push it straight back.
+      skipNextAutoSync.current = true;
+    } catch (e) {
+      setSyncError(e.message || "Could not reach the cloud.");
+    }
+  }, [pushToCloud, userId]);
+
   const replaceAll = useCallback((state) => {
     persistAccounts(state.accounts);
     persistIpos(state.ipos);
@@ -1654,7 +1756,7 @@ export default function App() {
           syncError={syncError}
           lastSync={lastSync}
           onClose={() => setDataSheetOpen(false)}
-          onSyncNow={pushToCloud}
+          onSyncNow={syncNow}
           pricing={pricing}
           priceInfo={priceInfo}
           onRefreshPrices={refreshPrices}
@@ -2006,7 +2108,7 @@ function StatCard({ label, value, icon: Icon, tone }) {
 function SectionLabel({ children }) {
   return (
     <div style={{
-      fontFamily: "'Fraunces', serif", fontWeight: 600, fontSize: 15, color: COLORS.navyDeep,
+      fontFamily: "'Fraunces', serif", fontWeight: 600, fontSize: 15, color: COLORS.heading,
       marginBottom: 10, display: "flex", alignItems: "center", gap: 8,
     }}>
       <span style={{ width: 14, height: 2, background: COLORS.gold, display: "inline-block" }} />
@@ -2024,17 +2126,10 @@ function EmptyState({ text }) {
   );
 }
 
-const chipBase = {
-  border: `1px solid ${COLORS.border}`, background: COLORS.surface, color: COLORS.inkSoft,
-  borderRadius: 999, padding: "7px 12px", fontSize: 12, fontWeight: 600,
-  fontFamily: "Inter, sans-serif", cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0,
-};
-const chipOn = { background: COLORS.navy, border: `1px solid ${COLORS.navy}`, color: "#fff" };
+let chipBase;
+let chipOn;
 
-const selectStyle = {
-  ...inputStyle, width: "auto", minWidth: 0, minHeight: 36, padding: "6px 8px",
-  fontSize: 12, fontWeight: 600,
-};
+let selectStyle;
 
 
 /* Boards are not mutually exclusive — you may want one, or both. Turning the
@@ -2056,7 +2151,7 @@ function BoardToggles({ options, selected, onToggle }) {
             style={{
               border: `1px solid ${on ? COLORS.navy : COLORS.border}`,
               background: on ? COLORS.navy : COLORS.surface,
-              color: on ? "#fff" : COLORS.inkSoft,
+              color: on ? COLORS.surface : COLORS.inkSoft,
               borderRadius: 999, padding: "7px 11px", minHeight: 36,
               fontFamily: "Inter, sans-serif", fontSize: 12, fontWeight: 600,
               whiteSpace: "nowrap", cursor: last ? "default" : "pointer",
@@ -2376,7 +2471,7 @@ function IpoCard({ ipo, accounts, onClick, onEdit, onDelete, showActions }) {
       <div style={{ padding: "12px 14px", flex: 1, minWidth: 0 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
           <div style={{ minWidth: 0 }}>
-            <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 600, fontSize: 15.5, color: COLORS.navyDeep, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+            <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 600, fontSize: 15.5, color: COLORS.heading, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
               {ipo.company || "Untitled IPO"}
             </div>
             {/* Held to one line: it is a summary, and a summary that wraps has
@@ -2411,7 +2506,7 @@ function IpoCard({ ipo, accounts, onClick, onEdit, onDelete, showActions }) {
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
             <AllotmentCounts tally={tally} />
             <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-              {apps.some((a) => a.sold) && <Badge color={COLORS.navy} bg="#EAEFF5">SOLD {apps.filter((a) => a.sold).length}/{tally.allotted}</Badge>}
+              {apps.some((a) => a.sold) && <Badge color={COLORS.navy} bg={COLORS.chip}>SOLD {apps.filter((a) => a.sold).length}/{tally.allotted}</Badge>}
               {gainPct !== null && (
                 <span style={{
                   fontFamily: "'JetBrains Mono', monospace", fontSize: 12, fontWeight: 700,
@@ -2446,22 +2541,13 @@ function IpoCard({ ipo, accounts, onClick, onEdit, onDelete, showActions }) {
   );
 }
 
-const iconBtnStyle = {
-  border: "none", background: COLORS.surface, width: 44, flex: 1, cursor: "pointer",
-  display: "flex", alignItems: "center", justifyContent: "center",
-};
+let iconBtnStyle;
 
 /* The list rows are two lines tall, so a 36px control would set their height
    rather than fit inside it. */
-const smallIconBtn = {
-  width: 30, height: 30, borderRadius: 8, border: `1px solid ${COLORS.border}`, background: COLORS.bg,
-  display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0,
-};
+let smallIconBtn;
 
-const roundIconBtn = {
-  width: 36, height: 36, borderRadius: 8, border: `1px solid ${COLORS.border}`, background: COLORS.bg,
-  display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer",
-};
+let roundIconBtn;
 
 function IpoDetailSheet({ ipo, accounts, onClose, onEditIpo, onAddApplication, onBulkApply, onBulkStatus, onEditApplication, onDeleteApplication }) {
   if (!ipo) return null;
@@ -2471,7 +2557,7 @@ function IpoDetailSheet({ ipo, accounts, onClose, onEditIpo, onAddApplication, o
   return (
     <Sheet title={ipo.company} onClose={onClose}>
       <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
-        <Badge color={COLORS.navy} bg="#EAEFF5">{ipo.category || "Mainboard"}</Badge>
+        <Badge color={COLORS.navy} bg={COLORS.chip}>{ipo.category || "Mainboard"}</Badge>
         <Badge color={COLORS.inkSoft} bg="#EFEDE7">Price ₹{ipo.priceBand || "—"}</Badge>
         <Badge color={COLORS.inkSoft} bg="#EFEDE7">Lot {ipo.lotSize || "—"} sh</Badge>
         {Number(ipo.listingPrice) > 0 && hasListed(ipo) && (
@@ -2546,9 +2632,9 @@ function IpoDetailSheet({ ipo, accounts, onClose, onEditIpo, onAddApplication, o
       <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
         <button onClick={() => onBulkApply(ipo.id)} style={{
           flex: "1 1 46%", display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
-          background: COLORS.navy, color: "#fff", border: "none", borderRadius: 10,
+          background: COLORS.navy, color: COLORS.surface, border: "none", borderRadius: 10,
           padding: "11px 10px", fontSize: 12.5, fontWeight: 600, cursor: "pointer",
-        }}><Layers size={14} color="#fff" /> Apply in bulk</button>
+        }}><Layers size={14} color={COLORS.surface} /> Apply in bulk</button>
         <button onClick={() => onBulkStatus(ipo.id)} disabled={!apps.length} style={{
           flex: "1 1 46%", display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
           background: COLORS.surface, color: apps.length ? COLORS.ink : COLORS.inkSoft,
@@ -2732,7 +2818,7 @@ function AccountList({ accounts, ipos, transfers = [], onEdit, onDelete }) {
                 display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10,
               }}>
                 <div style={{ minWidth: 0 }}>
-                  <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 600, fontSize: 15.5, color: COLORS.navyDeep }}>{acc.name}</div>
+                  <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 600, fontSize: 15.5, color: COLORS.heading }}>{acc.name}</div>
                   <div style={{ fontSize: 12, color: COLORS.inkSoft, marginTop: 2 }}>
                     {acc.relation || "Self"}{acc.bank ? ` · ${acc.bank}` : ""}
                   </div>
@@ -2774,7 +2860,7 @@ function TransfersScreen({ transfers, accounts, ipos = [], onEdit, onDelete }) {
             flex: 1, padding: "10px 0", border: "none", borderRadius: 8, cursor: "pointer",
             fontFamily: "Inter, sans-serif", fontWeight: 600, fontSize: 13,
             background: view === id ? COLORS.navy : "transparent",
-            color: view === id ? "#fff" : COLORS.inkSoft,
+            color: view === id ? COLORS.surface : COLORS.inkSoft,
           }}>{label}</button>
         ))}
       </div>
@@ -2999,8 +3085,8 @@ function IpoFormSheet({ initial, onClose, onSave }) {
       <Field label="Price per Share (₹)"><Input type="number" inputMode="numeric" value={f.priceBand} onChange={set("priceBand")} placeholder="e.g. 285" /></Field>
       <Field label="Lot Size (shares)"><Input type="number" inputMode="numeric" value={f.lotSize} onChange={set("lotSize")} placeholder="e.g. 52" /></Field>
 
-      {/* Dates come from BSE and are shown rather than typed — every one was a
-          duplicate of something the exchange already publishes. But BSE has no
+      {/* Dates come from Upstox and are shown rather than typed — every one was a
+          duplicate of something the exchange already publishes. But Upstox has no
           record of some issues, and then a wrong date can only be corrected by
           hand, so the inputs are a click away rather than gone. */}
       {!editDates ? (
@@ -3032,14 +3118,14 @@ function IpoFormSheet({ initial, onClose, onSave }) {
             : listingDateOf(f).date && <span>Lists {fmtDate(listingDateOf(f).date)} (expected)</span>}
           {!(f.openDate || f.closeDate || f.listingDate) && (
             <span style={{ fontFamily: "Inter, sans-serif" }}>
-              BSE has none for this issue. Refreshing prices fills them in when it does.
+              Upstox has none for this issue. Refreshing prices fills them in when it does.
             </span>
           )}
         </div>
       ) : (
         <>
           <div style={{ fontSize: 11.5, color: COLORS.inkSoft, marginBottom: 10 }}>
-            A refresh overwrites these whenever BSE has its own value.
+            A refresh overwrites these whenever Upstox has its own value.
           </div>
           <Field label="Opens"><Input type="date" value={f.openDate || ""} onChange={set("openDate")} /></Field>
           <Field label="Closes — last day to apply"><Input type="date" value={f.closeDate || ""} onChange={set("closeDate")} /></Field>
@@ -3047,7 +3133,7 @@ function IpoFormSheet({ initial, onClose, onSave }) {
           <Field label="Listing date"><Input type="date" value={f.listingDate || ""} onChange={set("listingDate")} /></Field>
         </>
       )}
-      <Field label={f.listingPriceSource === "bse-open" ? "Listing Price — day-one open (from BSE, ₹)" : f.listingPriceSource === "bse-close" ? "Listing Day Close (from BSE, ₹)" : "Listing Price (optional, ₹)"}>
+      <Field label={f.listingPriceSource === "bse-open" ? "Listing Price — day-one open (from Upstox, ₹)" : f.listingPriceSource === "bse-close" ? "Listing Day Close (from Upstox, ₹)" : "Listing Price (optional, ₹)"}>
         <Input
           type="number" inputMode="numeric" value={f.listingPrice}
           // Typing over it makes it yours, so it is no longer BSE's close.
@@ -3346,40 +3432,32 @@ function DataSheet({ state, session, cloudOn, syncing, syncError, lastSync, onCl
         {priceInfo?.error
           ? priceInfo.error
           : priceInfo?.asOf
-            ? `${priceInfo.matched} of ${priceInfo.total} IPOs matched`
+            ? `${priceInfo.matched} of ${priceInfo.total} IPOs matched on Upstox`
               + `${priceInfo.reblocked ? ` · ${priceInfo.reblocked} blocked amounts recalculated` : ""}`
               + ` · last traded price, ${priceAge(priceInfo.asOf)}`
             : "Not updated yet. Unrealised gains use the listing price until you do."}
       </div>
       <PrimaryButton ghost onClick={() => onRefreshPrices().catch(() => {})} disabled={pricing}>
-        {pricing ? "Fetching prices…" : "Update market prices"}
+        {pricing ? "Fetching from Upstox…" : "Update market prices"}
       </PrimaryButton>
 
       <div style={{ height: 12 }} />
       <SectionLabel>Appearance</SectionLabel>
-      {/* One button that says what pressing it does, rather than a switch you
-          have to read the state of. The theme is baked into a module-level
-          palette, so changing it reloads — quick, and it keeps every colour in
-          the app consistent without threading a context through all of it. */}
+      {/* Small, and it changes the theme where it stands: the palette is one
+          object every style reads, so repainting is a re-render rather than a
+          reload. */}
       <button
-        onClick={() => {
-          const next = COLORS === COLORS_DARK ? "light" : "dark";
-          try { localStorage.setItem(THEME_KEY, next); } catch { /* the reload still applies it */ }
-          window.location.reload();
-        }}
+        onClick={() => applyTheme(isDark() ? "light" : "dark")}
+        aria-label={isDark() ? "Switch to light theme" : "Switch to dark theme"}
         style={{
-          width: "100%", background: COLORS.surface, border: `1px solid ${COLORS.border}`,
-          borderRadius: 12, padding: "12px 14px", marginBottom: 8, cursor: "pointer",
-          display: "flex", alignItems: "center", gap: 10, textAlign: "left",
-          fontFamily: "Inter, sans-serif",
+          display: "inline-flex", alignItems: "center", gap: 7,
+          background: COLORS.surface, border: `1px solid ${COLORS.border}`,
+          borderRadius: 999, padding: "8px 14px", marginBottom: 8, cursor: "pointer",
+          fontFamily: "Inter, sans-serif", fontSize: 12.5, fontWeight: 600, color: COLORS.ink,
         }}
       >
-        {COLORS === COLORS_DARK
-          ? <Sun size={16} color={COLORS.gold} />
-          : <Moon size={16} color={COLORS.navy} />}
-        <span style={{ fontSize: 13, fontWeight: 600, color: COLORS.ink }}>
-          {COLORS === COLORS_DARK ? "Switch to light" : "Switch to dark"}
-        </span>
+        {isDark() ? <Sun size={15} color={COLORS.gold} /> : <Moon size={15} color={COLORS.navy} />}
+        {isDark() ? "Light" : "Dark"}
       </button>
 
       <div style={{ height: 12 }} />
@@ -3535,7 +3613,7 @@ function AuthScreen({ mode, setMode, notice }) {
         width: "100%", maxWidth: 420, background: COLORS.surface, borderRadius: 18,
         padding: 24, boxShadow: "0 12px 40px rgba(0,0,0,.10)", border: `1px solid ${COLORS.border}`,
       }}>
-        <div style={{ fontFamily: "'Fraunces', serif", fontSize: 26, fontWeight: 700, color: COLORS.navyDeep }}>
+        <div style={{ fontFamily: "'Fraunces', serif", fontSize: 26, fontWeight: 700, color: COLORS.heading }}>
           The Ledger
         </div>
         <div style={{
@@ -3648,7 +3726,7 @@ function BulkApplySheet({ ipo, accounts, onClose, onSave }) {
         background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 12,
         padding: "10px 12px", marginBottom: 14,
       }}>
-        <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 600, fontSize: 15, color: COLORS.navyDeep }}>{ipo.company}</div>
+        <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 600, fontSize: 15, color: COLORS.heading }}>{ipo.company}</div>
         <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11.5, color: COLORS.inkSoft, marginTop: 3 }}>
           ₹{ipo.priceBand || "—"}/sh · lot {ipo.lotSize || "—"} sh
           {lotSizeKnown ? ` · ₹${(Number(ipo.lotSize) * Number(ipo.priceBand)).toLocaleString("en-IN")} per lot` : ""}
@@ -3792,7 +3870,7 @@ function BulkStatusSheet({ ipo, accounts, onClose, onSave }) {
 
   return (
     <Sheet title="Record allotment" onClose={onClose}>
-      <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 600, fontSize: 15, color: COLORS.navyDeep, marginBottom: 4 }}>
+      <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 600, fontSize: 15, color: COLORS.heading, marginBottom: 4 }}>
         {ipo.company}
       </div>
       <div style={{ fontSize: 12, color: COLORS.inkSoft, marginBottom: 14 }}>
@@ -3926,7 +4004,7 @@ function LiveIposSheet({ existing, onClose, onImport }) {
         let note = "";
         if (mode === "current") {
           rows = (data.ipos || []).map((r) => ({ ...r, listedOn: "" }));
-          note = "Issues and subscription from NSE; lot size and the retail book from BSE.";
+          note = "Open and forthcoming issues, from Upstox.";
         } else {
           /* Only the chosen year, since the feed is cumulative from it. Judged
              on the listing date, or the close date for an issue that has closed
@@ -4218,7 +4296,7 @@ function LiveIposSheet({ existing, onClose, onImport }) {
                     <div style={{ minWidth: 0, flex: 1 }}>
                       <div style={{ display: "flex", justifyContent: "space-between", gap: 6, alignItems: "flex-start" }}>
                         <span style={{ fontWeight: 600, fontSize: 14, color: COLORS.ink }}>{r.company}</span>
-                        {r.category && <Badge color={COLORS.navy} bg="#EAEFF5">{r.category}</Badge>}
+                        {r.category && <Badge color={COLORS.navy} bg={COLORS.chip}>{r.category}</Badge>}
                       </div>
 
                       <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: COLORS.inkSoft, marginTop: 4 }}>
@@ -4254,7 +4332,7 @@ function LiveIposSheet({ existing, onClose, onImport }) {
                           </Badge>
                         )}
                         {r.categories && r.categories.retail != null && (
-                          <Badge color={COLORS.navy} bg="#EAEFF5">retail {r.categories.retail.toFixed(1)}×</Badge>
+                          <Badge color={COLORS.navy} bg={COLORS.chip}>retail {r.categories.retail.toFixed(1)}×</Badge>
                         )}
                         {already && <span style={{ fontSize: 11, color: COLORS.gold }}>already in your ledger</span>}
                       </div>

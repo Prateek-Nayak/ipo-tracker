@@ -61,7 +61,14 @@ export default async function handler(req, res) {
     const byId = new Map(); [...listed, ...closed].forEach((item) => { if (item.id && !byId.has(item.id)) byId.set(item.id, item); });
     const items = [...byId.values()];
     const requestedYear = String(req.query?.from || "").trim();
-    const filtered = requestedYear ? items.filter((item) => (item.bidding_start_date || "").slice(0, 4) === requestedYear) : items;
+    /* `from` is a starting year, not a single one — the ledger sends the earliest
+       year it holds and expects everything since. Reading it as "that year only"
+       returned nothing an 18-IPO ledger spanning two years could match, which is
+       how "0 of 17 IPOs matched" happened while the prices themselves were fine.
+       The import sheet, which does want one year, filters to it on its own. */
+    const filtered = requestedYear
+      ? items.filter((item) => (item.bidding_start_date || "").slice(0, 4) >= requestedYear)
+      : items;
     if (!filtered.length) return res.status(200).json({ source: "Upstox", fetchedAt: new Date().toISOString(), from: requestedYear || null, categoryKnown: true, listingsKnown: true, listings: [] });
     const rawKeys = String(req.query?.keys || "").split("|").map((k) => String(k || "").trim()).filter(Boolean).slice(0, 120);
     const wanted = new Set(rawKeys.flatMap((k) => [nameKey(k), compactKey(k)]).filter(Boolean));
