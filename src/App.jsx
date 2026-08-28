@@ -2268,6 +2268,13 @@ const iconBtnStyle = {
   display: "flex", alignItems: "center", justifyContent: "center",
 };
 
+/* The list rows are two lines tall, so a 36px control would set their height
+   rather than fit inside it. */
+const smallIconBtn = {
+  width: 30, height: 30, borderRadius: 8, border: `1px solid ${COLORS.border}`, background: COLORS.bg,
+  display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0,
+};
+
 const roundIconBtn = {
   width: 36, height: 36, borderRadius: 8, border: `1px solid ${COLORS.border}`, background: COLORS.bg,
   display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer",
@@ -2746,22 +2753,39 @@ function TransferList({ transfers, accounts, ipos = [], onEdit, onDelete }) {
       {shown.length === 0 ? <EmptyState text="No transfers match that search or filter." /> : (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       {shown.map((t) => (
+        /* Two rows, not four: the buttons had a line to themselves and the note
+           another, so a transfer stood four rows tall for one fact anyone
+           scans for. The amount sits beside the names, the buttons beside the
+           date, and the note keeps to a single line — cut where it runs out,
+           since the whole of it is in the edit sheet and a card is for finding
+           the transfer rather than reading it. */
         <div key={t.id} style={{
-          background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 12, padding: "12px 14px",
+          background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 12,
+          padding: "10px 12px",
         }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14, fontWeight: 600, color: COLORS.ink, minWidth: 0 }}>
               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name(t.fromAccountId)}</span>
-              <ArrowRightLeft size={13} color={COLORS.gold} />
+              <ArrowRightLeft size={13} color={COLORS.gold} style={{ flexShrink: 0 }} />
               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name(t.toAccountId)}</span>
             </div>
-            <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, color: COLORS.navy, flexShrink: 0, marginLeft: 8 }}>{inrOrDash(t.amount)}</span>
+            <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, color: COLORS.navy, flexShrink: 0 }}>{inrOrDash(t.amount)}</span>
           </div>
-          <div style={{ fontSize: 11.5, color: COLORS.inkSoft, marginTop: 4 }}>{fmtDate(t.date)}</div>
-          {t.remarks && <div style={{ fontSize: 12.5, color: COLORS.ink, marginTop: 6, fontStyle: "italic" }}>“{t.remarks}”</div>}
-          <div style={{ display: "flex", gap: 6, marginTop: 8, justifyContent: "flex-end" }}>
-            <button onClick={() => onEdit(t)} aria-label="Edit transfer" style={roundIconBtn}><Pencil size={14} color={COLORS.inkSoft} /></button>
-            <button onClick={() => { if (confirm("Delete this transfer? It can be put back from Sync & Data.")) onDelete(t.id); }} aria-label="Delete transfer" style={roundIconBtn}><Trash2 size={14} color={COLORS.red} /></button>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 2 }}>
+            <div
+              title={t.remarks || ""}
+              style={{
+                flex: 1, minWidth: 0, fontSize: 11.5, color: COLORS.inkSoft,
+                overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+              }}
+            >
+              {fmtDate(t.date)}
+              {t.remarks ? <span style={{ fontStyle: "italic" }}> · “{t.remarks}”</span> : null}
+            </div>
+            <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+              <button onClick={() => onEdit(t)} aria-label="Edit transfer" style={smallIconBtn}><Pencil size={13} color={COLORS.inkSoft} /></button>
+              <button onClick={() => { if (confirm("Delete this transfer? It can be put back from Sync & Data.")) onDelete(t.id); }} aria-label="Delete transfer" style={smallIconBtn}><Trash2 size={13} color={COLORS.red} /></button>
+            </div>
           </div>
         </div>
       ))}
