@@ -65,6 +65,51 @@ function mergeIpos(a, b) {
   });
   return [...byId.values()];
 }
+
+/* The same IPO can legitimately exist more than once in the ledger because it
+   may have been imported twice or deliberately kept as separate records. That
+   must not create two different market prices. Share market metadata between
+   duplicate records without merging their applications or their IDs. */
+function normalizeDuplicateMarketData(records) {
+  if (!Array.isArray(records) || records.length < 2) return { records, changed: false };
+  const groups = new Map();
+  records.forEach((ipo) => {
+    const key = compactKey(ipo?.isin) || compactKey(ipo?.symbol) || nameKey(ipo?.company);
+    if (!key) return;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(ipo);
+  });
+
+  let changed = false;
+  const out = records.map((ipo) => {
+    const key = compactKey(ipo?.isin) || compactKey(ipo?.symbol) || nameKey(ipo?.company);
+    const group = groups.get(key) || [];
+    if (group.length < 2) return ipo;
+
+    const best = group.find((x) => Number(x?.currentPrice) > 0) ||
+      group.find((x) => Number(x?.listingPrice) > 0) || group[0];
+    const patch = {};
+
+    if (Number(best?.currentPrice) > 0 && Number(ipo?.currentPrice) !== Number(best.currentPrice)) {
+      patch.currentPrice = String(best.currentPrice);
+      patch.priceAsOf = best.priceAsOf || new Date().toISOString();
+    }
+    if (!ipo.listingPrice && best.listingPrice) {
+      patch.listingPrice = String(best.listingPrice);
+      if (best.listingPriceSource) patch.listingPriceSource = best.listingPriceSource;
+    }
+    if (!ipo.listingDate && best.listingDate) patch.listingDate = best.listingDate;
+    if (!ipo.allotmentDate && best.allotmentDate) patch.allotmentDate = best.allotmentDate;
+    if (!ipo.symbol && best.symbol) patch.symbol = best.symbol;
+    if (!ipo.isin && best.isin) patch.isin = best.isin;
+
+    if (!Object.keys(patch).length) return ipo;
+    changed = true;
+    return { ...ipo, ...patch };
+  });
+  return { records: out, changed };
+}
+
 async function migrateRecords(records) {
   if (!Array.isArray(records) || !records.length) return { records: [], changed: false };
   const aliases = [];
@@ -89,8 +134,10 @@ async function migrateRecords(records) {
     if (next.lotSize && next.priceBand) next.applications = (next.applications || []).map((a) => { const amount = (Number(a.lots) || 0) * Number(next.lotSize) * Number(next.priceBand); return amount > 0 ? { ...a, amountBlocked: String(amount) } : a; });
     return next;
   });
-  return { records: migrated, changed };
+  const normalized = normalizeDuplicateMarketData(migrated);
+  return { records: normalized.records, changed: changed || normalized.changed };
 }
+
 async function migrateLocalAndCloud() {
   const session = readSession(); let local = [];
   try { local = JSON.parse(localStorage.getItem(`${STORAGE_PREFIX}ipos`) || "[]"); } catch { local = []; }
@@ -123,46 +170,117 @@ async function pullCloudLedger() {
   return true;
 }
 
+/* Delete remains a normal destructive action. The retained database copy is
+   implementation-only; no deleted-record screen or recovery action is exposed. */
+function installDeleteCopyGuard() {
+  if (window.__ipoDeleteCopyGuard) return;
+  window.__ipoDeleteCopyGuard = true;
+  const originalConfirm = window.confirm.bind(window);
+  window.confirm = (message) => {
+    let text = String(message || "");
+    text = text
+      .replace(/\s*It is kept, and can be put back from Sync & Data\.?/gi, "")
+      .replace(/\s*It can be put back from Sync & Data\.?/gi, "")
+      .replace(/\s*You can put it back from Sync & Data\.?/gi, "")
+      .replace(/\s*The account itself is kept and can be put back from Sync & Data\.?/gi, "")
+      .replace(/\s*The account itself is kept and can be put back from Sync & Data\.*/gi, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    return originalConfirm(text);
+  };
+}
+
+function hideDeletedUi() {
+  const elements = Array.from(document.querySelectorAll("body *"));
+
+  /* Remove the entire deleted-record section from Sync & Data. The underlying
+     retained data remains available to the sync layer but is never presented. */
+  const deletedLabel = elements.find((el) => /^Deleted\s*\(/i.test((el.textContent || "").trim()) && el.children.length === 1);
+  if (deletedLabel) {
+    deletedLabel.style.display = "none";
+    let sibling = deletedLabel.nextElementSibling;
+    while (sibling) {
+      const text = (sibling.textContent || "").trim();
+      if (/^Restore from a backup/i.test(text)) break;
+      sibling.style.display = "none";
+      sibling = sibling.nextElementSibling;
+    }
+  }
+
+  /* The backup import is unrelated to deleted records, but the old UI called it
+     a restore action. Keep normal JSON export/download and remove that wording
+     and entry point from the visible UI. */
+  elements.forEach((el) => {
+    const text = (el.textContent || "").trim();
+    if (/^Restore from a backup/i.test(text)) {
+      el.style.display = "none";
+      if (el.parentElement && el.parentElement.children.length <= 2) el.parentElement.style.display = "none";
+    }
+    if (/^(Show \d+ deleted item|Show \d+ deleted items|Restore|Restore all|Deleted items|Trash)$/i.test(text) || /^Restore\b/i.test(text)) {
+      el.style.display = "none";
+    }
+  });
+}
+
+function patchBadgesAndText() {
+  const today = todayISO();
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  const replacements = [
+    ["Fetching from BSE…", "Fetching from Upstox…"],
+    ["matched on BSE", "matched on Upstox"],
+    ["from BSE, ₹", "from Upstox, ₹"],
+    ["whenever BSE has its own value", "whenever Upstox has its own value"],
+    ["Pull listing and current market prices from BSE", "Pull listing and current market prices from Upstox"],
+  ];
+  const nodes = []; let node; while ((node = walker.nextNode())) nodes.push(node);
+  nodes.forEach((textNode) => {
+    let text = textNode.nodeValue || "";
+    replacements.forEach(([a, b]) => { text = text.split(a).join(b); });
+    if (!/subscription/i.test(textNode.parentElement?.textContent || "")) text = text.replace(/\bBSE\b/g, "Upstox");
+    if (text !== textNode.nodeValue) textNode.nodeValue = text;
+  });
+
+  /* A listing badge is secondary to an allotment date. If the card itself says
+     an allotment still needs to be recorded, a same-day/future listing badge
+     must not be shown ahead of that event. */
+  document.querySelectorAll("span, div, button").forEach((el) => {
+    const text = (el.textContent || "").trim();
+    if (!/^LISTS(?:\s|$)/i.test(text) || el.children.length) return;
+    const container = el.closest("article, li, label, section, div");
+    const body = container?.textContent || "";
+    if (!/RECORD ALLOTMENT/i.test(body)) return;
+
+    let allot = "";
+    try {
+      const session = readSession();
+      const raw = JSON.parse(localStorage.getItem(`${STORAGE_PREFIX}ipos`) || "[]");
+      const company = (body.match(/^[\s\S]*?/) || [""])[0];
+      const candidates = raw.filter((i) => i?.company && body.includes(i.company));
+      const exact = candidates.find((i) => i.allotmentDate) || candidates.find((i) => i.company);
+      allot = exact?.allotmentDate || "";
+      void session;
+    } catch {}
+
+    if (allot && allot >= today) {
+      el.textContent = allot === today ? "ALLOTMENT TODAY" : `ALLOTMENT ${fmtDate(allot).toUpperCase()}`;
+      el.style.display = "inline-block";
+    }
+  });
+}
+
 function installUiRules() {
   if (window.__ipoUpstoxUiRules) return () => {};
   window.__ipoUpstoxUiRules = true;
   let syncingPull = false;
+  installDeleteCopyGuard();
+
   const patch = () => {
-    const today = todayISO();
-    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-    const replacements = [
-      ["Fetching from BSE…", "Fetching from Upstox…"],
-      ["matched on BSE", "matched on Upstox"],
-      ["from BSE, ₹", "from Upstox, ₹"],
-      ["whenever BSE has its own value", "whenever Upstox has its own value"],
-      ["Pull listing and current market prices from BSE", "Pull listing and current market prices from Upstox"],
-    ];
-    const nodes = []; let node; while ((node = walker.nextNode())) nodes.push(node);
-    nodes.forEach((textNode) => { let text = textNode.nodeValue || ""; replacements.forEach(([a, b]) => { text = text.split(a).join(b); }); if (!/subscription/i.test(textNode.parentElement?.textContent || "")) text = text.replace(/\bBSE\b/g, "Upstox"); if (text !== textNode.nodeValue) textNode.nodeValue = text; });
-
-    /* Restore/trash UI is removed completely. Deleting remains available; the
-       deleted records can still be retained internally for sync safety. */
-    document.querySelectorAll("button, a, [role='button'], span, div").forEach((el) => {
-      const text = (el.textContent || "").trim();
-      if (/^(Show \d+ deleted item|Show \d+ deleted items|Restore|Restore all|Deleted items|Trash)$/i.test(text) || /^Restore\b/i.test(text)) el.style.display = "none";
-      if (text === "2024" || text === "2025") el.style.display = "none";
-    });
-
-    /* Badge rule: before allotment, the card must show allotment information,
-       never a future LISTS badge. Once allotment is past, LISTS is allowed. */
-    document.querySelectorAll("span, div, button").forEach((el) => {
-      const text = (el.textContent || "").trim();
-      if (!/^LISTS(?:\s|$)/i.test(text) || el.children.length) return;
-      const container = el.closest("article, li, label, section, div"); const body = container?.textContent || "";
-      const a = body.match(/Allotment\s+(\d{2}\s+[A-Za-z]{3}|\d{4}-\d{2}-\d{2})/i);
-      if (!a) return;
-      let allot = "";
-      if (/^\d{4}-/.test(a[1])) allot = a[1]; else { const m = a[1].match(/(\d{2})\s+([A-Za-z]{3})/i); if (m) { const months = { Jan:1,Feb:2,Mar:3,Apr:4,May:5,Jun:6,Jul:7,Aug:8,Sep:9,Oct:10,Nov:11,Dec:12 }; allot = `${new Date().getFullYear()}-${String(months[m[2].slice(0,3)] || 1).padStart(2,"0")}-${m[1]}`; } }
-      if (allot && allot > today) { el.textContent = `ALLOTMENT ${fmtDate(allot).toUpperCase()}`; el.style.display = "inline-block"; }
-    });
+    hideDeletedUi();
+    patchBadgesAndText();
   };
   patch();
-  const observer = new MutationObserver(patch); observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+  const observer = new MutationObserver(patch);
+  observer.observe(document.body, { childList: true, subtree: true, characterData: true });
 
   /* Intercept the existing Sync now button. Pulling first prevents a stale
      device from pushing its old ledger over the newer cloud state. */
