@@ -24,19 +24,19 @@ const COLORS_LIGHT = {
 };
 
 const COLORS_DARK = {
-  bg: "#1A1A2E",
-  surface: "#222240",
-  border: "#3A3A5C",
-  ink: "#E8E6E3",
-  inkSoft: "#9CA3AF",
-  navy: "#5B9BD5",
-  navyDeep: "#A8D0F0",
-  gold: "#D4A853",
-  goldSoft: "#3D3520",
-  green: "#5CBB8A",
-  greenSoft: "#1E3A2B",
-  red: "#E06B6B",
-  redSoft: "#3A1E1E",
+  bg: "#121212",
+  surface: "#1E1E1E",
+  border: "#333333",
+  ink: "#E0E0E0",
+  inkSoft: "#9E9E9E",
+  navy: "#90CAF9",
+  navyDeep: "#1E1E1E",
+  gold: "#FFB74D",
+  goldSoft: "#2C2416",
+  green: "#81C784",
+  greenSoft: "#1B2E1B",
+  red: "#EF5350",
+  redSoft: "#2E1B1B",
 };
 
 /* Theme preference stored in localStorage. "system" follows OS. */
@@ -1095,6 +1095,8 @@ export default function App() {
   const pushToCloud = useCallback(async () => {
     if (!cloudEnabled() || !userId) return;
     setSyncing(true);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000); // 15s max
     try {
       const state = { accounts, ipos, transfers, trash };
       // Never let a device that has nothing wipe a cloud that has something.
@@ -1114,8 +1116,9 @@ export default function App() {
       try { localStorage.setItem(STORAGE_PREFIX + "lastSyncTs", Date.now().toString()); } catch {}
     } catch (e) {
       console.error("Cloud save failed", e);
-      setSyncError(e.message || "Sync failed.");
+      setSyncError(e.name === "AbortError" ? "Sync timed out. Try again." : (e.message || "Sync failed."));
     } finally {
+      clearTimeout(timeout);
       setSyncing(false);
     }
   }, [userId, accounts, ipos, transfers, trash]);
@@ -1423,8 +1426,6 @@ export default function App() {
     return <AuthScreen mode={authMode} setMode={setAuthMode} notice={linkNotice} />;
   }
 
-  if (!loaded) return <Splash text="Loading ledger…" />;
-
   return (
     <ThemeContext.Provider value={{ theme, colors, toggle: toggleTheme }}>
     <div style={{
@@ -1450,6 +1451,12 @@ export default function App() {
       />
 
       <div style={{ padding: "14px 14px 0" }}>
+        {!loaded && syncing ? (
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "40px 0", gap: 12 }}>
+            <Loader2 size={28} color={colors.navy} className="spin" />
+            <div style={{ color: colors.inkSoft, fontSize: 13, fontFamily: "Inter, sans-serif" }}>Loading your ledger…</div>
+          </div>
+        ) : (<>
         {tab === "dashboard" && (
           <Dashboard stats={stats} ipos={ipos} accounts={accounts} onOpenIpo={(id) => setIpoDetail(id)} />
         )}
@@ -1492,6 +1499,7 @@ export default function App() {
             }}
           />
         )}
+        </>)}
       </div>
 
       <BottomNav tab={tab} setTab={setTab} />
@@ -1687,10 +1695,7 @@ function Header({ tab, onAdd, onOpenData, onFetchLive, syncing, syncError, cloud
   const { theme, toggle: toggleTheme } = useTheme();
   const titles = { dashboard: "The Ledger", ipos: "IPOs", accounts: "Accounts", transfers: "Transfers" };
   const showAdd = tab !== "dashboard";
-  const statusColor = !cloudOn ? COLORS.inkSoft : syncError ? COLORS.red : COLORS.gold;
-  const StatusIcon = !cloudOn ? CloudOff : syncing ? Loader2 : CloudIcon;
-  const MoonIcon = (p) => <SvgIcon {...p}><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" /></SvgIcon>;
-  const SunIcon = (p) => <SvgIcon {...p}><circle cx="12" cy="12" r="5" /><line x1="12" y1="1" x2="12" y2="3" /><line x1="12" y1="21" x2="12" y2="23" /><line x1="4.22" y1="4.22" x2="5.64" y2="5.64" /><line x1="18.36" y1="18.36" x2="19.78" y2="19.78" /><line x1="1" y1="12" x2="3" y2="12" /><line x1="21" y1="12" x2="23" y2="12" /><line x1="4.22" y1="19.78" x2="5.64" y2="18.36" /><line x1="18.36" y1="5.64" x2="19.78" y2="4.22" /></SvgIcon>;
+  const SettingsIcon = (p) => <SvgIcon {...p}><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" /></SvgIcon>;
   return (
     <div style={{
       background: COLORS.navyDeep,
@@ -1722,27 +1727,15 @@ function Header({ tab, onAdd, onOpenData, onFetchLive, syncing, syncError, cloud
           </button>
         )}
         <button
-          onClick={toggleTheme}
-          aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+          onClick={onOpenData}
+          aria-label="Settings"
           style={{
             width: 36, height: 36, borderRadius: 18, border: `1px solid ${COLORS.gold}`,
             background: "transparent", display: "flex", alignItems: "center", justifyContent: "center",
             cursor: "pointer", flexShrink: 0,
           }}
         >
-          {theme === "dark" ? <SunIcon size={16} color={COLORS.gold} /> : <MoonIcon size={16} color={COLORS.gold} />}
-        </button>
-        <button
-          onClick={onOpenData}
-          aria-label="Sync and data"
-          title={!cloudOn ? "Cloud sync is off" : syncError ? "Sync problem" : syncing ? "Syncing…" : "Synced"}
-          style={{
-            width: 36, height: 36, borderRadius: 18, border: `1px solid ${statusColor}`,
-            background: "transparent", display: "flex", alignItems: "center", justifyContent: "center",
-            cursor: "pointer", flexShrink: 0,
-          }}
-        >
-          <StatusIcon size={17} color={statusColor} className={syncing ? "spin" : undefined} />
+          <SettingsIcon size={17} color={COLORS.gold} className={syncing ? "spin" : undefined} />
         </button>
         {showAdd && (
           <button onClick={onAdd} aria-label="Add" style={{
@@ -1956,6 +1949,16 @@ const chipBase = {
 };
 const chipOn = { background: COLORS.navy, border: `1px solid ${COLORS.navy}`, color: "#fff" };
 
+/* Helper: check if a filter value matches. Supports both string and array filters. */
+const filterIncludes = (filter, id) => {
+  if (Array.isArray(filter)) return filter.includes(id) || filter.includes("all");
+  return filter === id || filter === "all";
+};
+const filterIs = (filter, id) => {
+  if (Array.isArray(filter)) return filter.includes(id);
+  return filter === id;
+};
+
 const selectStyle = {
   ...inputStyle, width: "auto", minWidth: 0, minHeight: 36, padding: "6px 8px",
   fontSize: 12, fontWeight: 600,
@@ -2010,6 +2013,21 @@ function ListControls({ search, setSearch, placeholder, filters, filter, setFilt
   const [showFilters, setShowFilters] = useState(false);
   const FilterIcon = (p) => <SvgIcon {...p}><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3" /></SvgIcon>;
 
+  /* Multi-select filter: filter is now an array of selected filter ids */
+  const activeFilters = Array.isArray(filter) ? filter : [filter];
+  const toggleFilter = (id) => {
+    if (id === "all") {
+      setFilter(["all"]);
+    } else {
+      const without = activeFilters.filter((f) => f !== "all" && f !== id);
+      if (activeFilters.includes(id)) {
+        setFilter(without.length ? without : ["all"]);
+      } else {
+        setFilter([...without, id]);
+      }
+    }
+  };
+
   return (
     <div style={{ marginBottom: 12 }}>
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: showFilters ? 8 : 0 }}>
@@ -2047,8 +2065,8 @@ function ListControls({ search, setSearch, placeholder, filters, filter, setFilt
             {filters.map((f) => (
               <button
                 key={f.id}
-                onClick={() => setFilter(f.id)}
-                style={{ ...chipBase, ...(filter === f.id ? chipOn : null), padding: "5px 10px", fontSize: 11 }}
+                onClick={() => toggleFilter(f.id)}
+                style={{ ...chipBase, ...(activeFilters.includes(f.id) ? chipOn : null), padding: "5px 10px", fontSize: 11 }}
               >
                 {f.label}{f.count != null ? ` (${f.count})` : ""}
               </button>
@@ -2131,9 +2149,11 @@ function IpoList({ ipos, accounts, onOpen, onEdit, onDelete }) {
     return onBoard
       .filter((i) => {
         if (q && !`${i.company || ""} ${i.symbol || ""}`.toLowerCase().includes(q)) return false;
-        if (filter === "all") return true;
-        if (filter === "incomplete") return missingIpoFields(i).length > 0;
-        return ipoBucket(i) === filter;
+        if (filterIncludes(filter, "all")) return true;
+        if (filterIs(filter, "incomplete")) return missingIpoFields(i).length > 0;
+        const bucket = ipoBucket(i);
+        if (Array.isArray(filter)) return filter.includes(bucket);
+        return bucket === filter;
       })
       .sort(cmp);
   }, [onBoard, search, filter, sort]);
@@ -2635,8 +2655,8 @@ function AccountList({ accounts, ipos, transfers = [], onEdit, onDelete }) {
     return accounts
       .filter((a) => {
         if (q && !`${a.name || ""} ${a.relation || ""} ${a.bank || ""} ${a.pan || ""}`.toLowerCase().includes(q)) return false;
-        if (filter === "nopan") return !panOf(a);
-        if (filter === "dup") return dupPans.has(panOf(a));
+        if (filterIs(filter, "nopan")) return !panOf(a);
+        if (filterIs(filter, "dup")) return dupPans.has(panOf(a));
         return true;
       })
       .sort(cmp);
@@ -2843,10 +2863,12 @@ function TransferList({ transfers, accounts, ipos = [], onEdit, onDelete }) {
           const hay = `${name(t.fromAccountId)} ${name(t.toAccountId)} ${t.remarks || ""} ${ipoName(t.relatedIpoId)}`.toLowerCase();
           if (!hay.includes(q)) return false;
         }
-        if (filter === "linked") return !!t.relatedIpoId;
-        if (filter === "unlinked") return !t.relatedIpoId;
-        if (filter.startsWith("acct:")) {
-          const id = filter.slice(5);
+        if (filterIs(filter, "linked")) return !!t.relatedIpoId;
+        if (filterIs(filter, "unlinked")) return !t.relatedIpoId;
+        const filterArr = Array.isArray(filter) ? filter : [filter];
+        const acctFilter = filterArr.find((f) => f.startsWith("acct:"));
+        if (acctFilter) {
+          const id = acctFilter.slice(5);
           return t.fromAccountId === id || t.toAccountId === id;
         }
         return true;
@@ -3188,6 +3210,38 @@ function priceAge(asOf) {
   return hrs < 12 ? `${hrs} hr ago (${at})` : `as of ${at}`;
 }
 
+function ThemeToggleRow() {
+  const { theme, toggle } = useTheme();
+  return (
+    <div style={{
+      background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 12,
+      padding: "12px 14px", display: "flex", justifyContent: "space-between", alignItems: "center",
+    }}>
+      <div>
+        <div style={{ fontSize: 13, fontWeight: 600, color: COLORS.ink }}>Dark mode</div>
+        <div style={{ fontSize: 12, color: COLORS.inkSoft, marginTop: 2 }}>
+          {theme === "dark" ? "On" : "Off"}
+        </div>
+      </div>
+      <button
+        onClick={toggle}
+        style={{
+          width: 48, height: 26, borderRadius: 13, border: "none", cursor: "pointer",
+          background: theme === "dark" ? COLORS.navy : COLORS.border,
+          position: "relative", transition: "background 0.2s",
+        }}
+      >
+        <div style={{
+          width: 20, height: 20, borderRadius: 10, background: "#fff",
+          position: "absolute", top: 3,
+          left: theme === "dark" ? 25 : 3,
+          transition: "left 0.2s",
+        }} />
+      </button>
+    </div>
+  );
+}
+
 function DataSheet({ state, session, cloudOn, syncing, syncError, lastSync, onClose, onSyncNow, onReplaceAll, onRestore, onSignOut, pricing, priceInfo, onRefreshPrices }) {
   const [importText, setImportText] = useState("");
   const [notice, setNotice] = useState("");
@@ -3277,6 +3331,10 @@ function DataSheet({ state, session, cloudOn, syncing, syncError, lastSync, onCl
           {syncing ? "Syncing…" : "Sync now"}
         </PrimaryButton>
       )}
+
+      <div style={{ height: 18 }} />
+      <SectionLabel>Appearance</SectionLabel>
+      <ThemeToggleRow />
 
       <div style={{ height: 18 }} />
       <SectionLabel>Market prices</SectionLabel>
