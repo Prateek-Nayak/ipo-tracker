@@ -25,6 +25,9 @@ const COLORS_LIGHT = {
      background — so it needs a name of its own, or a dark theme has to choose
      between an invisible heading and a washed-out header. */
   heading: "#152A44",
+  // What a button you press is made of, and the text that sits on it.
+  action: "#1F3A5F",
+  onAction: "#FFFFFF",
   // What you type into, a shade off the surface it sits on.
   field: "#FDFCFA",
   // The quiet blue a neutral badge sits on.
@@ -58,6 +61,8 @@ const COLORS_DARK = {
   red: "#E0736B",
   redSoft: "#2E1C1C",
   heading: "#F0EDE6",
+  action: "#2E4C74",
+  onAction: "#EAF1FA",
   field: "#232630",
   chip: "#262A33",
 };
@@ -175,6 +180,8 @@ const TrendingDown = (p) => <SvgIcon {...p}><polyline points="22 17 13.5 8.5 8.5
 const ArrowRightLeft = (p) => <SvgIcon {...p}><path d="m16 3 4 4-4 4" /><path d="M20 7H4" /><path d="m8 21-4-4 4-4" /><path d="M4 17h16" /></SvgIcon>;
 const Pencil = (p) => <SvgIcon {...p}><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z" /><path d="m15 5 4 4" /></SvgIcon>;
 const Trash2 = (p) => <SvgIcon {...p}><path d="M3 6h18" /><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" /><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" /><line x1="10" x2="10" y1="11" y2="17" /><line x1="14" x2="14" y1="11" y2="17" /></SvgIcon>;
+const Check = (p) => <SvgIcon {...p}><path d="M20 6 9 17l-5-5" /></SvgIcon>;
+const SlidersHorizontal = (p) => <SvgIcon {...p}><line x1="21" x2="14" y1="4" y2="4" /><line x1="10" x2="3" y1="4" y2="4" /><line x1="21" x2="12" y1="12" y2="12" /><line x1="8" x2="3" y1="12" y2="12" /><line x1="21" x2="16" y1="20" y2="20" /><line x1="12" x2="3" y1="20" y2="20" /><line x1="14" x2="14" y1="2" y2="6" /><line x1="8" x2="8" y1="10" y2="14" /><line x1="16" x2="16" y1="18" y2="22" /></SvgIcon>;
 const CheckCircle2 = (p) => <SvgIcon {...p}><circle cx="12" cy="12" r="10" /><path d="m9 12 2 2 4-4" /></SvgIcon>;
 const Clock = (p) => <SvgIcon {...p}><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></SvgIcon>;
 const XCircle = (p) => <SvgIcon {...p}><circle cx="12" cy="12" r="10" /><path d="m15 9-6 6" /><path d="m9 9 6 6" /></SvgIcon>;
@@ -730,17 +737,6 @@ function mergeIpos(current, incoming) {
   return Array.from(byId.values());
 }
 
-function parseImport(text) {
-  const parsed = JSON.parse(text);
-  const out = {};
-  LEDGER_TABLES.forEach((k) => {
-    if (!Array.isArray(parsed[k])) throw new Error(`Missing or invalid "${k}" list in the pasted data.`);
-    out[k] = parsed[k];
-  });
-  // Backups taken before deleted records were kept simply have none.
-  out.trash = Array.isArray(parsed.trash) ? parsed.trash : [];
-  return out;
-}
 
 /* ---------------------------------------------------------
    SMALL UI PRIMITIVES
@@ -861,8 +857,8 @@ function PrimaryButton({ children, onClick, danger, ghost, disabled, type = "but
       style={{
         width: "100%", padding: "13px 16px", borderRadius: 10,
         border: ghost ? `1px solid ${COLORS.border}` : "none",
-        background: ghost ? COLORS.surface : danger ? COLORS.red : COLORS.navy,
-        color: ghost ? COLORS.ink : COLORS.surface,
+        background: ghost ? COLORS.surface : danger ? COLORS.red : COLORS.action,
+        color: ghost ? COLORS.ink : COLORS.onAction,
         fontFamily: "Inter, sans-serif", fontWeight: 600, fontSize: 15,
         cursor: disabled ? "default" : "pointer", marginTop: 6,
         opacity: disabled ? 0.6 : 1,
@@ -1475,12 +1471,6 @@ export default function App() {
     }
   }, [pushToCloud, userId]);
 
-  const replaceAll = useCallback((state) => {
-    persistAccounts(state.accounts);
-    persistIpos(state.ipos);
-    persistTransfers(state.transfers);
-    persistTrash(state.trash || []);
-  }, [persistAccounts, persistIpos, persistTransfers, persistTrash]);
 
 
   /* ---------- derived numbers ---------- */
@@ -1747,7 +1737,6 @@ export default function App() {
           pricing={pricing}
           priceInfo={priceInfo}
           onRefreshPrices={refreshPrices}
-          onReplaceAll={replaceAll}
           onSignOut={async () => { setDataSheetOpen(false); await cloudSignOut(); }}
         />
       )}
@@ -1899,11 +1888,14 @@ function Header({ tab, onAdd, onOpenData, onFetchLive, syncing, syncError, cloud
           fontFamily: "'Fraunces', serif", fontWeight: 700, fontSize: 21, color: "#fff",
           whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
         }}>{titles[tab]}</div>
-        {tab === "dashboard" && (
-          <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10.5, color: COLORS.gold, marginTop: 2, letterSpacing: 0.5 }}>
-            FAMILY IPO REGISTER
-          </div>
-        )}
+        {/* Kept on every screen, empty where there is nothing to say, so the
+            header is the same height throughout and the page does not shift. */}
+        <div style={{
+          fontFamily: "'JetBrains Mono', monospace", fontSize: 10.5, color: COLORS.gold,
+          marginTop: 2, letterSpacing: 0.5, minHeight: 14,
+        }}>
+          {tab === "dashboard" ? "FAMILY IPO REGISTER" : " "}
+        </div>
       </div>
       <div style={{ display: "flex", gap: 8, flexShrink: 0, marginLeft: "auto" }}>
         {tab === "ipos" && (
@@ -2180,13 +2172,43 @@ function boardIsWorthAsking(boards) {
 /* `boards` is a second, independent dimension. Which board an issue is on says
    nothing about how the application went, so folding it into the status chips
    would make "pending, mainboard only" unaskable. */
+/* Filtering and sorting live behind one control beside the search rather than
+   two selects taking a row of their own. A list is mostly read, not filtered,
+   so the row that is always there is the one you always use — and the panel
+   has room to let you pick several filters at once, which a select never did. */
 function ListControls({ search, setSearch, placeholder, filters, filter, setFilter, sorts, sort, setSort, boards, board, toggleBoard }) {
+  const [open, setOpen] = useState(false);
+  const panelRef = useRef(null);
+  const buttonRef = useRef(null);
+
+  // Clicking away closes it, as a panel like this should.
+  useEffect(() => {
+    if (!open) return;
+    const away = (e) => {
+      if (panelRef.current?.contains(e.target) || buttonRef.current?.contains(e.target)) return;
+      setOpen(false);
+    };
+    const esc = (e) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", away);
+    document.addEventListener("keydown", esc);
+    return () => {
+      document.removeEventListener("mousedown", away);
+      document.removeEventListener("keydown", esc);
+    };
+  }, [open]);
+
+  const chosen = Array.isArray(filter) ? filter : [];
+  const sortLabel = (sorts.find((x) => x.id === sort) || {}).label || "";
+  // "All" is the absence of a filter, so it is not something narrowing you to.
+  const narrowed = chosen.length;
+
+  const toggleFilter = (id) => {
+    setFilter(chosen.includes(id) ? chosen.filter((f) => f !== id) : [...chosen, id]);
+  };
+
   return (
-    <div style={{ marginBottom: 12 }}>
-      {/* The board sits beside the search rather than under it: two toggles are
-          narrow, the search box has width to spare, and it keeps the controls
-          below to a single row. */}
-      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
+    <div style={{ marginBottom: 12, position: "relative" }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: boardIsWorthAsking(boards) ? 8 : 0 }}>
         <div style={{ position: "relative", flex: "1 1 0", minWidth: 0 }}>
           <span style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)", display: "flex", pointerEvents: "none" }}>
             <Search size={15} color={COLORS.inkSoft} />
@@ -2198,37 +2220,105 @@ function ListControls({ search, setSearch, placeholder, filters, filter, setFilt
             style={{ paddingLeft: 34 }}
           />
         </div>
-        {boardIsWorthAsking(boards) && (
-          <BoardToggles options={boards} selected={board} onToggle={toggleBoard} />
-        )}
-      </div>
-      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-        <select
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-          aria-label="Filter"
-          style={{ ...selectStyle, flex: "1 1 0" }}
+
+        <button
+          ref={buttonRef}
+          onClick={() => setOpen((v) => !v)}
+          aria-label="Filter and sort"
+          aria-expanded={open}
+          style={{
+            position: "relative", width: 44, height: 44, flexShrink: 0,
+            borderRadius: 8, cursor: "pointer",
+            border: `1px solid ${narrowed || open ? COLORS.navy : COLORS.border}`,
+            background: narrowed ? COLORS.navy : COLORS.field,
+            display: "flex", alignItems: "center", justifyContent: "center",
+          }}
         >
-          {filters.map((f) => (
-            <option key={f.id} value={f.id}>{f.label}{f.count != null ? ` ${f.count}` : ""}</option>
-          ))}
-        </select>
-        <select
-          value={sort}
-          onChange={(e) => setSort(e.target.value)}
-          aria-label="Sort order"
-          style={{ ...selectStyle, flex: "1 1 0" }}
-        >
-          {sorts.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
-        </select>
+          <SlidersHorizontal size={17} color={narrowed ? COLORS.surface : COLORS.inkSoft} />
+          {narrowed > 0 && (
+            <span style={{
+              position: "absolute", top: -5, right: -5, minWidth: 17, height: 17, borderRadius: 9,
+              background: COLORS.gold, color: COLORS.navyDeep, fontSize: 10, fontWeight: 700,
+              display: "flex", alignItems: "center", justifyContent: "center",
+              fontFamily: "'JetBrains Mono', monospace", padding: "0 4px",
+            }}>{narrowed}</span>
+          )}
+        </button>
       </div>
+
+      {boardIsWorthAsking(boards) && (
+        <BoardToggles options={boards} selected={board} onToggle={toggleBoard} />
+      )}
+
+      {open && (
+        <div
+          ref={panelRef}
+          style={{
+            position: "absolute", top: "calc(100% + 6px)", right: 0, zIndex: 30,
+            width: "min(300px, 100%)", background: COLORS.surface,
+            border: `1px solid ${COLORS.border}`, borderRadius: 12,
+            boxShadow: "0 10px 30px rgba(0,0,0,0.28)", padding: 12,
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+            <SectionLabel>Show</SectionLabel>
+            {narrowed > 0 && (
+              <button
+                onClick={() => setFilter([])}
+                style={{ ...chipBase, padding: "4px 9px", fontSize: 11 }}
+              >Clear</button>
+            )}
+          </div>
+          {/* Several at once: an issue can be pending and need details both. */}
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 14 }}>
+            {filters.map((f) => {
+              const on = chosen.includes(f.id);
+              return (
+                <button
+                  key={f.id}
+                  onClick={() => toggleFilter(f.id)}
+                  aria-pressed={on}
+                  style={{ ...chipBase, padding: "6px 10px", ...(on ? chipOn : null) }}
+                >
+                  {f.label}{f.count != null ? ` ${f.count}` : ""}
+                </button>
+              );
+            })}
+          </div>
+
+          <SectionLabel>Order</SectionLabel>
+          <div style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: 6 }}>
+            {sorts.map((o) => {
+              const on = o.id === sort;
+              return (
+                <button
+                  key={o.id}
+                  onClick={() => { setSort(o.id); setOpen(false); }}
+                  style={{
+                    display: "flex", alignItems: "center", justifyContent: "space-between",
+                    width: "100%", textAlign: "left", cursor: "pointer",
+                    background: "transparent", border: 0, padding: "8px 6px", borderRadius: 6,
+                    fontFamily: "Inter, sans-serif", fontSize: 13,
+                    color: on ? COLORS.ink : COLORS.inkSoft, fontWeight: on ? 700 : 500,
+                  }}
+                >
+                  {o.label}
+                  {on && <Check size={14} color={COLORS.navy} />}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
 function IpoList({ ipos, accounts, onOpen, onEdit, onDelete }) {
   const [search, setSearch] = useState("");
-  const [filter, setFilter] = useState("all");
+  /* No filters chosen means everything, so there is no "All" to select — an
+     empty selection is what All meant. Several may be on at once. */
+  const [filter, setFilter] = useState([]);
   /* Which boards are showing. Mainboard is what this ledger is mostly made of,
      so that is where it opens; both can be on at once, and never neither. */
   const [board, setBoard] = useState(["Mainboard"]);
@@ -2286,9 +2376,10 @@ function IpoList({ ipos, accounts, onOpen, onEdit, onDelete }) {
     return onBoard
       .filter((i) => {
         if (q && !`${i.company || ""} ${i.symbol || ""}`.toLowerCase().includes(q)) return false;
-        if (filter === "all") return true;
-        if (filter === "incomplete") return missingIpoFields(i).length > 0;
-        return ipoBucket(i) === filter;
+        if (!filter.length) return true;
+        // Any of the chosen filters, not all of them: they name kinds, not tests.
+        return filter.some((f) =>
+          f === "incomplete" ? missingIpoFields(i).length > 0 : ipoBucket(i) === f);
       })
       .sort(cmp);
   }, [onBoard, search, filter, sort]);
@@ -2301,7 +2392,6 @@ function IpoList({ ipos, accounts, onOpen, onEdit, onDelete }) {
         search={search} setSearch={setSearch} placeholder="Search company or symbol"
         filter={filter} setFilter={setFilter}
         filters={[
-          { id: "all", label: "All", count: counts.all },
           { id: "pending", label: "Pending", count: counts.pending },
           { id: "allotted", label: "Allotted", count: counts.allotted },
           { id: "rejected", label: "Missed", count: counts.rejected },
@@ -2522,7 +2612,7 @@ function IpoCard({ ipo, accounts, onClick, onEdit, onDelete, showActions }) {
               )}
             </div>
           </div>
-          <AllotmentBar tally={tally} />
+          <AllotmentBar tally={tally} tone={spine} />
         </div>
       </div>
       {showActions && (
@@ -2624,16 +2714,16 @@ function IpoDetailSheet({ ipo, accounts, onClose, onEditIpo, onAddApplication, o
       {apps.length > 0 && (
         <div style={{ marginBottom: 14 }}>
           <AllotmentCounts tally={tally} />
-          <AllotmentBar tally={tally} />
+          <AllotmentBar tally={tally} tone={tally.pending ? COLORS.gold : tally.won ? COLORS.green : COLORS.red} />
         </div>
       )}
 
       <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
         <button onClick={() => onBulkApply(ipo.id)} style={{
           flex: "1 1 46%", display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
-          background: COLORS.navy, color: COLORS.surface, border: "none", borderRadius: 10,
+          background: COLORS.action, color: COLORS.onAction, border: "none", borderRadius: 10,
           padding: "11px 10px", fontSize: 12.5, fontWeight: 600, cursor: "pointer",
-        }}><Layers size={14} color={COLORS.surface} /> Apply in bulk</button>
+        }}><Layers size={14} color={COLORS.onAction} /> Apply in bulk</button>
         <button onClick={() => onBulkStatus(ipo.id)} disabled={!apps.length} style={{
           flex: "1 1 46%", display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
           background: COLORS.surface, color: apps.length ? COLORS.ink : COLORS.inkSoft,
@@ -2711,7 +2801,7 @@ function ApplicationRow({ app, ipo, accounts, onEdit, onDelete }) {
 
 function AccountList({ accounts, ipos, transfers = [], onEdit, onDelete }) {
   const [search, setSearch] = useState("");
-  const [filter, setFilter] = useState("all");
+  const [filter, setFilter] = useState([]);
   const [sort, setSort] = useState("name");
 
   const stats = useMemo(() => {
@@ -2775,9 +2865,9 @@ function AccountList({ accounts, ipos, transfers = [], onEdit, onDelete }) {
     return accounts
       .filter((a) => {
         if (q && !`${a.name || ""} ${a.relation || ""} ${a.bank || ""} ${a.pan || ""}`.toLowerCase().includes(q)) return false;
-        if (filter === "nopan") return !panOf(a);
-        if (filter === "dup") return dupPans.has(panOf(a));
-        return true;
+        if (!filter.length) return true;
+        return filter.some((f) =>
+          f === "nopan" ? !panOf(a) : f === "dup" ? dupPans.has(panOf(a)) : true);
       })
       .sort(cmp);
   }, [accounts, search, filter, sort, stats, dupPans]);
@@ -2790,7 +2880,6 @@ function AccountList({ accounts, ipos, transfers = [], onEdit, onDelete }) {
         search={search} setSearch={setSearch} placeholder="Search name, relation, bank or PAN"
         filter={filter} setFilter={setFilter}
         filters={[
-          { id: "all", label: "All", count: accounts.length },
           { id: "nopan", label: "No PAN", count: missingPan },
           ...(dupPans.size ? [{ id: "dup", label: "Duplicate PAN", count: dupPans.size }] : []),
         ]}
@@ -2962,7 +3051,7 @@ function ReconciliationView({ transfers, accounts }) {
 
 function TransferList({ transfers, accounts, ipos = [], onEdit, onDelete }) {
   const [search, setSearch] = useState("");
-  const [filter, setFilter] = useState("all");
+  const [filter, setFilter] = useState([]);
   const [sort, setSort] = useState("recent");
 
   const name = (id) => accounts.find((a) => a.id === id)?.name || "Unknown";
@@ -2983,13 +3072,16 @@ function TransferList({ transfers, accounts, ipos = [], onEdit, onDelete }) {
           const hay = `${name(t.fromAccountId)} ${name(t.toAccountId)} ${t.remarks || ""} ${ipoName(t.relatedIpoId)}`.toLowerCase();
           if (!hay.includes(q)) return false;
         }
-        if (filter === "linked") return !!t.relatedIpoId;
-        if (filter === "unlinked") return !t.relatedIpoId;
-        if (filter.startsWith("acct:")) {
-          const id = filter.slice(5);
-          return t.fromAccountId === id || t.toAccountId === id;
-        }
-        return true;
+        if (!filter.length) return true;
+        return filter.some((f) => {
+          if (f === "linked") return !!t.relatedIpoId;
+          if (f === "unlinked") return !t.relatedIpoId;
+          if (f.startsWith("acct:")) {
+            const id = f.slice(5);
+            return t.fromAccountId === id || t.toAccountId === id;
+          }
+          return true;
+        });
       })
       .sort(cmp);
   }, [transfers, accounts, ipos, search, filter, sort]);
@@ -3004,7 +3096,6 @@ function TransferList({ transfers, accounts, ipos = [], onEdit, onDelete }) {
         search={search} setSearch={setSearch} placeholder="Search account, IPO or remark"
         filter={filter} setFilter={setFilter}
         filters={[
-          { id: "all", label: "All", count: transfers.length },
           { id: "linked", label: "For an IPO", count: linked },
           { id: "unlinked", label: "Unlinked", count: transfers.length - linked },
           ...accounts.slice(0, 6).map((a) => ({ id: `acct:${a.id}`, label: a.name })),
@@ -3322,10 +3413,8 @@ function priceAge(asOf) {
   return hrs < 12 ? `${hrs} hr ago (${at})` : `as of ${at}`;
 }
 
-function DataSheet({ state, session, cloudOn, syncing, syncError, lastSync, onClose, onSyncNow, onReplaceAll, onSignOut, pricing, priceInfo, onRefreshPrices }) {
-  const [importText, setImportText] = useState("");
+function DataSheet({ state, session, cloudOn, syncing, syncError, lastSync, onClose, onSyncNow, onSignOut, pricing, priceInfo, onRefreshPrices }) {
   const [notice, setNotice] = useState("");
-  const [showImport, setShowImport] = useState(false);
 
   const counts = `${state.accounts.length} accounts · ${state.ipos.length} IPOs · ${state.transfers.length} transfers`;
 
@@ -3351,28 +3440,7 @@ function DataSheet({ state, session, cloudOn, syncing, syncError, lastSync, onCl
     setNotice("Backup downloaded.");
   };
 
-  const runImport = (mode) => {
-    let incoming;
-    try {
-      incoming = parseImport(importText);
-    } catch (e) {
-      setNotice(e.message || "That does not look like a ledger backup.");
-      return;
-    }
-    if (mode === "replace") {
-      if (!confirm("Replace everything currently in this ledger with the pasted data?")) return;
-      onReplaceAll(incoming);
-    } else {
-      onReplaceAll({
-        accounts: mergeById(state.accounts, incoming.accounts),
-        ipos: mergeIpos(state.ipos, incoming.ipos),
-        transfers: mergeById(state.transfers, incoming.transfers),
-      });
-    }
-    setImportText("");
-    setShowImport(false);
-    setNotice(mode === "replace" ? "Ledger replaced." : "Entries merged in.");
-  };
+
 
   return (
     <Sheet title="Sync & Data" onClose={onClose}>
@@ -3455,33 +3523,6 @@ function DataSheet({ state, session, cloudOn, syncing, syncError, lastSync, onCl
       {/* Nothing here about deleted records. They are kept — a deletion moves
           the record into the trash table and syncs like any other — but that is
           the ledger's business, not something to put in front of anyone. */}
-      <div style={{ height: 12 }} />
-      {!showImport ? (
-        <PrimaryButton ghost onClick={() => setShowImport(true)}>Restore from a backup…</PrimaryButton>
-      ) : (
-        <>
-          <Field label="Paste backup JSON">
-            <textarea
-              value={importText}
-              onChange={(e) => setImportText(e.target.value)}
-              rows={6}
-              placeholder='{ "accounts": [...], "ipos": [...], "transfers": [...] }'
-              style={{ ...inputStyle, resize: "vertical", fontFamily: "'JetBrains Mono', monospace", fontSize: 12 }}
-            />
-          </Field>
-          <div style={{ display: "flex", gap: 10 }}>
-            <div style={{ flex: 1 }}>
-              <PrimaryButton ghost onClick={() => runImport("merge")} disabled={!importText.trim()}>Merge in</PrimaryButton>
-            </div>
-            <div style={{ flex: 1 }}>
-              <PrimaryButton danger onClick={() => runImport("replace")} disabled={!importText.trim()}>Replace all</PrimaryButton>
-            </div>
-          </div>
-          <div style={{ fontSize: 11.5, color: COLORS.inkSoft, marginTop: 8 }}>
-            Merge keeps everything already here and only adds entries it does not have.
-          </div>
-        </>
-      )}
 
       {notice && (
         <div style={{
