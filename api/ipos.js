@@ -1,67 +1,70 @@
 /*
- * Live IPO data, from both exchanges.
+ * Live IPO data from Upstox + BSE category demand.
  *
- * Neither one lists everything. NSE Emerge SME issues never reach BSE, and BSE
- * carries issues NSE does not, so the two are unioned by company name rather
- * than one being trusted as the whole picture. It also means an exchange being
- * unreachable shortens the list instead of emptying it.
+ * Upstox provides: IPO list (open/upcoming/closed/listed), IPO details
+ * (lot size, timeline, registrar, listing price, subscription).
  *
- * NSE contributes the ticker and the headline subscription figure. BSE
- * contributes what NSE does not publish at all: the market lot, without which
- * an application cannot be costed, and the subscription split by investor
- * category — the retail line being the one that bears on a family's odds.
+ * BSE is retained solely for category-wise subscription split (QIB, NII,
+ * Retail, Employee) — Upstox only gives the headline total_subscription.
  *
- * Neither needs an API key; both are public. NSE serves a challenge page to
- * clients that do not look like a browser, so a cookie is taken from its home
- * page first. BSE only wants browser-ish headers.
+ * The analytics token (long-lived, read-only) is used for Upstox calls.
  */
 
-const NSE = "https://www.nseindia.com";
+const UPSTOX = "https://api.upstox.com/v2";
 const BSE = "https://api.bseindia.com/BseIndiaAPI/api";
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
   "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
-const MONTHS = {
-  jan: "01", feb: "02", mar: "03", apr: "04", may: "05", jun: "06",
-  jul: "07", aug: "08", sep: "09", oct: "10", nov: "11", dec: "12",
-};
+/* -------------------------------- Upstox -------------------------------- */
 
-// "31-Aug-2026" -> "2026-08-31" (the format the app's date inputs use)
-function toISO(d) {
-  if (!d || typeof d !== "string") return "";
-  const m = d.trim().match(/^(\d{1,2})-([A-Za-z]{3})-(\d{4})$/);
-  if (!m) return "";
-  const mm = MONTHS[m[2].toLowerCase()];
-  return mm ? `${m[3]}-${mm}-${m[1].padStart(2, "0")}` : "";
+async function upstoxFetch(path, token) {
+  const r = await fetch(`${UPSTOX}${path}`, {
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  if (!r.ok) {
+    const text = await r.text();
+    throw new Error(`Upstox ${path} responded ${r.status}: ${text.slice(0, 200)}`);
+  }
+  return r.json();
 }
 
-// "Rs.78 to Rs.82" / "131.00-138.00" -> { min, max }
-function parsePrice(s) {
-  const nums = String(s || "").match(/\d+(?:\.\d+)?/g);
-  if (!nums || !nums.length) return { min: null, max: null };
-  const vals = nums.map(Number);
-  return { min: Math.min(...vals), max: Math.max(...vals) };
+/* Fetch all pages of IPOs for a given status. Records per page max 30. */
+async function fetchAllIpos(token, status, issueType) {
+  const all = [];
+  let page = 1;
+  let totalPages = 1;
+  while (page <= totalPages) {
+    const data = await upstoxFetch(
+      `/ipos?status=${status}&issue_type=${issueType}&page_number=${page}&records=30`,
+      token
+    );
+    if (data.status !== "success" || !Array.isArray(data.data)) break;
+    all.push(...data.data);
+    totalPages = data.meta_data?.page?.total_pages || 1;
+    page++;
+  }
+  return all;
 }
 
-/* The market's calendar date. toISOString() would give the UTC one, which is
-   the previous day through the whole Indian evening. */
-function istToday() {
+/* Fetch IPO details for enrichment (lot size, timeline, registrar). */
+async function fetchIpoDetail(token, id) {
   try {
-    return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date());
+    const data = await upstoxFetch(`/ipos/${encodeURIComponent(id)}`, token);
+    if (data.status === "success" && data.data) return data.data;
+    return null;
   } catch {
-    return new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
+    return null;
   }
 }
 
-function num(v) {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
-}
+/* ---------------------------------- BSE ---------------------------------- */
 
-/* Company names never match exactly across exchanges - "Lumino Industries
-   Limited" on one side, "LUMINO INDUSTRIES LTD" on the other. Reduce both to
-   the same shape before comparing. */
+/* Company names never match exactly across sources. Reduce both to the same
+   shape before comparing. */
 function nameKey(s) {
   return String(s || "")
     .toLowerCase()
@@ -71,52 +74,15 @@ function nameKey(s) {
     .trim();
 }
 
-/* ---------------------------------- NSE ---------------------------------- */
-
-async function nseCookie() {
-  try {
-    const r = await fetch(NSE + "/", {
-      headers: {
-        "User-Agent": UA,
-        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-      },
-      redirect: "follow",
-    });
-    const jar =
-      typeof r.headers.getSetCookie === "function"
-        ? r.headers.getSetCookie()
-        : [r.headers.get("set-cookie")].filter(Boolean);
-    return jar.map((c) => String(c).split(";")[0]).join("; ");
-  } catch {
-    return "";
-  }
+function num(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
 }
 
-async function nseJson(path, cookie) {
-  const r = await fetch(NSE + path, {
-    headers: {
-      "User-Agent": UA,
-      Accept: "application/json, text/plain, */*",
-      "Accept-Language": "en-US,en;q=0.9",
-      Referer: NSE + "/market-data/all-upcoming-issues-ipo",
-      ...(cookie ? { Cookie: cookie } : {}),
-    },
-  });
-  if (!r.ok) throw new Error(`NSE ${path} responded ${r.status}`);
-  const text = await r.text();
-  if (!text.trim()) return [];
-  try {
-    return JSON.parse(text);
-  } catch {
-    throw new Error(`NSE ${path} returned a non-JSON body`);
-  }
-}
-
-/* ---------------------------------- BSE ---------------------------------- */
-
-async function bseJson(path) {
-  const r = await fetch(BSE + path, {
+/* Live and forthcoming issues from BSE. Used only to find IPO_NO for
+   category demand lookups. */
+async function bsePublicIssues() {
+  const r = await fetch(`${BSE}/GetPublicIssue_par_updated/w?flag=1`, {
     headers: {
       "User-Agent": UA,
       Accept: "application/json, text/plain, */*",
@@ -124,92 +90,61 @@ async function bseJson(path) {
       Origin: "https://www.bseindia.com",
     },
   });
-  if (!r.ok) throw new Error(`BSE ${path} responded ${r.status}`);
+  if (!r.ok) return [];
   const text = await r.text();
-  if (!text.trim()) return null;
+  if (!text.trim()) return [];
   try {
-    return JSON.parse(text);
+    const data = JSON.parse(text);
+    const rows = Array.isArray(data?.Table) ? data.Table : [];
+    return rows
+      .filter((r) => /^ipo$/i.test(String(r.IR_flag || "").trim()))
+      .map((r) => ({
+        key: nameKey(r.Scrip_Name || r.LONG_NAME || r.short_name),
+        ipoNo: String(r.IPO_NO || "").trim(),
+      }))
+      .filter((r) => r.key && r.ipoNo);
   } catch {
-    throw new Error(`BSE ${path} returned a non-JSON body`);
+    return [];
   }
 }
 
-/* Live and forthcoming issues. This is both a source of issues in its own right
-   and where each one's IPO number comes from.
-
-   The feed mixes in things that are not IPOs at all, and IR_flag is what tells
-   them apart: IPO, RI (rights), OTB (offer to buy), DPI (debt public issue) and
-   BuyBack. Only IPO belongs in an IPO tracker — the platform field does not
-   separate them, since an open offer on the mainboard still says MainBoard. */
-function parseBand(s) {
-  const nums = String(s || "").match(/\d+(?:\.\d+)?/g);
-  if (!nums || !nums.length) return { min: null, max: null };
-  const vals = nums.map(Number);
-  return { min: Math.min(...vals), max: Math.max(...vals) };
-}
-
-async function bsePublicIssues() {
-  const data = await bseJson("/GetPublicIssue_par_updated/w?flag=1");
-  const rows = Array.isArray(data?.Table) ? data.Table : [];
-  return rows
-    .map((r) => {
-      const platform = String(r.eXCHANGE_PLATFORM || "").trim();
-      const band = parseBand(r.Price_Band);
-      return {
-        key: nameKey(r.Scrip_Name || r.LONG_NAME || r.short_name),
-        company: String(r.Scrip_Name || r.LONG_NAME || "").replace(/\s+/g, " ").trim(),
-        ipoNo: String(r.IPO_NO || "").trim(),
-        platform,
-        category: /sme/i.test(platform) ? "SME" : "Mainboard",
-        priceMin: band.min,
-        priceMax: band.max,
-        openDate: String(r.Start_Dt || "").slice(0, 10),
-        closeDate: String(r.End_Dt || "").slice(0, 10),
-        faceValue: num(r.Face_Val),
-        isIpo: /^ipo$/i.test(String(r.IR_flag || "").trim()),
-      };
-    })
-    .filter((r) => r.key && r.ipoNo);
-}
-
-// The per-issue endpoint. Market_Lot is the reason we are here.
-async function bseIssueDetail(ipoNo) {
-  const data = await bseJson(`/GetMkt_ISSUE_BBS_IPO/w?IPO_NO=${encodeURIComponent(ipoNo)}`);
-  const d = Array.isArray(data?.IPONO_0) ? data.IPONO_0[0] : null;
-  if (!d) return null;
-  const lot = parseInt(String(d.Market_Lot || "").replace(/[^0-9]/g, ""), 10);
-  return {
-    lotSize: Number.isFinite(lot) && lot > 0 ? lot : null,
-    minBidQty: num(String(d.Minimum_Bid_Quantity || "").replace(/[^0-9]/g, "")),
-    faceValue: num(d.Face_Value),
-    registrar: String(d.Registrar || "").split("^")[0].trim(),
-    upiCutOff: String(d.Cut_off_time_for_UPI_Mandate_Confirmation || "").trim(),
-  };
-}
-
-/* Subscription split by investor category. The retail figure is the one that
-   bears on a family application's odds - a retail book at 3x behaves very
-   differently from one at 90x, even when the headline number looks the same. */
+/* Subscription split by investor category. */
 async function bseCategoryDemand(ipoNo) {
-  const data = await bseJson(`/Pubissues_BBS_CumultveCatdem_ng/w?IPO_NO=${encodeURIComponent(ipoNo)}`);
-  const rows = Array.isArray(data?.Table) ? data.Table : [];
-  const out = { qib: null, nii: null, retail: null, employee: null };
-  rows.forEach((r) => {
-    // Sub-rows are numbered "1(a)", "2.1" and so on; only the whole-category
-    // rows carry a meaningful times-subscribed figure.
-    if (!/^\d+$/.test(String(r.SRNo || "").trim())) return;
-    const label = String(r.col2 || "").toLowerCase();
-    const times = num(r.col5);
-    if (times == null) return;
-    if (label.includes("qualified institutional")) out.qib = times;
-    else if (label.includes("non institutional")) out.nii = times;
-    else if (label.includes("retail")) out.retail = times;
-    else if (label.includes("employee")) out.employee = times;
-  });
-  return out;
+  const r = await fetch(
+    `${BSE}/Pubissues_BBS_CumultveCatdem_ng/w?IPO_NO=${encodeURIComponent(ipoNo)}`,
+    {
+      headers: {
+        "User-Agent": UA,
+        Accept: "application/json, text/plain, */*",
+        Referer: "https://www.bseindia.com/",
+        Origin: "https://www.bseindia.com",
+      },
+    }
+  );
+  if (!r.ok) return null;
+  const text = await r.text();
+  if (!text.trim()) return null;
+  try {
+    const data = JSON.parse(text);
+    const rows = Array.isArray(data?.Table) ? data.Table : [];
+    const out = { qib: null, nii: null, retail: null, employee: null };
+    rows.forEach((r) => {
+      if (!/^\d+$/.test(String(r.SRNo || "").trim())) return;
+      const label = String(r.col2 || "").toLowerCase();
+      const times = num(r.col5);
+      if (times == null) return;
+      if (label.includes("qualified institutional")) out.qib = times;
+      else if (label.includes("non institutional")) out.nii = times;
+      else if (label.includes("retail")) out.retail = times;
+      else if (label.includes("employee")) out.employee = times;
+    });
+    return Object.values(out).some((v) => v != null) ? out : null;
+  } catch {
+    return null;
+  }
 }
 
-// Run a handful at a time; there is no reason to open twenty sockets at BSE.
+/* Run a handful at a time to avoid flooding BSE. */
 async function mapLimited(items, limit, fn) {
   const out = new Array(items.length);
   let i = 0;
@@ -228,47 +163,43 @@ async function mapLimited(items, limit, fn) {
   return out;
 }
 
+/* The market's calendar date in IST. */
+function istToday() {
+  try {
+    return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date());
+  } catch {
+    return new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
+  }
+}
+
 /* -------------------------------- assembly -------------------------------- */
 
-function normaliseNse(row, live) {
-  const price = parsePrice(row.issuePrice);
+function normaliseUpstoxIpo(item) {
   return {
-    symbol: row.symbol || "",
-    company: (row.companyName || "").replace(/\s+/g, " ").trim(),
-    category: String(row.series || "").toUpperCase() === "SME" ? "SME" : "Mainboard",
-    priceMin: price.min,
-    priceMax: price.max,
-    openDate: toISO(row.issueStartDate),
-    closeDate: toISO(row.issueEndDate),
-    issueSize: num(row.issueSize),
-    // Times subscribed overall. Only present while bidding is open.
-    subscription: live ? num(row.noOfTime) : null,
-    status: row.status || "",
-    live: !!live,
+    id: item.id || "",
+    symbol: item.symbol || "",
+    company: (item.name || "").replace(/\s*ipo\s*$/i, "").trim(),
+    category: item.issue_type === "sme" ? "SME" : "Mainboard",
+    priceMin: num(item.minimum_price),
+    priceMax: num(item.maximum_price),
+    openDate: item.bidding_start_date || "",
+    closeDate: item.bidding_end_date || "",
+    issueSize: num(item.issue_size),
+    subscription: num(item.total_subscription),
+    status: item.status || "",
+    isin: item.isin || "",
+    industry: item.industry || "",
+    live: item.status === "open",
+    // Filled in from details
     lotSize: null,
     lotCost: null,
     registrar: "",
+    listingPrice: null,
+    listingDate: "",
+    allotmentDate: "",
     categories: null,
-    source: "NSE",
+    source: "Upstox",
   };
-}
-
-function mergeNse(current, upcoming) {
-  const bySymbol = new Map();
-  upcoming.forEach((r) => {
-    const n = normaliseNse(r, false);
-    if (n.symbol) bySymbol.set(n.symbol, n);
-  });
-  current.forEach((r) => {
-    const n = normaliseNse(r, true);
-    if (!n.symbol) return;
-    const prev = bySymbol.get(n.symbol);
-    if (prev && prev.live && prev.subscription != null && n.subscription != null) {
-      n.subscription = Math.max(prev.subscription, n.subscription);
-    }
-    bySymbol.set(n.symbol, n);
-  });
-  return [...bySymbol.values()].sort((a, b) => (a.closeDate || "").localeCompare(b.closeDate || ""));
 }
 
 export const config = { maxDuration: 30 };
@@ -278,103 +209,93 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
+  const token = process.env.UPSTOX_ANALYTICS_TOKEN;
+  if (!token) {
+    return res.status(500).json({ error: "UPSTOX_ANALYTICS_TOKEN not configured" });
+  }
+
   try {
-    /* Both exchanges, because neither lists everything: NSE Emerge SME issues
-       never appear on BSE, and BSE has issues NSE does not. Asking both and
-       taking the union is the only way to see them all — and it means one
-       exchange being unreachable degrades the list rather than emptying it. */
-    const cookie = await nseCookie();
-    const [current, upcoming, bseRows] = await Promise.all([
-      nseJson("/api/ipo-current-issue", cookie).catch(() => []),
-      nseJson("/api/all-upcoming-issues?category=ipo", cookie).catch(() => []),
-      bsePublicIssues().catch(() => []),
+    const today = istToday();
+
+    /* Fetch open and upcoming IPOs from Upstox (both regular and SME). */
+    const [openRegular, openSme, upcomingRegular, upcomingSme] = await Promise.all([
+      fetchAllIpos(token, "open", "regular").catch(() => []),
+      fetchAllIpos(token, "open", "sme").catch(() => []),
+      fetchAllIpos(token, "upcoming", "regular").catch(() => []),
+      fetchAllIpos(token, "upcoming", "sme").catch(() => []),
     ]);
 
-    const ipos = mergeNse(
-      Array.isArray(current) ? current : [],
-      Array.isArray(upcoming) ? upcoming : []
-    );
+    const allRaw = [...openRegular, ...openSme, ...upcomingRegular, ...upcomingSme];
 
-    // Add the issues only BSE knows about, skipping debt and rights.
-    const seen = new Set(ipos.map((i) => nameKey(i.company)));
-    bseRows.forEach((r) => {
-      if (!r.isIpo || seen.has(r.key)) return;
-      seen.add(r.key);
-      ipos.push({
-        symbol: r.key.replace(/\s+/g, "-").slice(0, 24).toUpperCase(),
-        company: r.company,
-        category: r.category,
-        priceMin: r.priceMin,
-        priceMax: r.priceMax,
-        openDate: r.openDate,
-        closeDate: r.closeDate,
-        issueSize: null,
-        subscription: null,
-        status: "",
-        live: !!r.openDate && r.openDate <= istToday(),
-        lotSize: null,
-        lotCost: null,
-        registrar: "",
-        categories: null,
-        source: "BSE",
-      });
+    // Dedupe by id
+    const byId = new Map();
+    allRaw.forEach((item) => {
+      if (item.id && !byId.has(item.id)) byId.set(item.id, item);
     });
 
-    ipos.sort((a, b) => (a.closeDate || "").localeCompare(b.closeDate || ""));
+    const ipos = [...byId.values()].map(normaliseUpstoxIpo);
 
     if (!ipos.length) {
       return res.status(502).json({
-        error: "Neither NSE nor BSE returned any IPOs. They may be blocking this server, or there may genuinely be none open.",
+        error: "Upstox returned no IPOs. There may genuinely be none open/upcoming.",
       });
     }
 
-    // Enrich with BSE's lot size and category demand.
-    let lotSource = "none";
+    /* Fetch details for each IPO (lot size, timeline, registrar).
+       Limited to 4 concurrent to stay well within rate limits. */
+    const details = await mapLimited(ipos, 4, (ipo) =>
+      fetchIpoDetail(token, ipo.id)
+    );
+
+    details.forEach((detail, i) => {
+      if (!detail) return;
+      const ipo = ipos[i];
+      ipo.lotSize = num(detail.lot_size);
+      ipo.registrar = detail.registrar_info?.name || "";
+      ipo.listingPrice = num(detail.listing_price);
+      ipo.listingDate = detail.timeline?.listing_date || "";
+      ipo.allotmentDate = detail.timeline?.allotment_date || "";
+      if (ipo.lotSize && ipo.priceMax != null) {
+        ipo.lotCost = ipo.lotSize * ipo.priceMax;
+      }
+      // Fill in subscription from detail if missing from list
+      if (ipo.subscription == null && detail.total_subscription != null) {
+        ipo.subscription = num(detail.total_subscription);
+      }
+    });
+
+    /* Enrich with BSE category demand for open IPOs. */
+    let lotSource = "Upstox";
     try {
-      const byKey = new Map(bseRows.map((r) => [r.key, r]));
-      const matched = ipos
-        .map((ipo, idx) => ({ idx, hit: byKey.get(nameKey(ipo.company)) }))
+      const bseRows = await bsePublicIssues();
+      const bseByKey = new Map(bseRows.map((r) => [r.key, r]));
+
+      const openIpos = ipos.filter((ipo) => ipo.live);
+      const matched = openIpos
+        .map((ipo) => ({ ipo, hit: bseByKey.get(nameKey(ipo.company)) }))
         .filter((m) => m.hit);
 
-      const enriched = await mapLimited(matched, 4, async (m) => ({
-        detail: await bseIssueDetail(m.hit.ipoNo).catch(() => null),
-        // Only open issues have a book to report on.
-        categories: await bseCategoryDemand(m.hit.ipoNo).catch(() => null),
-      }));
+      const categories = await mapLimited(matched, 4, (m) =>
+        bseCategoryDemand(m.hit.ipoNo)
+      );
 
-      enriched.forEach((e, n) => {
-        const ipo = ipos[matched[n].idx];
-        if (e.detail) {
-          ipo.lotSize = e.detail.lotSize;
-          ipo.registrar = e.detail.registrar || "";
-          if (e.detail.lotSize && ipo.priceMax != null) ipo.lotCost = e.detail.lotSize * ipo.priceMax;
-        }
-        if (e.categories && Object.values(e.categories).some((v) => v != null)) {
-          ipo.categories = e.categories;
-        }
-        // NSE omits the price band for some SME issues; BSE often has it.
-        const bse = matched[n].hit;
-        if (ipo.priceMax == null && bse.priceMax != null) {
-          ipo.priceMin = bse.priceMin;
-          ipo.priceMax = bse.priceMax;
-          if (ipo.lotSize) ipo.lotCost = ipo.lotSize * bse.priceMax;
-        }
-        if (!ipo.openDate && bse.openDate) ipo.openDate = bse.openDate;
-        if (!ipo.closeDate && bse.closeDate) ipo.closeDate = bse.closeDate;
+      categories.forEach((cat, i) => {
+        if (cat) matched[i].ipo.categories = cat;
       });
-      if (enriched.some((e) => e.detail && e.detail.lotSize)) lotSource = "BSE";
     } catch {
-      // leave lotSize null
+      // BSE enrichment failed — not critical
     }
+
+    ipos.sort((a, b) => (a.closeDate || "").localeCompare(b.closeDate || ""));
 
     res.setHeader("Cache-Control", "s-maxage=300, stale-while-revalidate=600");
     return res.status(200).json({
-      source: "NSE",
+      source: "Upstox",
       lotSource,
       fetchedAt: new Date().toISOString(),
       ipos,
     });
   } catch (error) {
-    return res.status(502).json({ error: error.message || "Could not reach NSE" });
+    return res.status(502).json({ error: error.message || "Could not reach Upstox" });
   }
 }
