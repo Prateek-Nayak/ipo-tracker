@@ -3681,7 +3681,10 @@ function LiveIposSheet({ existing, onClose, onImport }) {
 
   useEffect(() => {
     let cancelled = false;
-    setState((s) => ({ ...s, status: "loading", error: "" }));
+    /* Rows are dropped, not kept: they belong to the view being left, and
+       anything reading them meanwhile — the board counts, for one — would be
+       judging the new list by the old one's contents. */
+    setState((s) => ({ ...s, status: "loading", error: "", rows: [] }));
     setPicked({});
     setBoard(["Mainboard"]);
 
@@ -3789,11 +3792,13 @@ function LiveIposSheet({ existing, onClose, onImport }) {
   /* The list opens on Mainboard, but a year BSE left unlabelled — or a week of
      nothing but SME issues — would then open on an empty screen. */
   useEffect(() => {
-    if (!state.rows.length) return;
+    // Only once the list has actually arrived; a half-loaded view is not
+    // evidence that a board is empty.
+    if (state.status !== "done" || !state.rows.length) return;
     if (board.some((b) => boardCounts[b] > 0)) return;
     const present = Object.keys(boardCounts).filter((k) => boardCounts[k] > 0);
     if (present.length) setBoard(present);
-  }, [board, state.rows.length, boardCounts]);
+  }, [board, state.status, state.rows.length, boardCounts]);
 
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase();

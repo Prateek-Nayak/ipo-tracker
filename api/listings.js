@@ -181,6 +181,11 @@ async function bseIssueWindows() {
         priceMin: band.min,
         priceMax: band.max,
         ipoNo: String(r.IPO_NO || "").trim(),
+        /* The window feed says which board outright, so an issue that has not
+           listed yet — and therefore has no listing row to take a board from —
+           does not have to go down as unlabelled. */
+        category: /sme/i.test(String(r.eXCHANGE_PLATFORM || "")) ? "SME"
+          : /main/i.test(String(r.eXCHANGE_PLATFORM || "")) ? "Mainboard" : "",
         company: String(r.Scrip_Name || r.LONG_NAME || "").replace(/\s+/g, " ").trim(),
       });
     }
@@ -449,9 +454,11 @@ export default async function handler(req, res) {
           openDate: w.openDate, closeDate: w.closeDate,
           priceMin: w.priceMin, priceMax: w.priceMax, ipoNo: w.ipoNo,
         });
+        // Only where the listing feed had nothing to say.
+        if (!existing.category && w.category) existing.category = w.category;
       } else {
         byKey.set(key, {
-          company: w.company || "", key, shortName: "",
+          company: w.company || "", key, shortName: "", category: w.category || "",
           issuePrice: null, listedOn: "", listingClose: null, listingDayGain: null,
           currentPrice: null, gainSinceIssue: null, bseUrl: "",
           openDate: w.openDate, closeDate: w.closeDate,
