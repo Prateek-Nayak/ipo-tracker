@@ -1,0 +1,211 @@
+name: Apply Upstox migration fixes
+
+on:
+  push:
+    branches: [feat/upstox-migration]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: ${{ !startsWith(github.event.head_commit.message, 'chore: apply Upstox migration fixes') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/upstox-migration
+          fetch-depth: 1
+
+      - name: Patch frontend
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('src/App.jsx')
+          s = p.read_text()
+
+          start = s.index('  /* Pull listing and current market prices from BSE')
+          end = s.index('  // The entry point everything else uses:', start)
+          replacement = r'''  /* Refresh IPO metadata, listing price and current market price from Upstox.
+     BSE is deliberately not involved here: it is used only by /api/ipos for
+     category-wise subscription demand. Existing records imported from BSE are
+     matched to the current Upstox record by company name, symbol and ISIN so
+     the migration does not strand old ledger entries. */
+  const refreshPricesFrom = useCallback(async (list, opts = {}) => {
+    if (!list.length) return { matched: 0, updated: 0 };
+    setPricing(true);
+    try {
+      const asking = list.filter((i) =>
+        !i.lotSize || !i.closeDate || !i.openDate || isBlank(i.priceBand) ||
+        (hasListed(i) && isBlank(i.listingPrice)) || !i.currentPrice
+      );
+      const aliases = [];
+      asking.forEach((i) => {
+        [i.company, i.symbol, i.isin].forEach((v) => { if (v) aliases.push(String(v)); });
+      });
+      const keys = [...new Set(aliases)].slice(0, 120).join('|');
+      const bust = opts.silent
+        ? `&at=${Math.floor(Date.now() / 30000)}`
+        : `&at=${Date.now()}`;
+      const res = await fetch(`/api/listings?${keys ? `keys=${encodeURIComponent(keys)}&` : ''}at=${bust.slice(4)}`);
+      const text = await res.text();
+      let data = {};
+      try { data = JSON.parse(text); } catch { /* handled next */ }
+      if (!res.ok || data.error) throw new Error(data.error || `Request failed (${res.status})`);
+
+      const byAlias = new Map();
+      (data.listings || []).forEach((l) => {
+        [l.key, l.shortName, l.symbol, l.isin].filter(Boolean).forEach((v) => {
+          byAlias.set(nameKey(v));
+          byAlias.set(String(v).toUpperCase(), l);
+        });
+      });
+      const findHit = (ipo) => {
+        for (const v of [ipo.company, ipo.symbol, ipo.isin]) {
+          if (!v) continue;
+          const hit = byAlias.get(nameKey(v)) || byAlias.get(String(v).toUpperCase());
+          if (hit) return hit;
+        }
+        return null;
+      };
+
+      const asOf = data.fetchedAt || new Date().toISOString();
+      let matched = 0;
+      let updated = 0;
+      let reblocked = 0;
+      const next = list.map((ipo) => {
+        const hit = findHit(ipo);
+        if (!hit) return ipo;
+        matched++;
+        const patch = { priceAsOf: asOf, source: 'Upstox' };
+        if (hit.currentPrice != null) patch.currentPrice = String(hit.currentPrice);
+        if (hit.listingOpen != null) {
+          patch.listingPrice = String(hit.listingOpen);
+          patch.listingPriceSource = 'upstox-listing-price';
+        }
+        if (hit.listedOn) patch.listingDate = hit.listedOn;
+        if (hit.openDate) patch.openDate = hit.openDate;
+        if (hit.closeDate) {
+          patch.closeDate = hit.closeDate;
+          patch.applicationDate = hit.closeDate;
+        }
+        if (hit.priceMax != null) patch.priceBand = String(hit.priceMax);
+        if (hit.lotSize != null) patch.lotSize = String(hit.lotSize);
+        if (hit.allotmentDate) patch.allotmentDate = hit.allotmentDate;
+        if (hit.isin && !ipo.isin) patch.isin = hit.isin;
+        if (hit.shortName && !ipo.symbol) patch.symbol = hit.shortName;
+
+        const merged = { ...ipo, ...patch };
+        const lot = Number(merged.lotSize);
+        const band = Number(merged.priceBand);
+        if (lot > 0 && band > 0) {
+          merged.applications = (merged.applications || []).map((a) => {
+            const want = String((Number(a.lots) || 0) * lot * band);
+            if (want === '0' || a.amountBlocked === want) return a;
+            reblocked++;
+            return { ...a, amountBlocked: want };
+          });
+        }
+        const changed = Object.keys(patch).some((k) => String(ipo[k] ?? '') !== String(patch[k]))
+          || merged.applications !== ipo.applications;
+        if (changed) updated++;
+        return changed ? merged : ipo;
+      });
+
+      if (updated) persistIpos(next);
+      setPriceInfo({ asOf, matched, total: list.length, reblocked, error: '' });
+      return { matched, updated, reblocked };
+    } catch (e) {
+      console.error('Upstox refresh failed', e);
+      setPriceInfo((p) => ({ ...p, error: e.message || 'Could not update IPO data' }));
+      if (!opts.silent) throw e;
+      return { matched: 0, updated: 0 };
+    } finally {
+      setPricing(false);
+    }
+  }, [persistIpos]);
+
+'''
+          s = s[:start] + replacement + s[end:]
+
+          # Remove stale BSE source wording in the IPO form and data sheet.
+          replacements = {
+            'Dates come from BSE and are shown rather than typed — every one was': 'Dates are supplied by Upstox and are shown rather than typed — every one is',
+            'duplicate of something the exchange already publishes. But BSE has no': 'supplied by the exchange already publishes. If Upstox has no',
+            'BSE has none for this issue. Refreshing prices fills them in when it does.': 'Upstox has no dates for this issue yet. Refreshing IPO data fills them in when available.',
+            'A refresh overwrites these whenever BSE has its own value.': 'A refresh overwrites these whenever Upstox has its own value.',
+            'Listing Price — day-one open (from BSE, ₹)': 'Listing Price — day-one open (from Upstox, ₹)',
+            'Listing Day Close (from BSE, ₹)': 'Listing Day Close (from Upstox, ₹)',
+            'bse-open': 'upstox-listing-price',
+            'bse-close': 'upstox-listing-price',
+            'Fetching from BSE…': 'Fetching from Upstox…',
+            'matched on BSE': 'matched on Upstox',
+            'Issues and subscription from NSE; lot size and the retail book from BSE.': 'Issues, dates and IPO metadata from Upstox; category-wise subscription from BSE.',
+            'Listed in " + year + ", from BSE. Mainboard/SME could not be determined this time.': 'Listed in " + year + ", from Upstox.',
+            'Everything from " + year + ", from BSE — listed, and closed awaiting listing. Lot size and listing price are fetched for what you select.': 'Everything from " + year + ", from Upstox — listed, and closed awaiting listing. Lot size and listing price come from Upstox.',
+            'BSE does not always say which board a listing was on. Guessing mainboard': 'Upstox supplies the board classification. If it is missing, keep the row unlabelled rather than guessing',
+            'BSE — listed, and closed awaiting listing.': 'Upstox — listed, and closed awaiting listing.',
+            'from BSE — listed': 'from Upstox — listed',
+            'from BSE. Mainboard': 'from Upstox. Mainboard',
+        }
+          for a, b in replacements.items():
+            s = s.replace(a, b)
+
+          # The year picker must never expose 2024/2025; current year only plus
+          # future years that become relevant later are generated dynamically.
+          old = '  const years = [thisYear, thisYear - 1, thisYear - 2];'
+          new = '  const years = [thisYear, thisYear + 1, thisYear + 2];'
+          if old in s:
+            s = s.replace(old, new)
+
+          p.write_text(s)
+
+      - name: Patch live IPO UI rules
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('src/App.jsx')
+          s = p.read_text()
+
+          # Enforce finalized dates in the UI as a second guard; the API already
+          # applies the same rule server-side.
+          marker = '  const visible = useMemo(() => {'
+          inject = '''  const visible = useMemo(() => {
+    const datedRows = state.rows.filter((r) => r.openDate && r.closeDate);
+'''
+          if marker in s and 'const datedRows = state.rows.filter' not in s:
+            s = s.replace(marker, inject, 1)
+            s = s.replace('    return state.rows.filter((r) => {', '    return datedRows.filter((r) => {', 1)
+
+          # Subscription badge is valid only while the IPO is actually open.
+          old = '''                        {r.subscription != null && (
+                          <Badge
+                            color={r.subscription >= 1 ? COLORS.green : COLORS.gold}
+                            bg={r.subscription >= 1 ? COLORS.greenSoft : COLORS.goldSoft}
+                          >
+                            {r.subscription.toFixed(2)}× subscribed
+                          </Badge>
+                        )}'''
+          new = '''                        {r.openDate && r.closeDate && r.openDate <= todayISO() && r.closeDate >= todayISO() && r.subscription != null && (
+                          <Badge
+                            color={r.subscription >= 1 ? COLORS.green : COLORS.gold}
+                            bg={r.subscription >= 1 ? COLORS.greenSoft : COLORS.goldSoft}
+                          >
+                            {r.subscription.toFixed(2)}× subscribed
+                          </Badge>
+                        )}
+                        {r.openDate && r.closeDate && r.openDate > todayISO() && (
+                          <Badge color={COLORS.navy} bg="#EAEFF5">Closes {fmtDate(r.closeDate)}</Badge>
+                        )}'''
+          if old in s:
+            s = s.replace(old, new, 1)
+
+          p.write_text(s)
+
+      - name: Commit fixes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/App.jsx
+          git diff --cached --quiet || git commit -m "chore: apply Upstox migration fixes"
+          git push origin HEAD:feat/upstox-migration
