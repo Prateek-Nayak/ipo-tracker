@@ -152,10 +152,6 @@ async function migrateLocalAndCloud() {
   } catch (e) { console.warn("Upstox legacy IPO migration skipped", e); }
 }
 
-/* Manual Sync now is intentionally a pull/reconcile operation. The React
-   button used to call pushToCloud(), which means a phone containing stale data
-   could overwrite the newer laptop copy. Pull the cloud ledger first, replace
-   local tables, then reload so React starts from the reconciled state. */
 async function pullCloudLedger() {
   const session = readSession(); const { url, anon } = cloudConfig();
   if (!url || !anon || !session?.access_token || !session?.user?.id) return false;
@@ -170,8 +166,6 @@ async function pullCloudLedger() {
   return true;
 }
 
-/* Delete remains a normal destructive action. The retained database copy is
-   implementation-only; no deleted-record screen or recovery action is exposed. */
 function installDeleteCopyGuard() {
   if (window.__ipoDeleteCopyGuard) return;
   window.__ipoDeleteCopyGuard = true;
@@ -192,9 +186,6 @@ function installDeleteCopyGuard() {
 
 function hideDeletedUi() {
   const elements = Array.from(document.querySelectorAll("body *"));
-
-  /* Remove the entire deleted-record section from Sync & Data. The underlying
-     retained data remains available to the sync layer but is never presented. */
   const deletedLabel = elements.find((el) => /^Deleted\s*\(/i.test((el.textContent || "").trim()) && el.children.length === 1);
   if (deletedLabel) {
     deletedLabel.style.display = "none";
@@ -206,10 +197,6 @@ function hideDeletedUi() {
       sibling = sibling.nextElementSibling;
     }
   }
-
-  /* The backup import is unrelated to deleted records, but the old UI called it
-     a restore action. Keep normal JSON export/download and remove that wording
-     and entry point from the visible UI. */
   elements.forEach((el) => {
     const text = (el.textContent || "").trim();
     if (/^Restore from a backup/i.test(text)) {
@@ -219,6 +206,20 @@ function hideDeletedUi() {
     if (/^(Show \d+ deleted item|Show \d+ deleted items|Restore|Restore all|Deleted items|Trash)$/i.test(text) || /^Restore\b/i.test(text)) {
       el.style.display = "none";
     }
+  });
+}
+
+function patchMarketStatusText() {
+  const raw = JSON.parse(localStorage.getItem(`${STORAGE_PREFIX}ipos`) || "[]");
+  if (!Array.isArray(raw)) return;
+  const total = raw.length;
+  const matched = raw.filter((ipo) => Number(ipo?.currentPrice) > 0).length;
+  const nodes = Array.from(document.querySelectorAll("body *"));
+  nodes.forEach((el) => {
+    if (el.children.length) return;
+    const text = (el.textContent || "").trim();
+    if (!/^\d+\s+of\s+\d+\s+IPOs\s+matched\s+on\s+Upstox/i.test(text)) return;
+    el.textContent = `${matched} of ${total} IPOs matched on Upstox`;
   });
 }
 
@@ -241,9 +242,6 @@ function patchBadgesAndText() {
     if (text !== textNode.nodeValue) textNode.nodeValue = text;
   });
 
-  /* A listing badge is secondary to an allotment date. If the card itself says
-     an allotment still needs to be recorded, a same-day/future listing badge
-     must not be shown ahead of that event. */
   document.querySelectorAll("span, div, button").forEach((el) => {
     const text = (el.textContent || "").trim();
     if (!/^LISTS(?:\s|$)/i.test(text) || el.children.length) return;
@@ -264,6 +262,25 @@ function patchBadgesAndText() {
       el.style.display = "inline-block";
     }
   });
+
+  /* On the listing date, the badge remains "LISTS TODAY" until an actual LTP
+     is available. Once Upstox supplies a positive LTP, use the normal listed
+     wording and let the existing card valuation show the LTP/gain. */
+  document.querySelectorAll("span, div, button").forEach((el) => {
+    const text = (el.textContent || "").trim();
+    if (text !== "LISTS TODAY" || el.children.length) return;
+    const container = el.closest("article, li, label, section, div");
+    const body = container?.textContent || "";
+    let hasLtp = false;
+    try {
+      const raw = JSON.parse(localStorage.getItem(`${STORAGE_PREFIX}ipos`) || "[]");
+      const candidates = raw.filter((i) => i?.company && body.includes(i.company));
+      hasLtp = candidates.some((i) => Number(i?.currentPrice) > 0);
+    } catch {}
+    if (hasLtp) el.textContent = "LISTED TODAY";
+  });
+
+  patchMarketStatusText();
 }
 
 function installUiRules() {
@@ -280,8 +297,6 @@ function installUiRules() {
   const observer = new MutationObserver(patch);
   observer.observe(document.body, { childList: true, subtree: true, characterData: true });
 
-  /* Intercept the existing Sync now button. Pulling first prevents a stale
-     device from pushing its old ledger over the newer cloud state. */
   document.addEventListener("click", async (event) => {
     if (syncingPull) return;
     const button = event.target?.closest?.("button"); if (!button) return;
