@@ -254,7 +254,7 @@ export default async function handler(req, res) {
       ipo.registrar = detail.registrar_info?.name || "";
       ipo.listingPrice = num(detail.listing_price);
       ipo.listingDate = detail.timeline?.listing_date || "";
-      ipo.allotmentDate = detail.timeline?.allotment_date || "";
+      ipo.allotmentDate = detail.timeline?.allotment_start_date || "";
       if (ipo.lotSize && ipo.priceMax != null) {
         ipo.lotCost = ipo.lotSize * ipo.priceMax;
       }

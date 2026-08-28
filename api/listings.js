@@ -282,7 +282,7 @@ export default async function handler(req, res) {
         isin: item.isin || "",
         instrumentKey: instKey,
         // Extra fields from Upstox
-        allotmentDate: detail?.timeline?.allotment_date || "",
+        allotmentDate: detail?.timeline?.allotment_start_date || "",
         listingDate: detail?.timeline?.listing_date || "",
         industry: item.industry || "",
         subscription: num(item.total_subscription),
