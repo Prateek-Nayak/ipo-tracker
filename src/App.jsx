@@ -2226,8 +2226,14 @@ function IpoCard({ ipo, accounts, onClick, onEdit, onDelete, showActions }) {
             <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 600, fontSize: 16.5, color: COLORS.navyDeep, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
               {ipo.company || "Untitled IPO"}
             </div>
-            <div style={{ fontSize: 11.5, color: COLORS.inkSoft, marginTop: 2, fontFamily: "'JetBrains Mono', monospace" }}>
-              {ipo.category || "Mainboard"} · ₹{ipo.priceBand || "—"}/sh · {totalLots} lot{totalLots === 1 ? "" : "s"} · {apps.length} applic.
+            {/* Held to one line: it is a summary, and a summary that wraps has
+                stopped being one. Trimmed to earn the room rather than shrunk
+                until it fits — "applic." said nothing "apps" does not. */}
+            <div style={{
+              fontSize: 11, color: COLORS.inkSoft, marginTop: 2, fontFamily: "'JetBrains Mono', monospace",
+              whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+            }}>
+              {ipo.category || "Mainboard"} · ₹{ipo.priceBand || "—"}/sh · {totalLots} lot{totalLots === 1 ? "" : "s"} · {apps.length} app{apps.length === 1 ? "" : "s"}
             </div>
             <div style={{ marginTop: 5, display: "flex", gap: 6, flexWrap: "wrap" }}>
               {stage && <Badge color={stage.color} bg={stage.bg}>{stage.label}</Badge>}
@@ -2246,23 +2252,26 @@ function IpoCard({ ipo, accounts, onClick, onEdit, onDelete, showActions }) {
           )}
         </div>
 
+        {/* The gain shares the tally's line rather than taking one below the
+            bar. Both are one short figure, and the row had width going spare. */}
         <div style={{ marginTop: 8 }}>
-          <AllotmentCounts tally={tally} />
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+            <AllotmentCounts tally={tally} />
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+              {apps.some((a) => a.sold) && <Badge color={COLORS.navy} bg="#EAEFF5">SOLD {apps.filter((a) => a.sold).length}/{apps.length}</Badge>}
+              {gainPct !== null && (
+                <span style={{
+                  fontFamily: "'JetBrains Mono', monospace", fontSize: 12, fontWeight: 700,
+                  color: gainPct >= 0 ? COLORS.green : COLORS.red,
+                  display: "flex", alignItems: "center", gap: 3, whiteSpace: "nowrap",
+                }}>
+                  {gainPct >= 0 ? <TrendingUp size={13} color={COLORS.green} /> : <TrendingDown size={13} color={COLORS.red} />}
+                  {gainPct.toFixed(1)}% {isMarkedToMarket(ipo) ? "now" : "listing"}
+                </span>
+              )}
+            </div>
+          </div>
           <AllotmentBar tally={tally} />
-        </div>
-
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 8, flexWrap: "wrap" }}>
-          {gainPct !== null && (
-            <span style={{
-              fontFamily: "'JetBrains Mono', monospace", fontSize: 12, fontWeight: 700,
-              color: gainPct >= 0 ? COLORS.green : COLORS.red,
-              display: "flex", alignItems: "center", gap: 3,
-            }}>
-              {gainPct >= 0 ? <TrendingUp size={13} color={COLORS.green} /> : <TrendingDown size={13} color={COLORS.red} />}
-              {gainPct.toFixed(1)}% {isMarkedToMarket(ipo) ? "now" : "listing"}
-            </span>
-          )}
-          {apps.some((a) => a.sold) && <Badge color={COLORS.navy} bg="#EAEFF5">SOLD {apps.filter((a) => a.sold).length}/{apps.length}</Badge>}
         </div>
       </div>
       {showActions && (
