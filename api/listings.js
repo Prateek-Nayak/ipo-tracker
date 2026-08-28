@@ -63,7 +63,10 @@ async function fetchIpoDetail(token, id) {
   }
 }
 
-/* Fetch LTP for multiple instrument keys (max 500 per call). */
+/* Fetch LTP for multiple instrument keys (max 500 per call).
+   Response keys are in "EXCHANGE:SYMBOL" format (e.g. "NSE_EQ:NHPC"), but each
+   value contains an `instrument_token` field with the original key format
+   (e.g. "NSE_EQ|INE848E01016"). We index by instrument_token for reliable lookup. */
 async function fetchLtp(token, instrumentKeys) {
   if (!instrumentKeys.length) return {};
   // Batch into groups of 500
@@ -77,8 +80,11 @@ async function fetchLtp(token, instrumentKeys) {
         token
       );
       if (data.status === "success" && data.data) {
-        Object.entries(data.data).forEach(([key, val]) => {
-          results[key] = val;
+        // Re-key by instrument_token (NSE_EQ|ISIN format) for easy lookup
+        Object.values(data.data).forEach((val) => {
+          if (val && val.instrument_token) {
+            results[val.instrument_token] = val;
+          }
         });
       }
     } catch {
