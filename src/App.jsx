@@ -1116,10 +1116,18 @@ export default function App() {
         .filter(Boolean)
         .slice(0, 40)
         .join("|");
-      /* A refresh you asked for should not be answered from a cache. The
-         automatic one on load is happy with a recent copy; pressing the button
-         is a request for the price right now. */
-      const bust = opts.silent ? "" : `&at=${Date.now()}`;
+      /* Pressing the button is a request for the price right now, so it takes a
+         key nothing else will share. The automatic refresh takes one that
+         rotates every thirty seconds: reloading twice in a moment costs BSE a
+         single fetch, and a reload after that is genuinely current.
+
+         Sending no key at all was the mistake. The response is edge-cached, and
+         it carries the time it was taken — so a reload was answered from the
+         cache, showed a price minutes old, and stamped it with the minutes-old
+         timestamp, which reads exactly like a refresh that never happened. */
+      const bust = opts.silent
+        ? `&at=${Math.floor(Date.now() / 30000)}`
+        : `&at=${Date.now()}`;
       const res = await fetch(`/api/listings?from=${from}${bust}&keys=${encodeURIComponent(keys)}`);
       const text = await res.text();
       let data = {};
