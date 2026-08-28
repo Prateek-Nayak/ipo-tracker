@@ -18,9 +18,12 @@ import os
 import sys
 import json
 import requests
+from dotenv import load_dotenv
+
+load_dotenv()
 
 UPSTOX = "https://api.upstox.com/v2"
-TOKEN = os.environ.get("UPSTOX_ANALYTICS_TOKEN", "")
+TOKEN = os.getenv("UPSTOX_ANALYTICS_TOKEN")
 
 if not TOKEN:
     print("ERROR: UPSTOX_ANALYTICS_TOKEN environment variable not set.")
