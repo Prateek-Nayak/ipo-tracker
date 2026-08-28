@@ -95,7 +95,7 @@ function mergeIpos(a, b) {
   return [...byId.values()];
 }
 
-async function migrateRecords(records, data) {
+async function migrateRecords(records) {
   if (!Array.isArray(records) || !records.length) return { records: [], changed: false };
   const aliases = [];
   records.forEach((ipo) => {
@@ -186,12 +186,7 @@ async function migrateLocalAndCloud() {
         "Content-Type": "application/json",
         Prefer: "resolution=merge-duplicates,return=minimal",
       },
-      body: JSON.stringify({
-        user_id: userId,
-        kind: "ipos",
-        data: migrated.records,
-        updated_at: new Date().toISOString(),
-      }),
+      body: JSON.stringify({ user_id: userId, kind: "ipos", data: migrated.records, updated_at: new Date().toISOString() }),
     });
     if (!r.ok) console.warn("Could not push IPO source migration to cloud", r.status);
   } catch (e) {
@@ -202,6 +197,31 @@ async function migrateLocalAndCloud() {
 function installUiRules() {
   const patch = () => {
     const today = todayISO();
+
+    // Replace only text nodes. This catches BSE wording embedded in longer
+    // sentences while leaving the one intentional BSE exception — subscription
+    // category demand — untouched.
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    const replacements = [
+      ["Fetching from BSE…", "Fetching from Upstox…"],
+      ["matched on BSE", "matched on Upstox"],
+      ["Listing Price — day-one open (from BSE, ₹)", "Listing Price — day-one open (from Upstox, ₹)"],
+      ["Listing Day Close (from BSE, ₹)", "Listing Day Close (from Upstox, ₹)"],
+      ["BSE has none for this issue. Refreshing prices fills them in when it does.", "Upstox has no dates for this issue. Refreshing IPO data fills them in when available."],
+      ["A refresh overwrites these whenever BSE has its own value.", "A refresh overwrites these whenever Upstox has its own value."],
+      ["Issues and subscription from NSE; lot size and the retail book from BSE.", "Issues, dates and IPO metadata from Upstox; category-wise subscription from BSE."],
+    ];
+    const nodes = [];
+    let node;
+    while ((node = walker.nextNode())) nodes.push(node);
+    nodes.forEach((textNode) => {
+      let text = textNode.nodeValue || "";
+      const parentText = textNode.parentElement?.textContent || "";
+      replacements.forEach(([from, to]) => { text = text.split(from).join(to); });
+      if (!/subscription/i.test(parentText)) text = text.replace(/\bBSE\b/g, "Upstox");
+      if (text !== textNode.nodeValue) textNode.nodeValue = text;
+    });
+
     document.querySelectorAll("button, span, div").forEach((el) => {
       const text = (el.textContent || "").trim();
       if (text === "2024" || text === "2025") el.style.display = "none";
@@ -212,17 +232,6 @@ function installUiRules() {
         const match = body.match(/→\s*(\d{4}-\d{2}-\d{2})/);
         if (match && match[1] > today) el.textContent = `Closes ${fmtDate(match[1])}`;
       }
-
-      const bse = {
-        "Fetching from BSE…": "Fetching from Upstox…",
-        "matched on BSE": "matched on Upstox",
-        "Listing Price — day-one open (from BSE, ₹)": "Listing Price — day-one open (from Upstox, ₹)",
-        "Listing Day Close (from BSE, ₹)": "Listing Day Close (from Upstox, ₹)",
-        "BSE has none for this issue. Refreshing prices fills them in when it does.": "Upstox has no dates for this issue. Refreshing IPO data fills them in when available.",
-        "A refresh overwrites these whenever BSE has its own value.": "A refresh overwrites these whenever Upstox has its own value.",
-        "Issues and subscription from NSE; lot size and the retail book from BSE.": "Issues, dates and IPO metadata from Upstox; category-wise subscription from BSE.",
-      };
-      if (Object.prototype.hasOwnProperty.call(bse, text)) el.textContent = bse[text];
     });
   };
 
