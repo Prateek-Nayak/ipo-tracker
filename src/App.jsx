@@ -39,20 +39,10 @@ const COLORS_DARK = {
   redSoft: "#2E1B1B",
 };
 
-/* Theme preference stored in localStorage. "system" follows OS. */
 const THEME_KEY = "ipo_ledger_theme";
-function getStoredTheme() {
-  try { return localStorage.getItem(THEME_KEY) || "light"; } catch { return "light"; }
-}
-function storeTheme(t) {
-  try { localStorage.setItem(THEME_KEY, t); } catch {}
-}
-
-const ThemeContext = React.createContext({ theme: "light", colors: COLORS_LIGHT, toggle: () => {} });
-function useTheme() { return useContext(ThemeContext); }
-
-/* Mutable reference so non-React code can read the current palette. */
-let COLORS = COLORS_LIGHT;
+let COLORS = (function() {
+  try { return localStorage.getItem(THEME_KEY) === "dark" ? COLORS_DARK : COLORS_LIGHT; } catch { return COLORS_LIGHT; }
+})();
 
 const FONT_IMPORT = `@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');`;
 
@@ -792,20 +782,6 @@ export default function App() {
   const [linkBusy, setLinkBusy] = useState(() => cloudEnabled() && !!readAuthHash());
   const [linkNotice, setLinkNotice] = useState("");
 
-  /* Dark/light theme */
-  const [theme, setTheme] = useState(getStoredTheme);
-  const toggleTheme = useCallback(() => {
-    setTheme((t) => {
-      const next = t === "light" ? "dark" : "light";
-      storeTheme(next);
-      COLORS = next === "dark" ? COLORS_DARK : COLORS_LIGHT;
-      return next;
-    });
-  }, []);
-  // Keep COLORS in sync on mount
-  useEffect(() => { COLORS = theme === "dark" ? COLORS_DARK : COLORS_LIGHT; }, [theme]);
-  const colors = theme === "dark" ? COLORS_DARK : COLORS_LIGHT;
-
   /* Which tab you were on survives a reload. The app is a single screen with no
      routing, so without this every refresh — and every return from the home
      screen on a phone, where the PWA is reloaded rather than resumed — dropped
@@ -1095,6 +1071,8 @@ export default function App() {
     try {
       const state = { accounts, ipos, transfers, trash };
       // Never let a device that has nothing wipe a cloud that has something.
+      // Without this, opening the app somewhere new and hitting Sync now would
+      // overwrite the real ledger with three empty arrays.
       if (isEmptyState(state)) {
         const remote = await cloudLoad();
         if (!isEmptyState(remote)) {
@@ -1419,12 +1397,10 @@ export default function App() {
   if (!loaded) return <Splash text="Loading ledger…" />;
 
   return (
-    <ThemeContext.Provider value={{ theme, colors, toggle: toggleTheme }}>
     <div style={{
-      minHeight: "100dvh", background: colors.bg, fontFamily: "Inter, sans-serif",
-      color: colors.ink, paddingBottom: "calc(78px + env(safe-area-inset-bottom))",
+      minHeight: "100dvh", background: COLORS.bg, fontFamily: "Inter, sans-serif",
+      color: COLORS.ink, paddingBottom: "calc(78px + env(safe-area-inset-bottom))",
       maxWidth: 520, margin: "0 auto", position: "relative",
-      transition: "background 0.3s, color 0.3s",
     }}>
       <style>{FONT_IMPORT}</style>
 
@@ -1658,7 +1634,6 @@ export default function App() {
         />
       )}
     </div>
-    </ThemeContext.Provider>
   );
 }
 
@@ -1677,10 +1652,10 @@ function Splash({ text }) {
    CHROME
 ---------------------------------------------------------- */
 function Header({ tab, onAdd, onOpenData, onFetchLive, syncing, syncError, cloudOn }) {
-  const { theme, toggle: toggleTheme } = useTheme();
   const titles = { dashboard: "The Ledger", ipos: "IPOs", accounts: "Accounts", transfers: "Transfers" };
   const showAdd = tab !== "dashboard";
-  const SettingsIcon = (p) => <SvgIcon {...p}><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" /></SvgIcon>;
+  const statusColor = !cloudOn ? COLORS.inkSoft : syncError ? COLORS.red : COLORS.gold;
+  const StatusIcon = !cloudOn ? CloudOff : syncing ? Loader2 : CloudIcon;
   return (
     <div style={{
       background: COLORS.navyDeep,
@@ -1713,14 +1688,15 @@ function Header({ tab, onAdd, onOpenData, onFetchLive, syncing, syncError, cloud
         )}
         <button
           onClick={onOpenData}
-          aria-label="Settings"
+          aria-label="Sync and data"
+          title={!cloudOn ? "Cloud sync is off" : syncError ? "Sync problem" : syncing ? "Syncing…" : "Synced"}
           style={{
-            width: 36, height: 36, borderRadius: 18, border: `1px solid ${COLORS.gold}`,
+            width: 36, height: 36, borderRadius: 18, border: `1px solid ${statusColor}`,
             background: "transparent", display: "flex", alignItems: "center", justifyContent: "center",
             cursor: "pointer", flexShrink: 0,
           }}
         >
-          <SettingsIcon size={17} color={COLORS.gold} className={syncing ? "spin" : undefined} />
+          <StatusIcon size={17} color={statusColor} className={syncing ? "spin" : undefined} />
         </button>
         {showAdd && (
           <button onClick={onAdd} aria-label="Add" style={{
@@ -1934,16 +1910,6 @@ const chipBase = {
 };
 const chipOn = { background: COLORS.navy, border: `1px solid ${COLORS.navy}`, color: "#fff" };
 
-/* Helper: check if a filter value matches. Supports both string and array filters. */
-const filterIncludes = (filter, id) => {
-  if (Array.isArray(filter)) return filter.includes(id) || filter.includes("all");
-  return filter === id || filter === "all";
-};
-const filterIs = (filter, id) => {
-  if (Array.isArray(filter)) return filter.includes(id);
-  return filter === id;
-};
-
 const selectStyle = {
   ...inputStyle, width: "auto", minWidth: 0, minHeight: 36, padding: "6px 8px",
   fontSize: 12, fontWeight: 600,
@@ -1995,30 +1961,12 @@ function boardIsWorthAsking(boards) {
    nothing about how the application went, so folding it into the status chips
    would make "pending, mainboard only" unaskable. */
 function ListControls({ search, setSearch, placeholder, filters, filter, setFilter, sorts, sort, setSort, boards, board, toggleBoard }) {
-  const [showFilters, setShowFilters] = useState(false);
-  const FilterIcon = (p) => <SvgIcon {...p}><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3" /></SvgIcon>;
-
-  /* Multi-select filter: filter is now an array of selected filter ids */
-  const activeFilters = Array.isArray(filter) ? filter : [filter];
-  const toggleFilter = (id) => {
-    if (id === "all") {
-      setFilter(["all"]);
-    } else {
-      const without = activeFilters.filter((f) => f !== "all" && f !== id);
-      if (activeFilters.includes(id)) {
-        setFilter(without.length ? without : ["all"]);
-      } else {
-        setFilter([...without, id]);
-      }
-    }
-  };
-
   return (
     <div style={{ marginBottom: 12 }}>
-      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: showFilters ? 8 : 0 }}>
-        {boardIsWorthAsking(boards) && (
-          <BoardToggles options={boards} selected={board} onToggle={toggleBoard} />
-        )}
+      {/* The board sits beside the search rather than under it: two toggles are
+          narrow, the search box has width to spare, and it keeps the controls
+          below to a single row. */}
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
         <div style={{ position: "relative", flex: "1 1 0", minWidth: 0 }}>
           <span style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)", display: "flex", pointerEvents: "none" }}>
             <Search size={15} color={COLORS.inkSoft} />
@@ -2030,46 +1978,30 @@ function ListControls({ search, setSearch, placeholder, filters, filter, setFilt
             style={{ paddingLeft: 34 }}
           />
         </div>
-        <button
-          onClick={() => setShowFilters((v) => !v)}
-          style={{
-            border: `1px solid ${showFilters ? COLORS.navy : COLORS.border}`,
-            background: showFilters ? COLORS.navy : COLORS.surface,
-            borderRadius: 8, padding: 8, cursor: "pointer", display: "flex",
-            alignItems: "center", justifyContent: "center", flexShrink: 0,
-            width: 38, height: 38,
-          }}
-          aria-label="Filter & Sort"
-        >
-          <FilterIcon size={16} color={showFilters ? "#fff" : COLORS.inkSoft} />
-        </button>
+        {boardIsWorthAsking(boards) && (
+          <BoardToggles options={boards} selected={board} onToggle={toggleBoard} />
+        )}
       </div>
-      {showFilters && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-            {filters.map((f) => (
-              <button
-                key={f.id}
-                onClick={() => toggleFilter(f.id)}
-                style={{ ...chipBase, ...(activeFilters.includes(f.id) ? chipOn : null), padding: "5px 10px", fontSize: 11 }}
-              >
-                {f.label}{f.count != null ? ` (${f.count})` : ""}
-              </button>
-            ))}
-          </div>
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-            {sorts.map((s) => (
-              <button
-                key={s.id}
-                onClick={() => setSort(s.id)}
-                style={{ ...chipBase, ...(sort === s.id ? chipOn : null), padding: "5px 10px", fontSize: 11 }}
-              >
-                {s.label}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <select
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          aria-label="Filter"
+          style={{ ...selectStyle, flex: "1 1 0" }}
+        >
+          {filters.map((f) => (
+            <option key={f.id} value={f.id}>{f.label}{f.count != null ? ` ${f.count}` : ""}</option>
+          ))}
+        </select>
+        <select
+          value={sort}
+          onChange={(e) => setSort(e.target.value)}
+          aria-label="Sort order"
+          style={{ ...selectStyle, flex: "1 1 0" }}
+        >
+          {sorts.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
+        </select>
+      </div>
     </div>
   );
 }
@@ -2134,11 +2066,9 @@ function IpoList({ ipos, accounts, onOpen, onEdit, onDelete }) {
     return onBoard
       .filter((i) => {
         if (q && !`${i.company || ""} ${i.symbol || ""}`.toLowerCase().includes(q)) return false;
-        if (filterIncludes(filter, "all")) return true;
-        if (filterIs(filter, "incomplete")) return missingIpoFields(i).length > 0;
-        const bucket = ipoBucket(i);
-        if (Array.isArray(filter)) return filter.includes(bucket);
-        return bucket === filter;
+        if (filter === "all") return true;
+        if (filter === "incomplete") return missingIpoFields(i).length > 0;
+        return ipoBucket(i) === filter;
       })
       .sort(cmp);
   }, [onBoard, search, filter, sort]);
@@ -2640,8 +2570,8 @@ function AccountList({ accounts, ipos, transfers = [], onEdit, onDelete }) {
     return accounts
       .filter((a) => {
         if (q && !`${a.name || ""} ${a.relation || ""} ${a.bank || ""} ${a.pan || ""}`.toLowerCase().includes(q)) return false;
-        if (filterIs(filter, "nopan")) return !panOf(a);
-        if (filterIs(filter, "dup")) return dupPans.has(panOf(a));
+        if (filter === "nopan") return !panOf(a);
+        if (filter === "dup") return dupPans.has(panOf(a));
         return true;
       })
       .sort(cmp);
@@ -2848,12 +2778,10 @@ function TransferList({ transfers, accounts, ipos = [], onEdit, onDelete }) {
           const hay = `${name(t.fromAccountId)} ${name(t.toAccountId)} ${t.remarks || ""} ${ipoName(t.relatedIpoId)}`.toLowerCase();
           if (!hay.includes(q)) return false;
         }
-        if (filterIs(filter, "linked")) return !!t.relatedIpoId;
-        if (filterIs(filter, "unlinked")) return !t.relatedIpoId;
-        const filterArr = Array.isArray(filter) ? filter : [filter];
-        const acctFilter = filterArr.find((f) => f.startsWith("acct:"));
-        if (acctFilter) {
-          const id = acctFilter.slice(5);
+        if (filter === "linked") return !!t.relatedIpoId;
+        if (filter === "unlinked") return !t.relatedIpoId;
+        if (filter.startsWith("acct:")) {
+          const id = filter.slice(5);
           return t.fromAccountId === id || t.toAccountId === id;
         }
         return true;
@@ -3195,38 +3123,6 @@ function priceAge(asOf) {
   return hrs < 12 ? `${hrs} hr ago (${at})` : `as of ${at}`;
 }
 
-function ThemeToggleRow() {
-  const { theme, toggle } = useTheme();
-  return (
-    <div style={{
-      background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 12,
-      padding: "12px 14px", display: "flex", justifyContent: "space-between", alignItems: "center",
-    }}>
-      <div>
-        <div style={{ fontSize: 13, fontWeight: 600, color: COLORS.ink }}>Dark mode</div>
-        <div style={{ fontSize: 12, color: COLORS.inkSoft, marginTop: 2 }}>
-          {theme === "dark" ? "On" : "Off"}
-        </div>
-      </div>
-      <button
-        onClick={toggle}
-        style={{
-          width: 48, height: 26, borderRadius: 13, border: "none", cursor: "pointer",
-          background: theme === "dark" ? COLORS.navy : COLORS.border,
-          position: "relative", transition: "background 0.2s",
-        }}
-      >
-        <div style={{
-          width: 20, height: 20, borderRadius: 10, background: "#fff",
-          position: "absolute", top: 3,
-          left: theme === "dark" ? 25 : 3,
-          transition: "left 0.2s",
-        }} />
-      </button>
-    </div>
-  );
-}
-
 function DataSheet({ state, session, cloudOn, syncing, syncError, lastSync, onClose, onSyncNow, onReplaceAll, onRestore, onSignOut, pricing, priceInfo, onRefreshPrices }) {
   const [importText, setImportText] = useState("");
   const [notice, setNotice] = useState("");
@@ -3319,7 +3215,37 @@ function DataSheet({ state, session, cloudOn, syncing, syncError, lastSync, onCl
 
       <div style={{ height: 18 }} />
       <SectionLabel>Appearance</SectionLabel>
-      <ThemeToggleRow />
+      <div style={{
+        background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 12,
+        padding: "12px 14px", display: "flex", justifyContent: "space-between", alignItems: "center",
+        marginBottom: 8,
+      }}>
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 600, color: COLORS.ink }}>Dark mode</div>
+          <div style={{ fontSize: 12, color: COLORS.inkSoft, marginTop: 2 }}>
+            {COLORS === COLORS_DARK ? "On" : "Off"}
+          </div>
+        </div>
+        <button
+          onClick={() => {
+            const next = COLORS === COLORS_DARK ? "light" : "dark";
+            try { localStorage.setItem(THEME_KEY, next); } catch {}
+            window.location.reload();
+          }}
+          style={{
+            width: 48, height: 26, borderRadius: 13, border: "none", cursor: "pointer",
+            background: COLORS === COLORS_DARK ? COLORS.navy : COLORS.border,
+            position: "relative",
+          }}
+        >
+          <div style={{
+            width: 20, height: 20, borderRadius: 10, background: "#fff",
+            position: "absolute", top: 3,
+            left: COLORS === COLORS_DARK ? 25 : 3,
+            transition: "left 0.2s",
+          }} />
+        </button>
+      </div>
 
       <div style={{ height: 18 }} />
       <SectionLabel>Market prices</SectionLabel>
@@ -4083,9 +4009,6 @@ function LiveIposSheet({ existing, onClose, onImport }) {
     })));
   };
 
-  /* Only show the current year in the year tabs — the Upstox API returns
-     open/upcoming/listed/closed for the current period, not historical archives.
-     Past years like 2025 return empty from the /api/listings endpoint. */
   const years = [thisYear];
 
   return (
