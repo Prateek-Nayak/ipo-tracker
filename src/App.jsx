@@ -82,6 +82,11 @@ function applyTheme(next) {
   themeListeners.forEach((fn) => fn());
 }
 
+/* Declared here, above the call that fills them. A `let` cannot be assigned
+   before its own declaration has run, so leaving these beside the components
+   that use them meant buildStyles() threw on load and nothing rendered at all. */
+let inputStyle, selectStyle, chipBase, chipOn, iconBtnStyle, smallIconBtn, roundIconBtn;
+
 /* Styles that quote the palette have to be rebuilt when it changes. They are
    module bindings rather than fixed objects, so every component picks up the
    new one on its next render without any of them being touched. */
@@ -764,7 +769,6 @@ function Field({ label, children }) {
   );
 }
 
-let inputStyle;
 
 function Input(props) {
   return <input {...props} style={{ ...inputStyle, ...(props.style || {}) }} />;
@@ -1519,13 +1523,13 @@ export default function App() {
   }, [ipos]);
 
   /* ---------- gates ---------- */
-  if (linkBusy) return <Splash text="Signing you in…" />;
+  if (linkBusy) return <LedgerSkeleton text="SIGNING YOU IN" tab={tab} />;
 
   if (cloudEnabled() && !session) {
     return <AuthScreen mode={authMode} setMode={setAuthMode} notice={linkNotice} />;
   }
 
-  if (!loaded) return <LedgerSkeleton text="LOADING YOUR LEDGER" />;
+  if (!loaded) return <LedgerSkeleton text="LOADING YOUR LEDGER" tab={tab} />;
 
   return (
     <div style={{
@@ -1768,16 +1772,6 @@ export default function App() {
   );
 }
 
-function Splash({ text }) {
-  return (
-    <div style={{
-      minHeight: "100dvh", background: COLORS.bg,
-      display: "flex", alignItems: "center", justifyContent: "center",
-    }}>
-      <div style={{ fontFamily: "'Fraunces', serif", color: COLORS.navy, fontSize: 18 }}>{text}</div>
-    </div>
-  );
-}
 
 /* A block standing in for something not here yet. Breathing rather than
    sliding: a shimmer sweeping across a phone is a lot of movement to look at
@@ -1793,10 +1787,22 @@ function Bone({ w = "100%", h = 12, r = 6, style = {} }) {
 
 /* The first load on a new device has nothing cached to draw, and a blank page
    for the length of a network round trip reads as a broken app. This is the
-   same furniture the ledger has — header, four figures, a list of cards, the
-   nav — so what arrives fills the shape that was already there instead of
-   replacing a white screen. */
-function LedgerSkeleton({ text }) {
+   same furniture the ledger has, in the shape of the screen you are about to
+   land on — so what arrives fills a layout that was already there instead of
+   replacing a white one. */
+function LedgerSkeleton({ text, tab = "dashboard" }) {
+  const titles = {
+    dashboard: "The Ledger", ipos: "IPOs", transfers: "Transfers", accounts: "Accounts",
+  };
+  const items = [
+    { id: "dashboard", label: "Overview" }, { id: "ipos", label: "IPOs" },
+    { id: "transfers", label: "Transfers" }, { id: "accounts", label: "Accounts" },
+  ];
+  // Overview leads with figures; the other three lead with a search and filters.
+  const isDashboard = tab === "dashboard";
+  // A transfer is a two-line row; an IPO or an account is a card with a bar.
+  const rowsOnly = tab === "transfers";
+
   return (
     <div style={{
       minHeight: "100dvh", background: COLORS.bg, fontFamily: "Inter, sans-serif",
@@ -1812,7 +1818,7 @@ function LedgerSkeleton({ text }) {
         borderBottom: `3px double ${COLORS.gold}`,
       }}>
         <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 700, fontSize: 21, color: "#fff" }}>
-          The Ledger
+          {titles[tab] || "The Ledger"}
         </div>
         <div style={{
           fontFamily: "'JetBrains Mono', monospace", fontSize: 10.5, color: COLORS.gold,
@@ -1821,32 +1827,44 @@ function LedgerSkeleton({ text }) {
       </div>
 
       <div style={{ padding: 14 }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
-          {[0, 1, 2, 3].map((i) => (
-            <div key={i} style={{
-              background: COLORS.surface, border: `1px solid ${COLORS.border}`,
-              borderRadius: 12, padding: "14px 12px",
-            }}>
-              <Bone w={18} h={18} r={5} />
-              <Bone w="72%" h={20} style={{ marginTop: 10 }} />
-              <Bone w="52%" h={10} style={{ marginTop: 8 }} />
+        {isDashboard ? (
+          <>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
+              {[0, 1, 2, 3].map((i) => (
+                <div key={i} style={{
+                  background: COLORS.surface, border: `1px solid ${COLORS.border}`,
+                  borderRadius: 12, padding: "14px 12px",
+                }}>
+                  <Bone w={18} h={18} r={5} />
+                  <Bone w="72%" h={20} style={{ marginTop: 10 }} />
+                  <Bone w="52%" h={10} style={{ marginTop: 8 }} />
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
+            <Bone w={110} h={11} style={{ marginBottom: 10 }} />
+          </>
+        ) : (
+          <>
+            <Bone h={44} r={8} style={{ marginBottom: 8 }} />
+            <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+              <Bone h={36} r={8} />
+              <Bone h={36} r={8} />
+            </div>
+          </>
+        )}
 
-        <Bone w={110} h={11} style={{ marginBottom: 10 }} />
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {[0, 1, 2].map((i) => (
+          {[0, 1, 2, 3].map((i) => (
             <div key={i} style={{
               background: COLORS.surface, border: `1px solid ${COLORS.border}`,
               borderRadius: 12, display: "flex", overflow: "hidden",
             }}>
-              <div style={{ width: 8, background: COLORS.border, flexShrink: 0 }} />
-              <div style={{ padding: "12px 14px", flex: 1 }}>
+              {!rowsOnly && <div style={{ width: 8, background: COLORS.border, flexShrink: 0 }} />}
+              <div style={{ padding: rowsOnly ? "10px 12px" : "12px 14px", flex: 1 }}>
                 <Bone w="62%" h={15} />
                 <Bone w="80%" h={10} style={{ marginTop: 7 }} />
-                <Bone w={72} h={16} r={8} style={{ marginTop: 9 }} />
-                <Bone h={5} r={3} style={{ marginTop: 10 }} />
+                {!rowsOnly && <Bone w={72} h={16} r={8} style={{ marginTop: 9 }} />}
+                {!rowsOnly && <Bone h={5} r={3} style={{ marginTop: 10 }} />}
               </div>
             </div>
           ))}
@@ -1860,12 +1878,18 @@ function LedgerSkeleton({ text }) {
         padding: "10px 6px calc(14px + env(safe-area-inset-bottom))",
         borderTop: `1px solid ${COLORS.navy}`,
       }}>
-        {["Overview", "IPOs", "Transfers", "Accounts"].map((label) => (
-          <div key={label} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4, padding: "4px 10px" }}>
-            <div style={{ width: 20, height: 20, borderRadius: 5, background: COLORS.navy, opacity: 0.35 }} />
-            <span style={{ fontSize: 10, color: "#8592A6", fontWeight: 500 }}>{label}</span>
-          </div>
-        ))}
+        {items.map(({ id, label }) => {
+          const active = id === tab;
+          return (
+            <div key={id} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4, padding: "4px 10px" }}>
+              <div style={{
+                width: 20, height: 20, borderRadius: 5,
+                background: active ? COLORS.gold : COLORS.navy, opacity: active ? 0.8 : 0.35,
+              }} />
+              <span style={{ fontSize: 10, color: active ? COLORS.gold : "#8592A6", fontWeight: active ? 700 : 500 }}>{label}</span>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -2126,10 +2150,7 @@ function EmptyState({ text }) {
   );
 }
 
-let chipBase;
-let chipOn;
 
-let selectStyle;
 
 
 /* Boards are not mutually exclusive — you may want one, or both. Turning the
@@ -2541,13 +2562,10 @@ function IpoCard({ ipo, accounts, onClick, onEdit, onDelete, showActions }) {
   );
 }
 
-let iconBtnStyle;
 
 /* The list rows are two lines tall, so a 36px control would set their height
    rather than fit inside it. */
-let smallIconBtn;
 
-let roundIconBtn;
 
 function IpoDetailSheet({ ipo, accounts, onClose, onEditIpo, onAddApplication, onBulkApply, onBulkStatus, onEditApplication, onDeleteApplication }) {
   if (!ipo) return null;

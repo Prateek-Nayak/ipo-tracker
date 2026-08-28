@@ -21,6 +21,8 @@ function jsonResponse(data, original) {
 function installApiGuard() {
   if (window.__ipoUpstoxApiGuard) return;
   window.__ipoUpstoxApiGuard = true;
+  // Nothing here is worth taking the whole app down for.
+  if (typeof window.fetch !== "function") return;
   const originalFetch = window.fetch.bind(window);
   window.fetch = async (...args) => {
     const response = await originalFetch(...args);
