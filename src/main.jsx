@@ -4,10 +4,26 @@ import App from "./App.jsx";
 import "./styles.css";
 import { registerSW } from "./register-sw.jsx";
 import { inject } from "@vercel/analytics";
+import { bootstrapUpstoxMigration } from "./upstoxMigration.js";
 
-createRoot(document.getElementById("root")).render(
-  <React.StrictMode><App /></React.StrictMode>
-);
+async function bootstrap() {
+  const cleanupUiRules = await bootstrapUpstoxMigration();
 
-registerSW();
-inject();
+  createRoot(document.getElementById("root")).render(
+    <React.StrictMode><App /></React.StrictMode>
+  );
+
+  registerSW();
+  inject();
+
+  return cleanupUiRules;
+}
+
+bootstrap().catch((error) => {
+  console.error("Application bootstrap failed", error);
+  createRoot(document.getElementById("root")).render(
+    <React.StrictMode><App /></React.StrictMode>
+  );
+  registerSW();
+  inject();
+});
