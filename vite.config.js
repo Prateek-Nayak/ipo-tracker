@@ -16,6 +16,9 @@ const apiProxy = {
 export default defineConfig({
   plugins: [react()],
   // host: true binds every interface, so a phone on the same network can reach it.
-  server: { port: 5173, host: true, proxy: apiProxy },
+  server: { port: 5173, host: true, proxy: apiProxy, watch: {
+      usePolling: true,
+    },},
   preview: { port: 5173, host: true, proxy: apiProxy },
+  
 });

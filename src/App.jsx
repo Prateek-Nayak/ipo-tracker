@@ -17,7 +17,7 @@ const COLORS_LIGHT = {
   navyDeep: "#152A44",
   gold: "#B08D57",
   goldSoft: "#F1E6D2",
-  green: "#2F6F4E",
+  green: "#266e43",
   greenSoft: "#E4F0E9",
   red: "#A13D3D",
   redSoft: "#F5E4E2",
@@ -45,10 +45,10 @@ const COLORS_DARK = {
   /* Near-neutral, very slightly warm. An earlier pass tinted these towards the
      navy and the whole app read as blue-grey — the accents carry the colour,
      the surfaces should not compete with them. */
-  bg: "#15161A",
-  surface: "#1D1F25",
+  bg: "#000000",
+  surface: "#0d0d0d",
   border: "#2C2F37",
-  ink: "#E8E6E1",
+  ink: "#fbfbfb",
   inkSoft: "#9A9CA4",
   // The header keeps its weight by going darker than the page, as it does in
   // daylight by going deeper than the paper.
@@ -61,9 +61,9 @@ const COLORS_DARK = {
   red: "#E0736B",
   redSoft: "#2E1C1C",
   heading: "#F0EDE6",
-  action: "#2E4C74",
-  onAction: "#EAF1FA",
-  field: "#232630",
+  action: "#634e30",
+  onAction: "#ffffff",
+  field: "#131417",
   chip: "#262A33",
 };
 
@@ -116,7 +116,7 @@ function buildStyles() {
     fontFamily: "Inter, sans-serif", cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0,
   };
   // Reads on both: white on deep navy in daylight, dark on pale blue after it.
-  chipOn = { background: COLORS.navy, border: `1px solid ${COLORS.navy}`, color: COLORS.surface };
+  chipOn = { background: COLORS.action, border: `1px solid ${COLORS.action}`, color: COLORS.onAction };
   iconBtnStyle = {
     border: "none", background: COLORS.surface, width: 44, flex: 1, cursor: "pointer",
     display: "flex", alignItems: "center", justifyContent: "center",
@@ -199,6 +199,12 @@ const Sun = (p) => <SvgIcon {...p}><circle cx="12" cy="12" r="4" /><path d="M12 
 const Search = (p) => <SvgIcon {...p}><circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" /></SvgIcon>;
 const Layers = (p) => <SvgIcon {...p}><path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z" /><path d="m22 12.18-9.17 4.16a2 2 0 0 1-1.66 0L2 12.18" /><path d="m22 17.18-9.17 4.16a2 2 0 0 1-1.66 0L2 17.18" /></SvgIcon>;
 const ClipboardCheck = (p) => <SvgIcon {...p}><rect width="8" height="4" x="8" y="2" rx="1" ry="1" /><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" /><path d="m9 14 2 2 4-4" /></SvgIcon>;
+const Settings = (p) => (
+  <SvgIcon {...p}>
+    <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.1a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+    <circle cx="12" cy="12" r="3" />
+  </SvgIcon>
+);
 
 /* ---------------------------------------------------------
    FORMATTING HELPERS
@@ -750,9 +756,9 @@ function Badge({ children, color, bg }) {
       style={{
         color, background: "transparent", border: `1px solid ${color}`,
         fontFamily: "'JetBrains Mono', monospace",
-        fontSize: 10.5, fontWeight: 600, letterSpacing: 0.3,
+        fontSize: 8, fontWeight: 600, letterSpacing: 0.3,
         padding: "2px 7px", borderRadius: 5, whiteSpace: "nowrap",
-        opacity: 0.85,
+        opacity: .9,
       }}
     >
       {children}
@@ -791,7 +797,7 @@ function Sheet({ title, onClose, children }) {
   const [footerEl, setFooterEl] = useState(null);
   return (
     <div style={{
-      position: "fixed", inset: 0, background: "rgba(28,35,51,0.45)", zIndex: 50,
+      position: "fixed", inset: 0, background: "rgba(24, 27, 32, 0.45)", zIndex: 50,
       display: "flex", alignItems: "flex-end", justifyContent: "center",
     }} onClick={onClose}>
       <div
@@ -809,11 +815,29 @@ function Sheet({ title, onClose, children }) {
         }}>
           <h2 style={{
             fontFamily: "'Fraunces', serif", fontWeight: 600, fontSize: 20, color: COLORS.heading, margin: 0,
-          }}>{title}</h2>
+          }}>{title}</h2> 
+          {title && title == "Sync & Data" ? <div style={{
+          display: "flex", 
+        }}><button
+              onClick={() => applyTheme(isDark() ? "light" : "dark")}
+              aria-label={isDark() ? "Switch to light theme" : "Switch to dark theme"}
+              style={{
+                display: "inline-flex", alignItems: "center", gap: 7,
+                background: COLORS.surface, border: `1px solid ${COLORS.border}`,
+                borderRadius: 999, padding: "8px 14px", marginRight: 10, cursor: "pointer",
+                fontFamily: "Inter, sans-serif", fontSize: 12.5, fontWeight: 600, color: COLORS.ink, height: 36, 
+              }} 
+            >
+              {isDark() ? <Sun size={16} color={COLORS.gold} /> : <Moon size={16} color={COLORS.navy} />}
+              {/* {isDark() ? "Light" : "Dark"} */}
+            </button>  
           <button onClick={onClose} aria-label="Close" style={{
             background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 20,
             width: 36, height: 36, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer",
-          }}><X size={16} color={COLORS.inkSoft} /></button>
+          }}><X size={16} color={COLORS.inkSoft} /></button></div> : <button onClick={onClose} aria-label="Close" style={{
+            background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 20,
+            width: 36, height: 36, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer",
+          }}><X size={16} color={COLORS.inkSoft} /></button>}
         </div>
         <div style={{
           flex: "1 1 auto", overflowY: "auto", minHeight: 0,
@@ -1874,7 +1898,7 @@ function Header({ tab, onAdd, onOpenData, onFetchLive, syncing, syncError, cloud
   const titles = { dashboard: "The Ledger", ipos: "IPOs", accounts: "Accounts", transfers: "Transfers" };
   const showAdd = tab !== "dashboard";
   const statusColor = !cloudOn ? COLORS.inkSoft : syncError ? COLORS.red : COLORS.gold;
-  const StatusIcon = !cloudOn ? CloudOff : syncing ? Loader2 : CloudIcon;
+  const StatusIcon = !cloudOn ? CloudOff : syncing ? Loader2 : Settings;
   return (
     <div style={{
       background: COLORS.navyDeep,
@@ -2145,13 +2169,12 @@ function BoardToggles({ options, selected, onToggle }) {
             aria-label={`${b.label}${on ? " (showing)" : ""}`}
             title={last ? "At least one board has to be shown" : b.label}
             style={{
-              border: `1px solid ${on ? COLORS.navy : COLORS.border}`,
-              background: on ? COLORS.navy : COLORS.surface,
-              color: on ? COLORS.surface : COLORS.inkSoft,
-              borderRadius: 999, padding: "7px 11px", minHeight: 36,
-              fontFamily: "Inter, sans-serif", fontSize: 12, fontWeight: 600,
+              border: `1px solid ${on ? COLORS.action : COLORS.border}`,
+              background: on ? COLORS.action : COLORS.surface,
+              color: on ? COLORS.onAction : COLORS.inkSoft,
+              borderRadius: 999, padding: "7px 11px", minHeight: 24,
+              fontFamily: "Inter, sans-serif", fontSize: 12, fontWeight: 600, 
               whiteSpace: "nowrap", cursor: last ? "default" : "pointer",
-              opacity: last ? 0.92 : 1,
             }}
           >
             {b.label}{b.count != null ? ` ${b.count}` : ""}
@@ -2509,7 +2532,7 @@ function AllotmentBar({ tally }) {
     n > 0 ? <div key={color} style={{ flex: n, background: color }} /> : null;
   return (
     <div style={{
-      display: "flex", height: 5, borderRadius: 3, overflow: "hidden",
+      display: "flex", height: 3, borderRadius: 3, overflow: "hidden",
       background: COLORS.border, marginTop: 8,
     }}>
       {seg(tally.won, COLORS.green)}
@@ -2560,7 +2583,7 @@ function IpoCard({ ipo, accounts, onClick, onEdit, onDelete, showActions }) {
     }} onClick={onClick}>
       {/* The narrow rule the stat cards use. An 8px striped band down every card
           turned a list into a colour chart; the state is still there, quietly. */}
-      <div style={{ width: 4, backgroundColor: spine, flexShrink: 0, opacity: 0.75 }} />
+      <div style={{ width: 4, backgroundColor: spine, flexShrink: 0, opacity: 1 }} />
       <div style={{ padding: "12px 14px", flex: 1, minWidth: 0 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
           <div style={{ minWidth: 0 }}>
@@ -3499,30 +3522,6 @@ function DataSheet({ state, session, cloudOn, syncing, syncError, lastSync, onCl
         {pricing ? "Fetching from Upstox…" : "Update market prices"}
       </PrimaryButton>
 
-      <div style={{ height: 12 }} />
-      <SectionLabel>Appearance</SectionLabel>
-      {/* Small, and it changes the theme where it stands: the palette is one
-          object every style reads, so repainting is a re-render rather than a
-          reload. */}
-      <button
-        onClick={() => applyTheme(isDark() ? "light" : "dark")}
-        aria-label={isDark() ? "Switch to light theme" : "Switch to dark theme"}
-        style={{
-          display: "inline-flex", alignItems: "center", gap: 7,
-          background: COLORS.surface, border: `1px solid ${COLORS.border}`,
-          borderRadius: 999, padding: "8px 14px", marginBottom: 8, cursor: "pointer",
-          fontFamily: "Inter, sans-serif", fontSize: 12.5, fontWeight: 600, color: COLORS.ink,
-        }}
-      >
-        {isDark() ? <Sun size={15} color={COLORS.gold} /> : <Moon size={15} color={COLORS.navy} />}
-        {isDark() ? "Light" : "Dark"}
-      </button>
-
-      <div style={{ height: 12 }} />
-
-      {/* Nothing here about deleted records. They are kept — a deletion moves
-          the record into the trash table and syncs like any other — but that is
-          the ledger's business, not something to put in front of anyone. */}
 
       {notice && (
         <div style={{
@@ -4306,11 +4305,11 @@ function LiveIposSheet({ existing, onClose, onImport }) {
                             color={r.subscription >= 1 ? COLORS.green : COLORS.gold}
                             bg={r.subscription >= 1 ? COLORS.greenSoft : COLORS.goldSoft}
                           >
-                            {r.subscription.toFixed(2)}× subscribed
+                            {r.subscription.toFixed(2)}× sub
                           </Badge>
                         )}
                         {r.categories && r.categories.retail != null && (
-                          <Badge color={COLORS.navy} bg={COLORS.chip}>retail {r.categories.retail.toFixed(1)}×</Badge>
+                          <Badge color={COLORS.navy} bg={COLORS.chip}>{r.categories.retail.toFixed(1)}× retail</Badge>
                         )}
                         {already && <span style={{ fontSize: 11, color: COLORS.gold }}>already in your ledger</span>}
                       </div>
