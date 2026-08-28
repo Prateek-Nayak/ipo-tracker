@@ -1292,45 +1292,45 @@ export default function App() {
   );
 
   // Refresh once per session when there is something whose value can move.
-  useEffect(() => {
-    if (!loaded || pricedOnce.current) return;
-    // Worth doing whenever anything could be filled in: a live holding to
-    // value, or simply a date or listing price still missing.
-    const worthFetching = ipos.some((i) =>
-      (i.applications || []).some((a) =>
-        !a.sold && (a.allotmentStatus === "Allotted" || a.allotmentStatus === "Partial")) ||
-      !i.listingDate || !i.openDate || !i.closeDate || isBlank(i.listingPrice));
-    if (!worthFetching) return;
-    pricedOnce.current = true;
-    refreshPrices({ silent: true });
-  }, [loaded, ipos, refreshPrices]);
+  // Disabled for now — the Upstox listings endpoint is slow on cold start and
+  // blocks the browser's connection pool, which makes Supabase sync hang.
+  // Users can refresh manually from the Settings panel.
+  // useEffect(() => {
+  //   if (!loaded || pricedOnce.current) return;
+  //   const worthFetching = ipos.some((i) =>
+  //     (i.applications || []).some((a) =>
+  //       !a.sold && (a.allotmentStatus === "Allotted" || a.allotmentStatus === "Partial")) ||
+  //     !i.listingDate || !i.openDate || !i.closeDate || isBlank(i.listingPrice));
+  //   if (!worthFetching) return;
+  //   pricedOnce.current = true;
+  //   refreshPrices({ silent: true });
+  // }, [loaded, ipos, refreshPrices]);
 
   /* The figure on the cards is the last traded price, so it goes stale simply
-     by being looked at later. Coming back to the app is the moment that shows,
-     and it is also the only moment worth spending a request on — a tab sitting
-     in the background needs nothing. Refetched when what is on screen is more
-     than a few minutes old and the market could have moved since. */
+     by being looked at later. Disabled auto-refresh on resume — the listings
+     endpoint is slow and blocks sync. Users can refresh manually. */
   const priceAsOfRef = useRef("");
   priceAsOfRef.current = priceInfo.asOf;
   const refreshRef = useRef(refreshPrices);
   refreshRef.current = refreshPrices;
 
-  useEffect(() => {
-    if (!loaded || typeof document === "undefined") return;
-    const onVisible = () => {
-      if (document.visibilityState !== "visible") return;
-      const asOf = priceAsOfRef.current;
-      if (!asOf) return;
-      const age = Date.now() - Date.parse(asOf);
-      if (Number.isFinite(age) && age > 3 * 60 * 1000) refreshRef.current({ silent: true });
-    };
-    document.addEventListener("visibilitychange", onVisible);
-    window.addEventListener("focus", onVisible);
-    return () => {
-      document.removeEventListener("visibilitychange", onVisible);
-      window.removeEventListener("focus", onVisible);
-    };
-  }, [loaded]);
+  // Disabled: auto-refresh on tab resume blocks sync
+  // useEffect(() => {
+  //   if (!loaded || typeof document === "undefined") return;
+  //   const onVisible = () => {
+  //     if (document.visibilityState !== "visible") return;
+  //     const asOf = priceAsOfRef.current;
+  //     if (!asOf) return;
+  //     const age = Date.now() - Date.parse(asOf);
+  //     if (Number.isFinite(age) && age > 3 * 60 * 1000) refreshRef.current({ silent: true });
+  //   };
+  //   document.addEventListener("visibilitychange", onVisible);
+  //   window.addEventListener("focus", onVisible);
+  //   return () => {
+  //     document.removeEventListener("visibilitychange", onVisible);
+  //     window.removeEventListener("focus", onVisible);
+  //   };
+  // }, [loaded]);
 
   const replaceAll = useCallback((state) => {
     persistAccounts(state.accounts);
