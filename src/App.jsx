@@ -777,6 +777,15 @@ export default function App() {
   useEffect(() => {
     try { localStorage.setItem(STORAGE_PREFIX + "tab", tab); } catch { /* not worth failing over */ }
   }, [tab]);
+
+  /* The four screens share one scroll position, because they are one document.
+     Reading to the bottom of the IPOs and then tapping Transfers landed you at
+     the bottom of the transfers — a list you had never scrolled. Each screen
+     now starts where a screen should. */
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.scrollTo(0, 0);
+  }, [tab]);
   const [accounts, setAccounts] = useState([]);
   const [ipos, setIpos] = useState([]);
   const [transfers, setTransfers] = useState([]);
@@ -966,6 +975,18 @@ export default function App() {
      the buffered history entry. */
   const backLayers = { appSheet, bulkApplyFor, bulkStatusFor, ipoSheet, acctSheet,
     transferSheet, liveOpen, dataSheetOpen, ipoDetail, tab };
+
+  /* A sheet covers the screen but the page behind it still scrolls, so dragging
+     anywhere outside the panel moved the list underneath and you came back to
+     somewhere else entirely. Held still while a sheet is open. */
+  const sheetIsOpen = Object.entries(backLayers).some(([k, v]) => k !== "tab" && !!v);
+  useEffect(() => {
+    if (typeof document === "undefined" || !document.body) return;
+    if (!sheetIsOpen) return;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = previous; };
+  }, [sheetIsOpen]);
   const backRef = useRef(backLayers);
   backRef.current = backLayers;
 
