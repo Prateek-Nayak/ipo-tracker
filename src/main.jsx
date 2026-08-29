@@ -5,6 +5,7 @@ import "./styles.css";
 import { registerSW } from "./register-sw.jsx";
 import { inject } from "@vercel/analytics";
 import { bootstrapUpstoxMigration } from "./upstoxMigration.js";
+import { installUxEnhancements } from "./uxEnhancements.js";
 
 /*
  * Mount React first. The Upstox migration can involve network requests and
@@ -19,6 +20,7 @@ root.render(<React.StrictMode><App /></React.StrictMode>);
 
 registerSW();
 inject();
+installUxEnhancements();
 
 void bootstrapUpstoxMigration().catch((error) => {
   console.error("Background migration step failed; continuing", error);

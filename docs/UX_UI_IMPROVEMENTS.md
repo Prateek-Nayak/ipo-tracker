@@ -4,319 +4,188 @@ Branch: `feat/upstox-migration`
 
 ## Working method
 
-- Implement improvements in small logical groups.
-- Commit after every completed fix/group.
-- Push only after the current phase/group is complete and ready for review.
-- Keep this document updated after every commit so work can resume safely.
-- Preserve the existing compact IPO-card design unless explicitly approved otherwise.
+- Implement changes in small logical groups.
+- Keep a progress log so work can resume safely.
+- Create/validate commits during an iteration, but **push only once the iteration is complete and ready for review**. This avoids unnecessary Vercel builds.
+- Preserve the compact mobile-first IPO-card design unless explicitly approved otherwise.
 
-## Product decisions from review
+## Product decisions
 
-### Explicitly approved
+### Approved
 
-- Improve the Market prices section UX.
-- Fix misleading Upstox matching/status text when prices are actually arriving.
-- Automatically react when connectivity returns: reload/sync cached data and refresh external data without requiring a manual reload.
-- Show cached/local data immediately and update it silently in the background where possible.
-- Improve sync status feedback and make sync state understandable.
-- Listing-day wording:
-  - Listing day + LTP is null/0 → `LISTS TODAY`.
-  - Listing day + LTP > 0 → `LISTED TODAY` and show the normal LTP/gain.
-- Remove edit and delete controls from IPO cards.
-- Move appropriate IPO actions to the IPO detail/panel area where they make logical sense.
-- IPO metadata supplied by the exchange/Upstox should be treated as immutable in the user-facing UI.
-- Add a user-editable **Note** field to the IPO detail screen instead of allowing IPO metadata edits.
-- Improve loading with skeletons that resemble the real cards.
-- Improve user-facing API/network error states.
-- Improve empty states where useful.
-- Add the other previously discussed accessibility/mobile polish suggestions where they do not alter the compact visual language.
+- Improve Market prices UX and remove implementation terminology such as “matched on Upstox”.
+- When connectivity returns, automatically reconcile/sync and refresh market prices without requiring a page reload.
+- Keep cached/local data visible immediately; remote work must remain non-blocking.
+- Listing day: `LISTS TODAY` while LTP is null/0; `LISTED TODAY` once a positive LTP is available.
+- IPO cards must stay compact.
+- No edit-pencil action on IPO cards.
+- IPO metadata sourced from Upstox/exchange is immutable in the UI.
+- IPO detail has a user-editable Note instead of editable IPO metadata.
+- Delete action lives in the IPO detail/action area, not on the card.
+- `Add one` is removed; bulk application is the IPO-level application entry point and is labelled `Apply IPO`.
+- Note Save is enabled only when the note differs from the saved value.
+- Detail dates use fixed label/value positions.
+- Detail secondary text/fields should use a smaller, consistent typography system while retaining the approved title/account/subtitle/badge/button styling.
+- Detail sheets can be dismissed with a downward swipe when their internal scroll position is at the top; otherwise normal scrolling remains intact.
+- Keep empty states, errors, touch targets, double-submit protection and offline behaviour subtle and compact.
 
 ### Explicitly rejected / deferred
 
-- Do **not** make IPO cards taller by adding price/market sections to every card.
-- Do **not** implement the proposed progressive-disclosure/card-layout redesign at this stage. Keep the current compact card layout.
-- Do **not** add unnecessary price emphasis to the IPO detail screen; the detail screen should remain primarily about IPO/application information.
-- Do **not** expose deleted-record/recovery flows in the UI. Deleted data may remain silently in the database for sync/history purposes.
+- Do not make IPO cards taller to expose more market-price information.
+- Do not redesign the detail page into a price/portfolio-heavy screen.
+- Do not implement the previously proposed progressive-disclosure/card-layout redesign.
+- Do not expose deleted-record/recovery flows. Deleted data may remain silently in storage/database.
+- Do not change the existing dark palette without explicit review.
 
 ## Phase 1 — Reliability + immediate UX
 
 ### 1. Market prices UX redesign
-Status: **Pending**
+Status: **Completed in current iteration**
 
-Current problem:
-- Market prices are technically updating, but the status message is confusing.
-- Users should understand whether prices are available, updating, stale, or unavailable.
+- Replace `X of Y IPOs matched on Upstox` with a user-facing freshness message.
+- Avoid exposing the matching implementation because the displayed matching count could disagree with the actual LTP shown on cards.
+- `Fetching from Upstox…` becomes `Updating market prices…`.
+- Successful refresh is presented as `Prices updated <age>`.
+- Existing Refresh button remains the explicit manual action.
 
-Target UX:
+### 2. Misleading Upstox count
+Status: **Completed in current iteration**
 
-Idle/updated:
+The old counter could report one unmatched IPO even while its card had a valid price. The user-facing count has therefore been removed rather than presenting a potentially misleading intermediate matching metric.
 
-> Market prices
-> Updated 2 min ago
-> 17 / 17 prices available
-> [ Refresh prices ]
+### 3. Connectivity recovery
+Status: **Completed in current iteration**
 
-Updating:
+When the browser changes from offline to online:
 
-> Market prices
-> Updating market prices…
-> 12 / 17 received
+1. Keep the cached ledger visible.
+2. Wait briefly for the connection to settle.
+3. Trigger cloud sync when available.
+4. Refresh market prices after sync.
+5. Do this without reloading the page.
+6. Debounce repeated reconnect events.
+7. Do not interrupt normal UI use.
 
-Success:
+### 4. Cached data first / silent updates
+Status: **Already implemented / preserved**
 
-> Prices updated just now
-> 17 / 17 prices available
+React mounts before remote migration work and the ledger can render from local state. Remote reconciliation remains background work.
 
-Partial failure:
+### 5. Sync status
+Status: **Existing behaviour retained; reconnect now uses it automatically**
 
-> 14 / 17 prices available
-> 3 prices unavailable · [Retry]
+Keep concise states such as `Syncing…`, `Sync now`, and existing error/offline feedback. Manual sync remains available.
 
-Do not expose implementation details such as matching algorithms.
+### 6. Listing-day wording
+Status: **Implemented previously; preserve**
 
-### 2. Fix misleading Upstox count
-Status: **Pending**
+- Listing today + LTP null/0 → `LISTS TODAY`.
+- Listing today + LTP > 0 → `LISTED TODAY`.
+- Do not alter the underlying price calculation.
 
-The current UI can say that one IPO is not matched even though its price is visible on the card.
+### 7. Loading skeleton / first paint
+Status: **Implemented previously; preserve**
 
-The displayed count must be derived from the **actual final price data applied to the ledger**, not from an intermediate company-name matching result.
-
-A price is considered available when the final applied current price is numeric and greater than zero.
-
-The UI should say:
-
-> `17 / 17 prices available`
-
-not:
-
-> `17 of 17 IPOs matched on Upstox`
-
-### 3. Connectivity recovery / automatic reload
-Status: **Pending**
-
-Current behavior:
-- Offline launch correctly displays local cached data.
-- When connectivity returns, the app does not automatically refresh/reconcile.
-
-Target behavior:
-
-1. Offline → keep showing cached local data.
-2. Detect browser `online` event.
-3. On transition to online:
-   - reconcile/pull cloud data;
-   - refresh market prices where appropriate;
-   - refresh relevant remote metadata if required;
-   - update the UI without a full page reload.
-4. Avoid duplicate refreshes from repeated online events.
-5. Do not block the UI while reconnecting.
-6. Preserve unsynced local edits safely.
-
-### 4. Cached data first / silent background updates
-Status: **Pending**
-
-The app should continue to render the local ledger immediately.
-
-Remote work must not block initial rendering.
-
-After rendering:
-- cloud reconciliation runs in the background;
-- market prices refresh in the background;
-- changed values update the UI when available.
-
-### 5. Clear sync status
-Status: **Pending**
-
-Use concise user-facing states:
-
-- `Synced`
-- `Synced just now`
-- `Syncing…`
-- `Sync failed · Retry`
-- `Offline · Saved locally`
-
-Manual sync remains available but should not be the only way to recover from connectivity changes.
-
-### 6. Listing-day badge state
-Status: **Pending**
-
-Exact rule:
-
-- Listing date is today + current LTP is null/0 → `LISTS TODAY`.
-- Listing date is today + current LTP > 0 → `LISTED TODAY`.
-- After listing day + current LTP > 0 → normal listed/current-price presentation.
-
-This is intentionally a wording/state distinction, not a change to price calculations.
-
-### 7. Loading skeleton
-Status: **Pending**
-
-Replace generic/blank loading periods with skeletons shaped like the actual ledger/card layout.
-
-Requirements:
-- visible immediately after React mounts;
-- preserve approximate card height;
-- avoid layout jumps;
-- work in light and dark themes;
-- disappear progressively as data arrives.
+React is mounted immediately so the existing loading/lazy UI can render rather than showing a blank/black screen during startup migration.
 
 ### 8. User-friendly errors
-Status: **Pending**
+Status: **Existing handling retained; further polish pending**
 
-Never expose raw API/HTTP errors in the primary UI.
+Raw network/API errors should not become the primary user-facing message. Further targeted error copy can be refined in a later iteration.
 
-Examples:
+### 9. Empty states
+Status: **Pending review**
 
-> Market prices couldn't be updated.
-> Existing prices are still shown.
-> [Try again]
-
-> Sync failed.
-> Your local changes are safe and will retry when you're online.
-
-### 9. Better empty states
-Status: **Pending**
-
-Use contextual empty states without changing the overall compact visual style.
-
-Examples:
-
-> Your IPO ledger is empty
-> Add your first IPO application to start tracking.
-> [Add IPO]
-
-> Nothing upcoming
-> New IPOs will appear here automatically.
-
-> Market price unavailable
-> We'll continue showing the listing price until an LTP is available.
+Keep current empty states unless a concrete confusing state is identified.
 
 ## Phase 2 — IPO detail/actions
 
 ### 10. Immutable IPO metadata
-Status: **Completed in this group**
+Status: **Completed**
 
-Remove the user-facing IPO edit flow for existing IPOs.
-
-Exchange/Upstox-provided metadata should not be manually overridden:
-- company name
-- category
-- issue price/range
-- lot size
-- open date
-- close date
-- allotment date
-- listing date
-- listing price when sourced externally
-- exchange identifiers / ISIN / symbol
-
-Existing application records remain user-managed.
+Official IPO metadata is no longer manually editable.
 
 ### 11. Replace IPO edit with Notes
-Status: **Completed in this group**
+Status: **Completed + polished in current iteration**
 
-Add a `Note` field in the IPO detail screen.
+- Note is optional and multiline.
+- Helper text saying the note is the only editable field has been removed.
+- Save is disabled when unchanged.
+- Save becomes enabled only after the user modifies the note.
+- After saving, the control returns to disabled state.
+- Note keeps the existing `remarks` storage field for compatibility.
 
-The note is the only free-form user-editable field attached directly to an IPO.
+### 12. Card actions
+Status: **Completed + polished in current iteration**
 
-It should:
-- be optional;
-- support multiline text;
-- persist locally and through cloud sync;
-- be visually secondary to official IPO information;
-- be easy to edit from the detail screen.
+- Pencil/edit removed from IPO cards.
+- Delete removed from IPO cards.
+- `Add one` removed from the IPO detail screen.
+- `Apply in bulk` renamed to `Apply IPO`.
+- IPO-level actions remain in the detail/action area.
+- Application-level actions remain user-managed.
 
-### 12. Move card actions to logical detail/panel location
-Status: **Completed in this group**
+### 13. Detail-screen typography and layout
+Status: **Completed in current iteration**
 
-Remove pencil and delete icons from IPO cards.
+- Preserve the approved title, account names, subtitles, badges and action-button appearance.
+- Official date rows use a fixed label column so dates align consistently.
+- Note field/save control use the same compact Inter-based secondary typography.
+- Detail panel secondary controls are kept visually consistent without increasing card height.
 
-The card should remain focused on:
-- IPO identity;
-- compact metadata;
-- allotment/listing state;
-- application/allotment summary;
-- current gain where applicable.
+### 14. Detail-sheet gesture
+Status: **Completed in current iteration**
 
-Actions should live in the IPO detail/panel area.
+- Downward swipe dismisses the sheet only when its scroll position is at the very top.
+- If the body has been scrolled down, normal scrolling takes priority.
+- Inputs, buttons and text fields do not accidentally trigger dismissal.
+- Existing close/back controls remain available.
 
-The action placement must remain consistent with mobile touch-target requirements.
+## Phase 3 — Mobile/accessibility polish
 
-### 13. IPO detail screen
-Status: **Design approved; implementation pending**
-
-Keep the current compact visual language.
-
-Proposed structure:
-
-1. Header
-   - company name
-   - category/status
-   - close button
-2. Official IPO information
-   - issue price
-   - lot size
-   - open/close/allotment/listing dates
-3. User applications
-   - account/application breakdown
-   - allotment information
-4. Note
-   - editable user note
-5. Actions
-   - application-related actions where applicable
-   - destructive IPO action only in the logical panel location
-
-Do not add a large market-price section.
-
-## Phase 3 — mobile/accessibility polish
-
-### 14. Touch targets
-Status: **Pending**
-
-- Minimum ~44px touch targets for important actions.
-- Clear pressed states.
-- Accessible labels for icon-only controls.
-
-### 15. Connectivity/offline presentation
-Status: **Pending**
-
-Use a subtle offline state rather than blocking the app.
+### 15. Touch targets
+Status: **Existing 44px-oriented controls retained; further audit pending**
 
 ### 16. Network action protection
-Status: **Pending**
+Status: **Existing disabled states retained; reconnect flow debounced**
 
-- Prevent accidental double submits.
-- Avoid duplicate market-price requests.
-- Disable/relabel active refresh actions while running.
+- Do not fire repeated reconnect refreshes.
+- Existing disabled state prevents duplicate manual actions.
 
-### 17. Dark-mode polish
-Status: **Pending / review later**
+### 17. Offline presentation
+Status: **Pending targeted UI review**
 
-Do not change the existing dark palette without explicit review.
+The app already remains usable with cached data. A subtle explicit offline indicator can be considered separately if needed.
 
-## Out of scope for this phase
+### 18. Dark-mode polish
+Status: **Deferred**
 
-- Large IPO card redesign.
-- Adding market-price details to every card.
-- Progressive disclosure redesign.
-- Making the detail page primarily a price/portfolio screen.
-- Any visible recovery/revival workflow for deleted data.
+No palette changes without explicit review.
 
-## Commit log
+## Out of scope
 
-| Commit | Group | Status | Notes |
+- Large IPO-card redesign.
+- More market-price information on every card.
+- Price-heavy IPO detail page.
+- Visible recovery/revival workflow for deleted records.
+
+## Iteration log
+
+| Iteration | Group | Status | Notes |
 |---|---|---|---|
-| — | Planning document | In progress | This roadmap created from the agreed UX scope. |
-| — | Phase 1 | Pending | — |
-| — | Phase 2 | Pending | — |
-| — | Phase 3 | Pending | — |
+| 1 | IPO metadata immutable + Note + card actions | Completed | Pushed as `d8cda0b9`. |
+| 2 | Detail polish + Market status + reconnect | **Ready for review** | Changes committed but not pushed until the iteration is complete. |
 
+## Current iteration — review checklist
 
-## Latest completed group
-
-### IPO detail/actions — completed
-
-- IPO cards no longer show edit/delete controls.
-- Existing IPO metadata is no longer user-editable from the UI.
-- IPO detail now provides a personal Note field backed by the existing `remarks` storage field for compatibility.
-- IPO deletion is available from the IPO detail action area.
-- Application edit/delete controls remain unchanged.
+- [x] Remove `Add one`.
+- [x] Rename `Apply in bulk` → `Apply IPO`.
+- [x] Remove Note helper text.
+- [x] Save Note only enabled when modified.
+- [x] Align official dates with fixed label/value positions.
+- [x] Reduce secondary/detail typography variation.
+- [x] Add swipe-down-to-dismiss at scroll top.
+- [x] Replace misleading Upstox matching message.
+- [x] Refresh sync/prices automatically after reconnecting to the internet.
+- [ ] User review and feedback.
+- [ ] Push iteration branch once approved.
