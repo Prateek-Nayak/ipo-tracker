@@ -1,14 +1,9 @@
-# UX patch diagnostics
+# Scoped UX transform diagnostics
 
-- **IpoCard signature**: `1`
-- **card action marker**: `1`
-- **IpoList signature**: `1`
-- **IpoList card props**: `1`
-- **detail signature**: `1`
-- **detail conflicts**: `1`
-- **detail old remarks**: `1`
-- **detail edit link**: `1`
-- **detail sheet close before ApplicationRow**: `1`
-- **main IPO delete callback**: `1`
-- **detail edit callback**: `1`
-- **IPO creation remarks field**: `3`
+- **card action regex**: `1`
+- **card props regex**: `0`
+- **main IPO callback regex**: `1`
+- **detail edit callback regex**: `1`
+- **detail note state regex**: `1`
+- **detail note UI regex**: `0`
+- **detail close regex**: `1`
