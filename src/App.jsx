@@ -1026,6 +1026,7 @@ export default function App() {
   const [acctSheet, setAcctSheet] = useState(null);         // { account }
   const [transferSheet, setTransferSheet] = useState(null); // { transfer }
   const [ipoDetail, setIpoDetail] = useState(null);         // ipo id
+  const [acctDetail, setAcctDetail] = useState(null);       // account id
   const [dataSheetOpen, setDataSheetOpen] = useState(false);
   const [bulkApplyFor, setBulkApplyFor] = useState(null);   // ipo id
   const [bulkStatusFor, setBulkStatusFor] = useState(null); // ipo id
@@ -1244,6 +1245,7 @@ export default function App() {
     if (v.bulkStatusFor) { setBulkStatusFor(null); setIpoDetail(v.bulkStatusFor); return true; }
     if (v.ipoSheet) { setIpoSheet(null); return true; }
     if (v.acctSheet) { setAcctSheet(null); return true; }
+    if (v.acctDetail) { setAcctDetail(null); return true; }
     if (v.transferSheet) { setTransferSheet(null); return true; }
     if (v.liveOpen) { setLiveOpen(false); return true; }
     if (v.dataSheetOpen) { setDataSheetOpen(false); return true; }
@@ -1846,6 +1848,25 @@ export default function App() {
             persistIpos([...rows, ...ipos]);
             setLiveOpen(false);
             setTab("ipos");
+          }}
+        />
+      )}
+
+
+      {acctDetail && (
+        <AccountDetailSheet
+          account={accounts.find((a) => a.id === acctDetail)}
+          ipos={ipos}
+          transfers={transfers}
+          accounts={accounts}
+          onClose={() => setAcctDetail(null)}
+          onEdit={() => { setAcctSheet({ account: accounts.find((a) => a.id === acctDetail) }); }}
+          onDelete={(id) => {
+            const gone = accounts.find((x) => x.id === id);
+            if (!gone) return;
+            discard("account", gone, gone.name || "Unnamed account");
+            persistAccounts(accounts.filter((x) => x.id !== id));
+            setAcctDetail(null);
           }}
         />
       )}
@@ -2855,7 +2876,7 @@ function IpoDetailSheet({ ipo, accounts, onClose, onDeleteIpo, onSaveNote, onAdd
     <Sheet title={ipo.company} onClose={onClose}>
       <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
         <Badge color={COLORS.navy} bg={COLORS.chip}>{ipo.category || "Mainboard"}</Badge>
-        <Badge color={COLORS.inkSoft} bg="#EFEDE7">Price ₹{ipo.priceBand || "—"}</Badge>
+        <Badge color={COLORS.inkSoft} bg="#EFEDE7">{ipo.priceBandLow ? `₹${ipo.priceBandLow}–₹${ipo.priceBand}` : `Price ₹${ipo.priceBand || "—"}`}</Badge>
         <Badge color={COLORS.inkSoft} bg="#EFEDE7">Lot {ipo.lotSize || "—"} sh</Badge>
         {Number(ipo.listingPrice) > 0 && hasListed(ipo) && (
           <Badge color={COLORS.inkSoft} bg="#EFEDE7">{ipo.listingPriceSource === "bse-close" ? "Listing close" : "Listed"} ₹{ipo.listingPrice}</Badge>
@@ -3008,7 +3029,7 @@ function ApplicationRow({ app, ipo, accounts, onEdit, onDelete }) {
   );
 }
 
-function AccountList({ accounts, ipos, transfers = [], onEdit, onDelete }) {
+function AccountList({ accounts, ipos, transfers = [], onOpen }) {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState([]);
   const [sort, setSort] = useState("name");
@@ -3140,6 +3161,167 @@ function AccountList({ accounts, ipos, transfers = [], onEdit, onDelete }) {
         </div>
       )}
     </div>
+  );
+}
+
+
+/* An account's full picture: every IPO they applied for, what happened, and
+   the numbers. Edit is a pencil in the header, delete is at the bottom —
+   same pattern as the IPO detail sheet. */
+function AccountDetailSheet({ account, ipos, transfers, accounts, onClose, onEdit, onDelete }) {
+  if (!account) return null;
+
+  const apps = useMemo(() => {
+    const list = [];
+    ipos.forEach((ipo) => {
+      (ipo.applications || []).forEach((app) => {
+        if (app.accountId === account.id) list.push({ ...app, ipo });
+      });
+    });
+    return list.sort((a, b) => (b.ipo.applicationDate || b.ipo.openDate || "").localeCompare(a.ipo.applicationDate || a.ipo.openDate || ""));
+  }, [account.id, ipos]);
+
+  const totals = useMemo(() => {
+    let applied = 0, allotted = 0, invested = 0, realized = 0, unrealized = 0;
+    apps.forEach((app) => {
+      applied++;
+      const price = Number(app.ipo.priceBand) || 0;
+      const shares = Number(app.sharesAllotted) || 0;
+      if (app.allotmentStatus === "Allotted" || app.allotmentStatus === "Partial") {
+        allotted++;
+        invested += shares * price;
+        if (app.sold) {
+          realized += shares * ((Number(app.sellPrice) || 0) - price);
+        } else {
+          const mark = valuationPrice(app.ipo);
+          if (mark) unrealized += shares * (mark - price);
+        }
+      }
+    });
+    return { applied, allotted, invested, realized, unrealized };
+  }, [apps]);
+
+  const acctTransfers = useMemo(() =>
+    transfers.filter((t) => t.fromAccountId === account.id || t.toAccountId === account.id),
+    [account.id, transfers]
+  );
+
+  const pan = panOf(account);
+
+  return (
+    <Sheet title={account.name} onClose={onClose}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <Badge color={COLORS.navy} bg={COLORS.chip}>{account.relation || "Self"}</Badge>
+          {account.bank && <Badge color={COLORS.inkSoft} bg="#EFEDE7">{account.bank}</Badge>}
+          {pan ? <Badge color={COLORS.inkSoft} bg="#EFEDE7">{pan}</Badge> : <Badge color={COLORS.gold} bg={COLORS.goldSoft}>No PAN</Badge>}
+        </div>
+        <button onClick={onEdit} aria-label="Edit account" style={roundIconBtn}>
+          <Pencil size={14} color={COLORS.inkSoft} />
+        </button>
+      </div>
+
+      {account.notes && (
+        <div style={{ fontSize: 12.5, color: COLORS.inkSoft, fontFamily: "Inter, sans-serif", fontStyle: "italic", marginBottom: 14 }}>
+          "{account.notes}"
+        </div>
+      )}
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
+        <div style={{ background: COLORS.surface, border: "1px solid " + COLORS.border, borderRadius: 10, padding: "10px 12px" }}>
+          <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 16, fontWeight: 700, color: COLORS.ink }}>{totals.applied}</div>
+          <div style={{ fontSize: 11, color: COLORS.inkSoft, fontFamily: "Inter, sans-serif" }}>Applied</div>
+        </div>
+        <div style={{ background: COLORS.surface, border: "1px solid " + COLORS.border, borderRadius: 10, padding: "10px 12px" }}>
+          <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 16, fontWeight: 700, color: totals.allotted ? COLORS.green : COLORS.ink }}>{totals.allotted}</div>
+          <div style={{ fontSize: 11, color: COLORS.inkSoft, fontFamily: "Inter, sans-serif" }}>Allotted</div>
+        </div>
+        <div style={{ background: COLORS.surface, border: "1px solid " + COLORS.border, borderRadius: 10, padding: "10px 12px" }}>
+          <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 16, fontWeight: 700, color: COLORS.ink }}>{inr(totals.invested)}</div>
+          <div style={{ fontSize: 11, color: COLORS.inkSoft, fontFamily: "Inter, sans-serif" }}>Invested</div>
+        </div>
+        <div style={{ background: COLORS.surface, border: "1px solid " + COLORS.border, borderRadius: 10, padding: "10px 12px" }}>
+          <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 16, fontWeight: 700, color: (totals.realized + totals.unrealized) >= 0 ? COLORS.green : COLORS.red }}>{inr(totals.realized + totals.unrealized)}</div>
+          <div style={{ fontSize: 11, color: COLORS.inkSoft, fontFamily: "Inter, sans-serif" }}>Total P&L</div>
+        </div>
+      </div>
+
+      <SectionLabel>IPO Applications ({apps.length})</SectionLabel>
+      {apps.length === 0 ? (
+        <EmptyState text="No applications from this account yet." />
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
+          {apps.map((app) => {
+            const meta = STATUS_META[app.allotmentStatus] || STATUS_META.Pending;
+            const strongStatus = app.allotmentStatus === "Allotted" || app.allotmentStatus === "Not Allotted";
+            const price = Number(app.ipo.priceBand) || 0;
+            const shares = Number(app.sharesAllotted) || 0;
+            let pnl = null;
+            if (app.sold) pnl = shares * ((Number(app.sellPrice) || 0) - price);
+            else if ((app.allotmentStatus === "Allotted" || app.allotmentStatus === "Partial") && shares) {
+              const mark = valuationPrice(app.ipo);
+              if (mark) pnl = shares * (mark - price);
+            }
+            return (
+              <div key={app.id} style={{
+                background: COLORS.surface, border: "1px solid " + COLORS.border, borderRadius: 10, padding: "9px 10px",
+              }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                  <div style={{ fontFamily: "Inter, sans-serif", fontWeight: 600, fontSize: 13.5, color: COLORS.ink, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {app.ipo.company || "Untitled IPO"}
+                  </div>
+                  <Badge color={meta.color} bg={meta.bg} strong={strongStatus}>{app.allotmentStatus}</Badge>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 4, fontFamily: "'JetBrains Mono', monospace", fontSize: 11.5 }}>
+                  <span style={{ color: COLORS.inkSoft }}>{app.lots || 0} lot(s){app.sold ? " · Sold" : ""}</span>
+                  {pnl !== null && (
+                    <span style={{ fontWeight: 700, color: pnl >= 0 ? COLORS.green : COLORS.red }}>
+                      {app.sold ? "P&L " : "Unreal. "}{inr(pnl)}
+                    </span>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {acctTransfers.length > 0 && (
+        <>
+          <SectionLabel>Fund Transfers ({acctTransfers.length})</SectionLabel>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
+            {acctTransfers.map((t) => {
+              const from = accounts.find((a) => a.id === t.fromAccountId)?.name || "Unknown";
+              const to = accounts.find((a) => a.id === t.toAccountId)?.name || "Unknown";
+              const isOutgoing = t.fromAccountId === account.id;
+              return (
+                <div key={t.id} style={{
+                  background: COLORS.surface, border: "1px solid " + COLORS.border, borderRadius: 10, padding: "8px 10px",
+                  fontFamily: "Inter, sans-serif", fontSize: 12.5,
+                }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span style={{ color: COLORS.ink, fontWeight: 600 }}>{isOutgoing ? "To " + to : "From " + from}</span>
+                    <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, color: isOutgoing ? COLORS.red : COLORS.green }}>{isOutgoing ? "-" : "+"}{inrOrDash(t.amount)}</span>
+                  </div>
+                  <div style={{ fontSize: 11, color: COLORS.inkSoft, marginTop: 2 }}>{fmtDate(t.date)}{t.remarks ? " · " + t.remarks : ""}</div>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+
+      <div style={{ marginTop: 20, paddingTop: 14, borderTop: "1px solid " + COLORS.border }}>
+        <SectionLabel>Account actions</SectionLabel>
+        <button onClick={() => {
+          const appCount = apps.length;
+          const msg = appCount
+            ? "Delete " + (account.name || "this account") + " and remove it from " + appCount + " application" + (appCount === 1 ? "" : "s") + "? The applications stay on their IPOs."
+            : "Delete " + (account.name || "this account") + "?";
+          if (confirm(msg)) onDelete(account.id);
+        }} style={{ width: "100%", marginTop: 6, minHeight: 44, borderRadius: 10, border: "1px solid " + COLORS.red, background: COLORS.redSoft, color: COLORS.red, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "Inter, sans-serif" }}>Delete Account</button>
+      </div>
+    </Sheet>
   );
 }
 
@@ -3380,7 +3562,10 @@ function IpoFormSheet({ initial, onClose, onSave }) {
           <option>Mainboard</option><option>SME</option>
         </Select>
       </Field>
-      <Field label="Price per Share (₹)"><Input type="number" inputMode="numeric" value={f.priceBand} onChange={set("priceBand")} placeholder="e.g. 285" /></Field>
+      <div style={{ display: "flex", gap: 10 }}>
+        <div style={{ flex: 1 }}><Field label="Price Band Low (₹)"><Input type="number" inputMode="numeric" value={f.priceBandLow || ""} onChange={set("priceBandLow")} placeholder="e.g. 270" /></Field></div>
+        <div style={{ flex: 1 }}><Field label="Price Band High / Cutoff (₹)"><Input type="number" inputMode="numeric" value={f.priceBand} onChange={set("priceBand")} placeholder="e.g. 285" /></Field></div>
+      </div>
       <Field label="Lot Size (shares)"><Input type="number" inputMode="numeric" value={f.lotSize} onChange={set("lotSize")} placeholder="e.g. 52" /></Field>
 
       {/* Dates come from Upstox and are shown rather than typed — every one was a
@@ -3594,7 +3779,7 @@ function AccountFormSheet({ initial, accounts = [], onClose, onSave }) {
   );
 }
 
-function TransferFormSheet({ initial, accounts, ipos, onClose, onSave }) {
+function TransferFormSheet({ initial, accounts, ipos, onClose, onSave, onDelete }) {
   const [f, setF] = useState(initial || {
     id: undefined, fromAccountId: accounts[0]?.id || "", toAccountId: accounts[1]?.id || accounts[0]?.id || "",
     amount: "", date: todayISO(), relatedIpoId: "", remarks: "",
