@@ -8,7 +8,7 @@ permissions:
   contents: write
 
 jobs:
-  apply:
+  diagnose:
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
@@ -16,122 +16,32 @@ jobs:
         with:
           ref: feat/upstox-migration
           fetch-depth: 0
-
-      - name: Apply IPO detail UX changes
+      - name: Diagnose
         run: |
           python - <<'PY'
           from pathlib import Path
           import re
-
-          path = Path('src/App.jsx')
-          text = path.read_text()
-
-          def must_sub(pattern, repl, label, flags=0):
-              global text
-              text, n = re.subn(pattern, repl, text, count=1, flags=flags)
-              if n != 1:
-                  raise SystemExit(f'{label}: expected 1 match, found {n}')
-
-          must_sub(
-              r'function IpoCard\(\{ ipo, accounts, onClick, onEdit, onDelete, showActions \}\) \{',
-              'function IpoCard({ ipo, accounts, onClick }) {',
-              'IpoCard signature'
-          )
-          must_sub(
-              r'\n      \{showActions && \(.*?\n      \)\}\n    </div>\n  \);\n\}',
-              '\n    </div>\n  );\n}',
-              'card action block',
-              re.S
-          )
-          must_sub(
-              r'function IpoList\(\{ ipos, accounts, onOpen, onEdit, onDelete \}\) \{',
-              'function IpoList({ ipos, accounts, onOpen }) {',
-              'IpoList signature'
-          )
-          must_sub(
-              r'\n\s+onEdit=\{\(ipo\) => onEdit\(ipo\)\} onDelete=\{\(\) => onDelete\(ipo\.id\)\} showActions />',
-              ' />',
-              'IpoList card action props'
-          )
-
-          must_sub(
-              r'function IpoDetailSheet\(\{ ipo, accounts, onClose, onEditIpo, onAddApplication, onBulkApply, onBulkStatus, onEditApplication, onDeleteApplication \}\) \{',
-              'function IpoDetailSheet({ ipo, accounts, onClose, onDeleteIpo, onSaveNote, onAddApplication, onBulkApply, onBulkStatus, onEditApplication, onDeleteApplication }) {',
-              'detail signature'
-          )
-
-          # Work only inside the detail component for the state and note UI.
-          detail_re = re.compile(r'function IpoDetailSheet\(\{.*?\nfunction ApplicationRow', re.S)
-          m = detail_re.search(text)
-          if not m:
-              raise SystemExit('detail component not found')
-          detail = m.group(0)
-
-          detail, n = re.subn(
-              r'(const conflicts = panConflicts\(ipo, accounts\);)(\n  return \()',
-              r'''\1\n  const [note, setNote] = useState(() => ipo.remarks || "");\n  const [noteSaved, setNoteSaved] = useState(false);\n\n  useEffect(() => {\n    setNote(ipo.remarks || "");\n    setNoteSaved(false);\n  }, [ipo.id, ipo.remarks]);\n\n  const saveNote = () => {\n    onSaveNote(ipo.id, note);\n    setNoteSaved(true);\n  };\2''',
-              detail,
-              count=1,
-          )
-          if n != 1:
-              raise SystemExit(f'detail note state: expected 1 match, found {n}')
-
-          detail, n = re.subn(
-              r'\n      \{ipo\.remarks && \(.*?\n      \}\)\}\n\n      <button onClick=\{\(\) => onEditIpo\(ipo\)\}.*?</button>\n',
-              '''\n      <div style={{ marginBottom: 16 }}>\n        <SectionLabel>Note</SectionLabel>\n        <textarea\n          value={note}\n          onChange={(e) => { setNote(e.target.value); setNoteSaved(false); }}\n          rows={3}\n          placeholder="Add a personal note about this IPO"\n          aria-label="IPO note"\n          style={{ ...inputStyle, resize: "vertical", marginTop: 6 }}\n        />\n        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginTop: 6 }}>\n          <span style={{ fontSize: 11, color: COLORS.inkSoft }}>Only this note is editable here.</span>\n          <button onClick={saveNote} style={{ ...chipBase, padding: "6px 10px", color: COLORS.navy, fontWeight: 700 }}>\n            {noteSaved ? "Saved" : "Save note"}\n          </button>\n        </div>\n      </div>\n''',
-              detail,
-              count=1,
-              flags=re.S,
-          )
-          if n != 1:
-              raise SystemExit(f'detail note UI: expected 1 match, found {n}')
-
-          delete_ui = '''\n      <div style={{ marginTop: 20, paddingTop: 14, borderTop: `1px solid ${COLORS.border}` }}>\n        <SectionLabel>IPO actions</SectionLabel>\n        <button\n          onClick={() => {\n            const n = apps.length;\n            const msg = n\n              ? `Delete ${ipo.company || "this IPO"} and its ${n} application${n === 1 ? "" : "s"}?`\n              : `Delete ${ipo.company || "this IPO entry"}?`;\n            if (confirm(msg)) onDeleteIpo(ipo.id);\n          }}\n          style={{\n            width: "100%", marginTop: 6, minHeight: 44, borderRadius: 10,\n            border: `1px solid ${COLORS.red}`, background: COLORS.redSoft, color: COLORS.red,\n            fontSize: 13, fontWeight: 700, cursor: "pointer",\n          }}\n        >\n          Delete IPO\n        </button>\n      </div>\n'''
-          detail, n = re.subn(r'\n    </Sheet>\n  \);\n}\n\nfunction ApplicationRow', delete_ui + '    </Sheet>\n  );\n}\n\nfunction ApplicationRow', detail, count=1)
-          if n != 1:
-              raise SystemExit(f'detail delete UI: expected 1 match, found {n}')
-
-          text = text[:m.start()] + detail + text[m.end():]
-
-          # Remove the IPO edit/delete callbacks from the main list.
-          must_sub(
-              r'\n\s+onEdit=\{\(ipo\) => setIpoSheet\(\{ ipo \}\)\}\n\s+onDelete=\{\(id\) => \{\n\s+const gone = ipos\.find\(\(x\) => x\.id === id\);\n\s+if \(!gone\) return;\n\s+discard\("ipo", gone, gone\.company \|\| "Untitled IPO"\);\n\s+persistIpos\(ipos\.filter\(\(x\) => x\.id !== id\)\);\n\s+\}\}',
-              '',
-              'main IPO callbacks',
-              re.S
-          )
-
-          must_sub(
-              r'\n\s+onEditIpo=\{\(ipo\) => \{ setIpoDetail\(null\); setIpoSheet\(\{ ipo \}\); \}\}',
-              '',
-              'detail edit callback'
-          )
-          must_sub(
-              r'(\n\s+onClose=\{\(\) => setIpoDetail\(null\)\})',
-              r'''\1\n          onDeleteIpo={(id) => {\n            const gone = ipos.find((x) => x.id === id);\n            if (!gone) return;\n            discard("ipo", gone, gone.company || "Untitled IPO");\n            persistIpos(ipos.filter((x) => x.id !== id));\n            setIpoDetail(null);\n          }}\n          onSaveNote={(id, noteValue) => {\n            persistIpos(ipos.map((i) => i.id === id ? { ...i, remarks: noteValue } : i));\n          }}''',
-              'detail callbacks'
-          )
-
-          path.write_text(text)
-
-          doc = Path('docs/UX_UI_IMPROVEMENTS.md')
-          d = doc.read_text()
-          d = d.replace('### 10. Immutable IPO metadata\nStatus: **Pending**', '### 10. Immutable IPO metadata\nStatus: **Completed in this group**')
-          d = d.replace('### 11. Replace IPO edit with Notes\nStatus: **Pending**', '### 11. Replace IPO edit with Notes\nStatus: **Completed in this group**')
-          d = d.replace('### 12. Move card actions to logical detail/panel location\nStatus: **Pending**', '### 12. Move card actions to logical detail/panel location\nStatus: **Completed in this group**')
-          if '### IPO detail/actions — completed' not in d:
-              d += '\n\n## Latest completed group\n\n### IPO detail/actions — completed\n\n- IPO cards no longer show edit/delete controls.\n- Existing IPO metadata is no longer user-editable from the UI.\n- IPO detail now provides a personal Note field backed by the existing `remarks` storage field for compatibility.\n- IPO deletion is available from the IPO detail action area.\n- Application edit/delete controls remain unchanged because applications are user-owned records, not exchange metadata.\n\n'
-          doc.write_text(d)
+          t=Path('src/App.jsx').read_text()
+          checks={
+          'card action regex': r'\n      \{showActions && \(.*?\n      \)\}\n    </div>\n  \);\n\}',
+          'card props regex': r'\n\s+onEdit=\{\(ipo\) => onEdit\(ipo\)\} onDelete=\{\(\) => onDelete\(ipo\.id\)\} showActions />',
+          'main IPO callback regex': r'\n\s+onEdit=\{\(ipo\) => setIpoSheet\(\{ ipo \}\)\}\n\s+onDelete=\{\(id\) => \{\n\s+const gone = ipos\.find\(\(x\) => x\.id === id\);\n\s+if \(!gone\) return;\n\s+discard\("ipo", gone, gone\.company \|\| "Untitled IPO"\);\n\s+persistIpos\(ipos\.filter\(\(x\) => x\.id !== id\)\);\n\s+\}\}',
+          'detail edit callback regex': r'\n\s+onEditIpo=\{\(ipo\) => \{ setIpoDetail\(null\); setIpoSheet\(\{ ipo \}\); \}\}',
+          'detail note state regex': r'function IpoDetailSheet\(\{.*?\n  const conflicts = panConflicts\(ipo, accounts\);\n  return \(',
+          'detail note UI regex': r'\n      \{ipo\.remarks && \(.*?\n      \}\)\}\n\n      <button onClick=\{\(\) => onEditIpo\(ipo\)\}.*?</button>\n',
+          'detail close regex': r'\n    </Sheet>\n  \);\n}\n\nfunction ApplicationRow',
+          }
+          out=['# Scoped UX transform diagnostics','']
+          for k,p in checks.items():
+              try: n=len(re.findall(p,t,re.S))
+              except Exception as e: n=f'ERROR {e}'
+              out.append(f'- **{k}**: `{n}`')
+          Path('docs/ux_patch_diagnostics.md').write_text('\n'.join(out)+'\n')
           PY
-
-      - name: Validate and commit completed group
+      - name: Commit diagnostics
         run: |
-          npm ci
-          npm run build
-          rm -f .github/workflows/apply-ux-phase2.yml docs/ux_patch_diagnostics.md
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/App.jsx docs/UX_UI_IMPROVEMENTS.md .github/workflows/apply-ux-phase2.yml docs/ux_patch_diagnostics.md
-          git diff --cached --check
-          git commit -m "feat: make IPO metadata immutable and add notes"
+          git add docs/ux_patch_diagnostics.md
+          git commit -m "chore: record scoped UX transform diagnostics"
           git push origin feat/upstox-migration
