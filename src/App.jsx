@@ -102,7 +102,7 @@ function buildStyles() {
   inputStyle = {
     width: "100%", boxSizing: "border-box", padding: "10px 12px",
     minHeight: 44, WebkitAppearance: "none",
-    border: `1px solid ${COLORS.border}`, borderRadius: 8, fontSize: 16,
+    border: `1px solid ${COLORS.border}`, borderRadius: 8, fontSize: 14,
     fontFamily: "Inter, sans-serif", color: COLORS.ink, background: COLORS.field,
     outline: "none",
   };
@@ -829,7 +829,6 @@ function Sheet({ title, onClose, children }) {
   const onTouchStart = (e) => {
     const body = bodyRef.current;
     if (!body || body.scrollTop > 0) return;
-    if (e.target.closest("input, textarea, select, button, a")) return;
     const y = e.touches[0].clientY;
     touch.current = { active: true, startY: y, lastY: y, committed: false };
   };
@@ -837,15 +836,12 @@ function Sheet({ title, onClose, children }) {
     const t = touch.current;
     if (!t.active) return;
     const body = bodyRef.current;
-    // If the body has scrolled since the touch started, abandon the gesture.
     if (body && body.scrollTop > 0) { t.active = false; setDragging(false); setDragY(0); return; }
     const y = e.touches[0].clientY;
     t.lastY = y;
     const delta = y - t.startY;
     if (delta <= 0) { setDragging(false); setDragY(0); return; }
-    // Only commit to a drag after a meaningful threshold, so small scrolls
-    // don't accidentally start the dismiss gesture.
-    if (!t.committed && delta < 12) return;
+    if (!t.committed && delta < 8) return;
     t.committed = true;
     setDragging(true);
     setDragY(Math.min(delta, 240));
@@ -858,14 +854,8 @@ function Sheet({ title, onClose, children }) {
     touch.current.active = false;
     setDragging(false);
     setDragY(0);
-    // Higher threshold (120px) and must have committed to the gesture.
-    if (t.committed && delta > 120 && bodyRef.current && bodyRef.current.scrollTop === 0) {
-      // Delay close slightly so the touch event finishes and doesn't bleed
-      // through to the page behind, causing it to scroll.
-      requestAnimationFrame(() => {
-        window.scrollTo(0, window.scrollY); // freeze current scroll position
-        onClose();
-      });
+    if (t.committed && delta > 80 && bodyRef.current && bodyRef.current.scrollTop === 0) {
+      requestAnimationFrame(() => { window.scrollTo(0, window.scrollY); onClose(); });
     }
   };
 
