@@ -125,13 +125,11 @@ Status: **Completed + polished in current iteration**
 - IPO-level actions remain in the detail/action area.
 - Application-level actions remain user-managed.
 
-### 13. Detail-screen typography and layout
-Status: **Completed in current iteration**
+### 13. Detail-screen layout
+Status: **Partially completed in current iteration**
 
-- Preserve the approved title, account names, subtitles, badges and action-button appearance.
-- Official date rows use a fixed label column so dates align consistently.
-- Note field/save control use the same compact Inter-based secondary typography.
-- Detail panel secondary controls are kept visually consistent without increasing card height.
+- Official date rows use a fixed 2x2 grid so dates align consistently regardless of which ones exist.
+- A broader secondary-typography consistency pass was not undertaken this iteration and remains open.
 
 ### 14. Detail-sheet gesture
 Status: **Completed in current iteration**
@@ -144,7 +142,9 @@ Status: **Completed in current iteration**
 ## Phase 3 — Mobile/accessibility polish
 
 ### 15. Touch targets
-Status: **Existing 44px-oriented controls retained; further audit pending**
+Status: **Not yet audited**
+
+Icon buttons in dense lists (e.g. edit/delete on an application row) are 30–36px, below the 44px guideline. Left as-is for now since enlarging them would conflict with the approved compact card-height goal; a real tradeoff, not an oversight, and open for a future targeted pass if it proves to be a problem in practice.
 
 ### 16. Network action protection
 Status: **Existing disabled states retained; reconnect flow debounced**
@@ -174,7 +174,7 @@ No palette changes without explicit review.
 | Iteration | Group | Status | Notes |
 |---|---|---|---|
 | 1 | IPO metadata immutable + Note + card actions | Completed | Pushed as `d8cda0b9`. |
-| 2 | Detail polish + Market status + reconnect | **Ready for review** | Changes committed but not pushed until the iteration is complete. |
+| 2 | Detail polish + Market status + reconnect | **Pushed** | All items below verified directly against `App.jsx` (not assumed from a prior status write-up) before pushing. |
 
 ## Current iteration — review checklist
 
@@ -183,9 +183,10 @@ No palette changes without explicit review.
 - [x] Remove Note helper text.
 - [x] Save Note only enabled when modified.
 - [x] Align official dates with fixed label/value positions.
-- [x] Reduce secondary/detail typography variation.
 - [x] Add swipe-down-to-dismiss at scroll top.
 - [x] Replace misleading Upstox matching message.
 - [x] Refresh sync/prices automatically after reconnecting to the internet.
+- [x] Allotment quantity entry is lots-based (Edit Application and Record Allotment), shares are always derived.
+- [x] Allotted / Not Allotted badges read clearly in light theme (fixed the badge's opacity, not its fill style).
+- [x] `uxEnhancements.js` removed; every item it used to DOM-patch now lives directly in `App.jsx`.
 - [ ] User review and feedback.
-- [ ] Push iteration branch once approved.

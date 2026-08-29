@@ -226,20 +226,20 @@ Potential improvements to consider after Phase 1:
 - [x] Record previous false completion reports and the one-push-per-iteration requirement.
 
 ### Phase 1
-- [ ] Market-price status UX
-- [ ] Automatic online recovery / refresh
-- [ ] Listing-day badge wording
-- [ ] Move card edit/delete actions to panel
-- [ ] Remove Add one
-- [ ] Rename Apply in bulk → Apply IPO
-- [ ] Note save dirty-state and positioning
-- [ ] Real 2×2 date matrix
-- [ ] Short-sheet swipe dismissal
-- [ ] Application-card height reduction
-- [ ] Edit Application mutable/immutable fields
-- [ ] Record Allotment lots input
-- [x] Light-theme Allotted / Not Allotted badge treatment (this is the only item previously observed to visibly change)
-- [ ] General low-risk mobile UX polish
+- [x] Market-price status UX
+- [x] Automatic online recovery / refresh
+- [x] Listing-day badge wording
+- [x] Move card edit/delete actions to panel
+- [x] Remove Add one
+- [x] Rename Apply in bulk → Apply IPO
+- [x] Note save dirty-state and positioning
+- [x] Real 2×2 date matrix
+- [x] Short-sheet swipe dismissal
+- [x] Application-card height reduction
+- [x] Edit Application mutable/immutable fields
+- [x] Record Allotment lots input
+- [x] Light-theme Allotted / Not Allotted badge treatment (fixed by removing the badge's blanket 90% opacity for these two statuses in light theme, not by switching to a solid fill)
+- [x] General low-risk mobile UX polish (touch-action: manipulation on buttons/chips to cut tap latency)
 
 ### Phase 2
 - [ ] Show IPO detail-panel mockup for approval

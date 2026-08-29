@@ -114,20 +114,22 @@ function buildStyles() {
     border: `1px solid ${COLORS.border}`, background: COLORS.surface, color: COLORS.inkSoft,
     borderRadius: 999, padding: "7px 12px", fontSize: 12, fontWeight: 600,
     fontFamily: "Inter, sans-serif", cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0,
+    touchAction: "manipulation",
   };
   // Reads on both: white on deep navy in daylight, dark on pale blue after it.
   chipOn = { background: COLORS.action, border: `1px solid ${COLORS.action}`, color: COLORS.onAction };
   iconBtnStyle = {
     border: "none", background: COLORS.surface, width: 44, flex: 1, cursor: "pointer",
-    display: "flex", alignItems: "center", justifyContent: "center",
+    display: "flex", alignItems: "center", justifyContent: "center", touchAction: "manipulation",
   };
   smallIconBtn = {
     width: 30, height: 30, borderRadius: 8, border: `1px solid ${COLORS.border}`, background: COLORS.bg,
     display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0,
+    touchAction: "manipulation",
   };
   roundIconBtn = {
     width: 36, height: 36, borderRadius: 8, border: `1px solid ${COLORS.border}`, background: COLORS.bg,
-    display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer",
+    display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", touchAction: "manipulation",
   };
 }
 buildStyles();
@@ -809,6 +811,48 @@ function Sheet({ title, onClose, children }) {
      footer slot below both. The footer used to sit inside the scroll area,
      stuck to its bottom edge, which left rows sliding underneath it. */
   const [footerEl, setFooterEl] = useState(null);
+  const bodyRef = useRef(null);
+  const touch = useRef({ active: false, startY: 0, lastY: 0 });
+  const [dragY, setDragY] = useState(0);
+  const [dragging, setDragging] = useState(false);
+
+  /* Swipe-down-to-dismiss lives here, on the sheet itself, so every sheet in
+     the app gets it for free rather than each one needing its own gesture
+     code. It only arms when the body is scrolled to the very top — anywhere
+     else the gesture is just scrolling — and never on a touch that starts on
+     something interactive, so editing a field can never be mistaken for a
+     dismiss swipe. Because it is driven by React state (dragY) rather than a
+     CSS variable poked from outside, a short sheet with nothing to scroll
+     still gets the same treatment as a long one. */
+  const onTouchStart = (e) => {
+    const body = bodyRef.current;
+    if (!body || body.scrollTop > 0) return;
+    if (e.target.closest("input, textarea, select, button, a")) return;
+    const y = e.touches[0].clientY;
+    touch.current = { active: true, startY: y, lastY: y };
+  };
+  const onTouchMove = (e) => {
+    const t = touch.current;
+    const body = bodyRef.current;
+    if (!t.active || !body || body.scrollTop > 0) return;
+    const y = e.touches[0].clientY;
+    t.lastY = y;
+    const delta = y - t.startY;
+    if (delta <= 0) return; // upward/no movement is ordinary scrolling
+    setDragging(true);
+    setDragY(Math.min(delta, 240));
+    if (e.cancelable) e.preventDefault();
+  };
+  const onTouchEnd = () => {
+    const t = touch.current;
+    if (!t.active) return;
+    const delta = t.lastY - t.startY;
+    touch.current.active = false;
+    setDragging(false);
+    setDragY(0);
+    if (delta > 80 && bodyRef.current && bodyRef.current.scrollTop === 0) onClose();
+  };
+
   return (
     <div style={{
       position: "fixed", inset: 0, background: "rgba(24, 27, 32, 0.45)", zIndex: 50,
@@ -816,11 +860,17 @@ function Sheet({ title, onClose, children }) {
     }} onClick={onClose}>
       <div
         onClick={(e) => e.stopPropagation()}
+        onTouchStart={onTouchStart}
+        onTouchMove={onTouchMove}
+        onTouchEnd={onTouchEnd}
+        onTouchCancel={onTouchEnd}
         style={{
           background: COLORS.bg, width: "100%", maxWidth: 480,
           maxHeight: "92vh", borderRadius: "18px 18px 0 0",
           display: "flex", flexDirection: "column", minHeight: 0,
           boxShadow: "0 -8px 30px rgba(0,0,0,0.2)",
+          transform: dragY ? `translateY(${dragY}px)` : undefined,
+          transition: dragging ? "none" : "transform 180ms ease",
         }}
       >
         <div style={{
@@ -853,11 +903,14 @@ function Sheet({ title, onClose, children }) {
             width: 36, height: 36, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer",
           }}><X size={16} color={COLORS.inkSoft} /></button>}
         </div>
-        <div style={{
-          flex: "1 1 auto", overflowY: "auto", minHeight: 0,
-          WebkitOverflowScrolling: "touch",
-          padding: "0 18px calc(28px + env(safe-area-inset-bottom))",
-        }}>
+        <div
+          ref={bodyRef}
+          style={{
+            flex: "1 1 auto", overflowY: "auto", minHeight: 0,
+            WebkitOverflowScrolling: "touch",
+            padding: "0 18px calc(28px + env(safe-area-inset-bottom))",
+          }}
+        >
           <SheetFooterSlot.Provider value={footerEl}>{children}</SheetFooterSlot.Provider>
         </div>
         {/* Empty and invisible until a StickyFooter fills it. */}
@@ -899,7 +952,7 @@ function PrimaryButton({ children, onClick, danger, ghost, disabled, type = "but
         color: ghost ? COLORS.ink : COLORS.onAction,
         fontFamily: "Inter, sans-serif", fontWeight: 600, fontSize: 15,
         cursor: disabled ? "default" : "pointer", marginTop: 6,
-        opacity: disabled ? 0.6 : 1,
+        opacity: disabled ? 0.6 : 1, touchAction: "manipulation",
       }}
     >{children}</button>
   );
@@ -1508,6 +1561,44 @@ export default function App() {
       setSyncError(e.message || "Could not reach the cloud.");
     }
   }, [pushToCloud, userId]);
+  const syncNowRef = useRef(syncNow);
+  syncNowRef.current = syncNow;
+
+  /* When the browser regains connectivity, reconcile and refresh in the
+     background — no reload, and no need to notice the app looks stale and
+     do it yourself. The cached ledger stays on screen throughout; this only
+     ever adds fresher data on top of it, and a failed request here leaves
+     what is already showing untouched. */
+  const reconnectBusyRef = useRef(false);
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    let settleTimer = null;
+    const handleOnline = () => {
+      // Several tabs/interfaces can each fire "online" within the same
+      // moment; only one reconnect pass should ever be in flight.
+      if (reconnectBusyRef.current || !reconciled) return;
+      reconnectBusyRef.current = true;
+      clearTimeout(settleTimer);
+      // The event fires the instant an interface reappears, not once it can
+      // actually reach anything — give it a beat before spending a request.
+      settleTimer = setTimeout(async () => {
+        try {
+          if (cloudEnabled() && userId) await syncNowRef.current();
+          await refreshRef.current({ silent: true });
+        } catch {
+          // A failed reconnect attempt is not worth surfacing; the next
+          // online event, or the visibility-based refresh above, will retry.
+        } finally {
+          reconnectBusyRef.current = false;
+        }
+      }, 700);
+    };
+    window.addEventListener("online", handleOnline);
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      clearTimeout(settleTimer);
+    };
+  }, [reconciled, userId]);
 
 
 
@@ -3288,6 +3379,7 @@ function ApplicationFormSheet({ initial, ipo, accounts, onClose, onSave }) {
   });
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   const setBool = (k) => (e) => setF({ ...f, [k]: e.target.checked });
+  const lotSize = Number(ipo?.lotSize) || 0;
 
   /* A full allotment is the whole application: lots x lot size. Left blank it
      silently values the holding at nothing — no shares, no capital deployed, no
@@ -3295,14 +3387,26 @@ function ApplicationFormSheet({ initial, ipo, accounts, onClose, onSave }) {
      the bulk sheet does. Still editable, for the odd partial. */
   const setStatus = (e) => {
     const allotmentStatus = e.target.value;
-    const lot = Number(ipo?.lotSize) || 0;
     const next = { ...f, allotmentStatus };
-    if (allotmentStatus === "Allotted" && lot > 0) {
-      next.sharesAllotted = String(lot * (Number(f.lots) || 1));
+    if (allotmentStatus === "Allotted" && lotSize > 0) {
+      next.sharesAllotted = String(lotSize * (Number(f.lots) || 1));
     } else if (allotmentStatus === "Not Allotted" || allotmentStatus === "Pending") {
       next.sharesAllotted = "";
     }
     setF(next);
+  };
+
+  /* The user only ever tells the ledger how many lots were allotted; the
+     share count is arithmetic (lots x lot size), not something to type in
+     and get wrong. Read back from sharesAllotted so an existing record still
+     shows the right lot count even though only shares were ever stored. */
+  const lotsAllottedValue = f.sharesAllotted && lotSize
+    ? String(Math.round(Number(f.sharesAllotted) / lotSize))
+    : "";
+  const setLotsAllotted = (e) => {
+    const lots = e.target.value;
+    const shares = lotSize && lots !== "" ? String(lotSize * (Number(lots) || 0)) : "";
+    setF({ ...f, sharesAllotted: shares });
   };
 
   return (
@@ -3326,7 +3430,12 @@ function ApplicationFormSheet({ initial, ipo, accounts, onClose, onSave }) {
         </Select>
       </Field>
       {(f.allotmentStatus === "Allotted" || f.allotmentStatus === "Partial") && (
-        <Field label="Shares Allotted"><Input type="number" inputMode="numeric" value={f.sharesAllotted} onChange={set("sharesAllotted")} /></Field>
+        <Field label="Lots Allotted">
+          <Input
+            type="number" inputMode="numeric" min="0" value={lotsAllottedValue} onChange={setLotsAllotted}
+            placeholder={lotSize ? "" : "Set the IPO's lot size to compute shares"}
+          />
+        </Field>
       )}
       <Field label="Sold?">
         <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, minHeight: 44 }}>
@@ -3519,26 +3628,36 @@ function DataSheet({ state, session, cloudOn, syncing, syncError, lastSync, onCl
         </PrimaryButton>
       )}
 
-      <div style={{ height: 18 }} />
       {/* Prices refresh on their own, but a manual pull belongs here: it says
-          what the figure is, how old, and gives you a way to insist. */}
+          how fresh the figure is and gives you a way to insist. What it must
+          not say is how the matching worked internally — the match count
+          could disagree with the price actually shown on a card, which reads
+          as a bug even when nothing is wrong. */}
+      <div style={{ marginTop: 18 }}>
       <SectionLabel>Market prices</SectionLabel>
-      <div style={{
-        background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 12,
-        padding: "10px 12px", marginBottom: 8, fontSize: 12,
-        color: priceInfo?.error ? COLORS.red : COLORS.inkSoft,
-      }}>
-        {priceInfo?.error
-          ? priceInfo.error
-          : priceInfo?.asOf
-            ? `${priceInfo.matched} of ${priceInfo.total} IPOs matched on Upstox`
-              + `${priceInfo.reblocked ? ` · ${priceInfo.reblocked} blocked amounts recalculated` : ""}`
-              + ` · last traded price, ${priceAge(priceInfo.asOf)}`
-            : "Not updated yet. Unrealised gains use the listing price until you do."}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+        <div style={{
+          flex: 1, minWidth: 0, fontSize: 12, color: priceInfo?.error ? COLORS.red : COLORS.inkSoft,
+          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+        }}>
+          {priceInfo?.error
+            ? priceInfo.error
+            : pricing
+              ? "Updating market prices…"
+              : priceInfo?.asOf
+                ? `Prices updated ${priceAge(priceInfo.asOf)}`
+                : "Not updated yet"}
+        </div>
+        <button
+          onClick={() => onRefreshPrices().catch(() => {})}
+          disabled={pricing}
+          style={{
+            ...chipBase, flexShrink: 0, color: COLORS.navy, fontWeight: 700,
+            opacity: pricing ? 0.6 : 1, cursor: pricing ? "default" : "pointer",
+          }}
+        >{pricing ? "Updating…" : "Refresh"}</button>
       </div>
-      <PrimaryButton ghost onClick={() => onRefreshPrices().catch(() => {})} disabled={pricing}>
-        {pricing ? "Fetching from Upstox…" : "Update market prices"}
-      </PrimaryButton>
+      </div>
 
 
       {notice && (
@@ -3822,28 +3941,35 @@ function BulkApplySheet({ ipo, accounts, onClose, onSave }) {
 
 function BulkStatusSheet({ ipo, accounts, onClose, onSave }) {
   const apps = ipo.applications || [];
+  const fullLot = Number(ipo.lotSize) || 0;
+  const lotsFromShares = (shares) => (fullLot && shares ? String(Math.round(Number(shares) / fullLot)) : "");
+
   const [draft, setDraft] = useState(() => {
     const d = {};
     apps.forEach((a) => {
-      d[a.id] = { allotmentStatus: a.allotmentStatus || "Pending", sharesAllotted: a.sharesAllotted || "" };
+      const status = a.allotmentStatus || "Pending";
+      const needsLots = status === "Allotted" || status === "Partial";
+      const lots = needsLots
+        ? (lotsFromShares(a.sharesAllotted) || (status === "Allotted" ? String(a.lots || 1) : ""))
+        : "";
+      d[a.id] = { allotmentStatus: status, lotsAllotted: lots };
     });
     return d;
   });
 
   const nameOf = (id) => accounts.find((a) => a.id === id)?.name || "Unknown account";
-  const fullLot = Number(ipo.lotSize) || 0;
 
-  const sharesFor = (app, status, current) => {
-    if (status === "Allotted" && fullLot) return String(fullLot * (Number(app.lots) || 1));
+  const lotsFor = (app, status, current) => {
+    if (status === "Allotted") return String(Number(app.lots) || 1);
     if (status === "Not Allotted" || status === "Pending") return "";
-    return current;
+    return current; // Partial: keep whatever is there for the user to correct
   };
 
   const setAll = (status) => {
     setDraft((d) => {
       const next = { ...d };
       apps.forEach((a) => {
-        next[a.id] = { allotmentStatus: status, sharesAllotted: sharesFor(a, status, d[a.id].sharesAllotted) };
+        next[a.id] = { allotmentStatus: status, lotsAllotted: lotsFor(a, status, d[a.id].lotsAllotted) };
       });
       return next;
     });
@@ -3852,7 +3978,7 @@ function BulkStatusSheet({ ipo, accounts, onClose, onSave }) {
   const setOne = (app, status) => {
     setDraft((d) => ({
       ...d,
-      [app.id]: { allotmentStatus: status, sharesAllotted: sharesFor(app, status, d[app.id].sharesAllotted) },
+      [app.id]: { allotmentStatus: status, lotsAllotted: lotsFor(app, status, d[app.id].lotsAllotted) },
     }));
   };
 
@@ -3862,6 +3988,22 @@ function BulkStatusSheet({ ipo, accounts, onClose, onSave }) {
     c[k] = (c[k] || 0) + 1;
     return c;
   }, {});
+
+  /* The user only ever enters lots; the parent still expects sharesAllotted
+     on each application record, so that arithmetic happens once, here, on
+     save — never as something typed in. */
+  const save = () => {
+    const out = {};
+    Object.entries(draft).forEach(([id, v]) => {
+      const lots = Number(v.lotsAllotted) || 0;
+      const needsShares = v.allotmentStatus === "Allotted" || v.allotmentStatus === "Partial";
+      out[id] = {
+        allotmentStatus: v.allotmentStatus,
+        sharesAllotted: needsShares && fullLot && lots ? String(lots * fullLot) : "",
+      };
+    });
+    onSave(out);
+  };
 
   return (
     <Sheet title="Record allotment" onClose={onClose}>
@@ -3882,7 +4024,7 @@ function BulkStatusSheet({ ipo, accounts, onClose, onSave }) {
         {apps.map((app) => {
           const d = draft[app.id];
           const meta = STATUS_META[d.allotmentStatus] || STATUS_META.Pending;
-          const needsShares = d.allotmentStatus === "Allotted" || d.allotmentStatus === "Partial";
+          const needsLots = d.allotmentStatus === "Allotted" || d.allotmentStatus === "Partial";
           return (
             <div key={app.id} style={{
               background: COLORS.surface, border: `1px solid ${COLORS.border}`,
@@ -3892,7 +4034,7 @@ function BulkStatusSheet({ ipo, accounts, onClose, onSave }) {
                 <div style={{ minWidth: 0 }}>
                   <div style={{ fontWeight: 600, fontSize: 14, color: COLORS.ink }}>{nameOf(app.accountId)}</div>
                   <div style={{ fontSize: 11, color: COLORS.inkSoft, fontFamily: "'JetBrains Mono', monospace" }}>
-                    {app.lots || 0} lot(s) · {inrOrDash(app.amountBlocked)}
+                    {app.lots || 0} lot(s) applied · {inrOrDash(app.amountBlocked)}
                   </div>
                 </div>
                 <Select
@@ -3904,15 +4046,18 @@ function BulkStatusSheet({ ipo, accounts, onClose, onSave }) {
                   {ALLOTMENT_STATUSES.map((s) => <option key={s}>{s}</option>)}
                 </Select>
               </div>
-              {needsShares && (
+              {needsLots && (
                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
-                  <span style={{ fontSize: 11, color: COLORS.inkSoft }}>Shares allotted</span>
+                  <span style={{ fontSize: 11, color: COLORS.inkSoft }}>Lots allotted</span>
                   <input
-                    type="number" inputMode="numeric" value={d.sharesAllotted}
-                    onChange={(e) => setDraft((x) => ({ ...x, [app.id]: { ...x[app.id], sharesAllotted: e.target.value } }))}
-                    aria-label={`Shares for ${nameOf(app.accountId)}`}
-                    style={{ ...inputStyle, width: 100, minHeight: 38, padding: "6px 8px" }}
+                    type="number" inputMode="numeric" min="0" value={d.lotsAllotted}
+                    onChange={(e) => setDraft((x) => ({ ...x, [app.id]: { ...x[app.id], lotsAllotted: e.target.value } }))}
+                    aria-label={`Lots allotted for ${nameOf(app.accountId)}`}
+                    style={{ ...inputStyle, width: 90, minHeight: 38, padding: "6px 8px" }}
                   />
+                  {fullLot > 0 && d.lotsAllotted !== "" && (
+                    <span style={{ fontSize: 11, color: COLORS.inkSoft }}>= {Number(d.lotsAllotted) * fullLot} sh</span>
+                  )}
                 </div>
               )}
             </div>
@@ -3928,7 +4073,7 @@ function BulkStatusSheet({ ipo, accounts, onClose, onSave }) {
       </div>
 
       <StickyFooter>
-        <PrimaryButton onClick={() => onSave(draft)}>Save all {apps.length}</PrimaryButton>
+        <PrimaryButton onClick={save}>Save all {apps.length}</PrimaryButton>
       </StickyFooter>
     </Sheet>
   );
