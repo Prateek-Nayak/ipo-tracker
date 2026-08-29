@@ -18,9 +18,6 @@ jobs:
           fetch-depth: 0
 
       - name: Apply IPO detail UX changes
-        env:
-          TARGET: src/App.jsx
-          DOC: docs/UX_UI_IMPROVEMENTS.md
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -36,8 +33,6 @@ jobs:
                   raise SystemExit(f'{label}: expected 1 match, found {count}')
               text = text.replace(old, new, 1)
 
-          # IPO cards stay compact and informational. Editing/deleting the IPO
-          # itself belongs in its detail panel, not beside every card.
           replace_once(
               'function IpoCard({ ipo, accounts, onClick, onEdit, onDelete, showActions }) {',
               'function IpoCard({ ipo, accounts, onClick }) {',
@@ -52,31 +47,35 @@ jobs:
               'function IpoList({ ipos, accounts, onOpen }) {',
               'IpoList signature'
           )
-
           replace_once(
               '''            <IpoCard key={ipo.id} ipo={ipo} accounts={accounts} onClick={() => onOpen(ipo.id)}\n              onEdit={() => onEdit(ipo)} onDelete={() => onDelete(ipo.id)} showActions />''',
               '''            <IpoCard key={ipo.id} ipo={ipo} accounts={accounts} onClick={() => onOpen(ipo.id)} />''',
               'IpoList card props'
           )
 
-          # Existing IPO metadata is exchange/application data, not a user-editable
-          # form anymore. The only IPO-level user-authored field is Note, stored in
-          # the existing remarks property so old data and cloud sync remain compatible.
           replace_once(
               'function IpoDetailSheet({ ipo, accounts, onClose, onEditIpo, onAddApplication, onBulkApply, onBulkStatus, onEditApplication, onDeleteApplication }) {',
               'function IpoDetailSheet({ ipo, accounts, onClose, onDeleteIpo, onSaveNote, onAddApplication, onBulkApply, onBulkStatus, onEditApplication, onDeleteApplication }) {',
               'detail signature'
           )
 
-          replace_once(
-              '  const conflicts = panConflicts(ipo, accounts);\n  return (',
-              '''  const conflicts = panConflicts(ipo, accounts);\n  const [note, setNote] = useState(() => ipo.remarks || "");\n  const [noteSaved, setNoteSaved] = useState(false);\n\n  useEffect(() => {\n    setNote(ipo.remarks || "");\n    setNoteSaved(false);\n  }, [ipo.id, ipo.remarks]);\n\n  const saveNote = () => {\n    onSaveNote(ipo.id, note);\n    setNoteSaved(true);\n  };\n\n  return (''',
-              'detail note state'
+          # Scope the state insertion to the detail component so another use of
+          # panConflicts elsewhere cannot accidentally match it.
+          detail_head = re.compile(
+              r'(function IpoDetailSheet\(\{.*?\n  const conflicts = panConflicts\(ipo, accounts\);)(\n  return \()',
+              re.S,
           )
+          text, n = detail_head.subn(
+              r'''\1\n  const [note, setNote] = useState(() => ipo.remarks || "");\n  const [noteSaved, setNoteSaved] = useState(false);\n\n  useEffect(() => {\n    setNote(ipo.remarks || "");\n    setNoteSaved(false);\n  }, [ipo.id, ipo.remarks]);\n\n  const saveNote = () => {\n    onSaveNote(ipo.id, note);\n    setNoteSaved(true);\n  };\2''',
+              text,
+              count=1,
+          )
+          if n != 1:
+              raise SystemExit(f'detail note state: expected 1 match, found {n}')
 
           replace_once(
               '''      {ipo.remarks && (\n        <div style={{ fontSize: 13, color: COLORS.ink, background: COLORS.goldSoft, borderRadius: 8, padding: "8px 10px", marginBottom: 10 }}>\n          {ipo.remarks}\n        </div>\n      )}\n\n      <button onClick={() => onEditIpo(ipo)} style={{\n        fontSize: 12.5, color: COLORS.navy, background: "none", border: "none", padding: 0,\n        marginBottom: 16, cursor: "pointer", fontWeight: 600, textDecoration: "underline",\n      }}>Edit IPO details</button>\n''',
-              '''      <div style={{ marginBottom: 16 }}>\n        <SectionLabel>Note</SectionLabel>\n        <textarea\n          value={note}\n          onChange={(e) => { setNote(e.target.value); setNoteSaved(false); }}\n          rows={3}\n          placeholder="Add a personal note about this IPO"\n          aria-label="IPO note"\n          style={{ ...inputStyle, resize: "vertical", marginTop: 6 }}\n        />\n        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginTop: 6 }}>\n          <span style={{ fontSize: 11, color: COLORS.inkSoft }}>Only this note is editable here.</span>\n          <button onClick={saveNote} style={{\n            ...chipBase, padding: "6px 10px", color: COLORS.navy, fontWeight: 700,\n          }}>\n            {noteSaved ? "Saved" : "Save note"}\n          </button>\n        </div>\n      </div>\n''',
+              '''      <div style={{ marginBottom: 16 }}>\n        <SectionLabel>Note</SectionLabel>\n        <textarea\n          value={note}\n          onChange={(e) => { setNote(e.target.value); setNoteSaved(false); }}\n          rows={3}\n          placeholder="Add a personal note about this IPO"\n          aria-label="IPO note"\n          style={{ ...inputStyle, resize: "vertical", marginTop: 6 }}\n        />\n        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginTop: 6 }}>\n          <span style={{ fontSize: 11, color: COLORS.inkSoft }}>Only this note is editable here.</span>\n          <button onClick={saveNote} style={{ ...chipBase, padding: "6px 10px", color: COLORS.navy, fontWeight: 700 }}>\n            {noteSaved ? "Saved" : "Save note"}\n          </button>\n        </div>\n      </div>\n''',
               'detail note UI'
           )
 
@@ -86,21 +85,18 @@ jobs:
               'detail delete action'
           )
 
-          # Main list no longer exposes IPO edit/delete callbacks.
           replace_once(
               '''            onOpen={(id) => setIpoDetail(id)}\n            onEdit={(ipo) => setIpoSheet({ ipo })}\n            onDelete={(id) => {\n              const gone = ipos.find((x) => x.id === id);\n              if (!gone) return;\n              discard("ipo", gone, gone.company || "Untitled IPO");\n              persistIpos(ipos.filter((x) => x.id !== id));\n            }}''',
               '''            onOpen={(id) => setIpoDetail(id)}''',
               'main IPO list callbacks'
           )
 
-          # Detail gets the destructive action, while notes remain ordinary ledger data.
           replace_once(
               '''          onClose={() => setIpoDetail(null)}\n          onEditIpo={(ipo) => { setIpoDetail(null); setIpoSheet({ ipo }); }}\n          onAddApplication={(ipoId) => setAppSheet({ ipoId, application: null })}''',
               '''          onClose={() => setIpoDetail(null)}\n          onDeleteIpo={(id) => {\n            const gone = ipos.find((x) => x.id === id);\n            if (!gone) return;\n            discard("ipo", gone, gone.company || "Untitled IPO");\n            persistIpos(ipos.filter((x) => x.id !== id));\n            setIpoDetail(null);\n          }}\n          onSaveNote={(id, noteValue) => {\n            persistIpos(ipos.map((i) => i.id === id ? { ...i, remarks: noteValue } : i));\n          }}\n          onAddApplication={(ipoId) => setAppSheet({ ipoId, application: null })}''',
               'detail callbacks'
           )
 
-          # New IPO creation keeps the same storage field, but calls it Note rather than Remarks.
           replace_once(
               '<Field label="Remarks">\n        <textarea value={f.remarks} onChange={set("remarks")} rows={3} style={{ ...inputStyle, resize: "vertical" }} placeholder="Any notes about this IPO" /></Field>',
               '<Field label="Note">\n        <textarea value={f.remarks} onChange={set("remarks")} rows={3} style={{ ...inputStyle, resize: "vertical" }} placeholder="Add a personal note about this IPO" /></Field>',
@@ -115,7 +111,8 @@ jobs:
           d = d.replace('### 11. Replace IPO edit with Notes\nStatus: **Pending**', '### 11. Replace IPO edit with Notes\nStatus: **Completed in this group**')
           d = d.replace('### 12. Move card actions to logical detail/panel location\nStatus: **Pending**', '### 12. Move card actions to logical detail/panel location\nStatus: **Completed in this group**')
           d = d.replace('| — | Phase 2 | Pending | — |', '| pending | Phase 2 | Completed in first detail/actions group | IPO metadata immutable, IPO note added, card actions moved to detail |')
-          d += '\n\n## Latest completed group\n\n### IPO detail/actions — completed\n\n- IPO cards no longer show edit/delete controls.\n- Existing IPO metadata is no longer user-editable from the UI.\n- IPO detail now provides a personal Note field backed by the existing `remarks` storage field for compatibility.\n- IPO deletion is available from the IPO detail action area.\n- Application edit/delete controls remain unchanged because applications are user-owned records, not exchange metadata.\n\n'
+          if '### IPO detail/actions — completed' not in d:
+              d += '\n\n## Latest completed group\n\n### IPO detail/actions — completed\n\n- IPO cards no longer show edit/delete controls.\n- Existing IPO metadata is no longer user-editable from the UI.\n- IPO detail now provides a personal Note field backed by the existing `remarks` storage field for compatibility.\n- IPO deletion is available from the IPO detail action area.\n- Application edit/delete controls remain unchanged because applications are user-owned records, not exchange metadata.\n\n'
           doc.write_text(d)
           PY
 
