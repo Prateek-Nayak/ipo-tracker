@@ -1008,6 +1008,11 @@ export default function App() {
   const [syncError, setSyncError] = useState("");
   const [lastSync, setLastSync] = useState(null);
 
+  /* A subtle offline flag. The cached ledger still works, but the user should
+     know that prices and sync are paused. Updates on the same online/offline
+     events the reconnect logic already listens for. */
+  const [isOffline, setIsOffline] = useState(() => typeof navigator !== "undefined" && !navigator.onLine);
+
   const [ipoSheet, setIpoSheet] = useState(null);           // { ipo }
   const [appSheet, setAppSheet] = useState(null);           // { ipoId, application }
   const [acctSheet, setAcctSheet] = useState(null);         // { account }
@@ -1600,6 +1605,19 @@ export default function App() {
     };
   }, [reconciled, userId]);
 
+  /* Track the browser's online/offline state so we can show a subtle indicator. */
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const goOnline = () => setIsOffline(false);
+    const goOffline = () => setIsOffline(true);
+    window.addEventListener("online", goOnline);
+    window.addEventListener("offline", goOffline);
+    return () => {
+      window.removeEventListener("online", goOnline);
+      window.removeEventListener("offline", goOffline);
+    };
+  }, []);
+
 
 
   /* ---------- derived numbers ---------- */
@@ -1655,6 +1673,17 @@ export default function App() {
           else if (tab === "transfers") setTransferSheet({ transfer: null });
         }}
       />
+
+      {isOffline && (
+        <div style={{
+          background: COLORS.goldSoft, display: "flex", alignItems: "center", justifyContent: "center",
+          gap: 6, padding: "6px 14px", fontSize: 11.5, fontWeight: 600, color: COLORS.ink,
+          fontFamily: "Inter, sans-serif",
+        }}>
+          <CloudOff size={13} color={COLORS.gold} />
+          <span>You're offline — showing cached data</span>
+        </div>
+      )}
 
       <div style={{ padding: "14px 14px 0" }}>
         {tab === "dashboard" && (
@@ -2199,7 +2228,7 @@ function Dashboard({ stats, ipos, accounts, onOpenIpo }) {
 
       <SectionLabel>Recent Entries</SectionLabel>
       {ipos.length === 0 ? (
-        <EmptyState text="No IPOs logged yet. Tap the IPOs tab to add your first application." />
+        <EmptyState text="No IPOs logged yet. Tap the IPOs tab to add your first application." icon={Receipt} subtitle="Your family IPO register starts here." />
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {recent.map((ipo) => (
@@ -2238,12 +2267,41 @@ function SectionLabel({ children }) {
   );
 }
 
-function EmptyState({ text }) {
+function EmptyState({ text, icon: Icon, subtitle }) {
   return (
     <div style={{
-      border: `1px dashed ${COLORS.border}`, borderRadius: 12, padding: "26px 18px",
+      border: `1px dashed ${COLORS.border}`, borderRadius: 12, padding: "30px 18px",
       textAlign: "center", color: COLORS.inkSoft, fontSize: 13.5, background: COLORS.surface,
-    }}>{text}</div>
+    }}>
+      {Icon && (
+        <div style={{ marginBottom: 10, opacity: 0.5 }}>
+          <Icon size={28} color={COLORS.inkSoft} />
+        </div>
+      )}
+      <div>{text}</div>
+      {subtitle && (
+        <div style={{ fontSize: 11.5, color: COLORS.inkSoft, marginTop: 6, opacity: 0.7 }}>{subtitle}</div>
+      )}
+    </div>
+  );
+}
+
+/* One cell in the 2×2 date grid on the IPO detail sheet. Label and value are
+   always in the same place, so the eye doesn't have to re-find each date
+   depending on which ones exist. */
+function DateCell({ label, value }) {
+  return (
+    <div>
+      <div style={{
+        fontSize: 10, fontWeight: 600, color: COLORS.inkSoft,
+        textTransform: "uppercase", letterSpacing: 0.5,
+        fontFamily: "Inter, sans-serif", marginBottom: 2,
+      }}>{label}</div>
+      <div style={{
+        fontSize: 13, fontWeight: 500, color: COLORS.ink,
+        fontFamily: "'JetBrains Mono', monospace",
+      }}>{value}</div>
+    </div>
   );
 }
 
@@ -2505,7 +2563,7 @@ function IpoList({ ipos, accounts, onOpen }) {
       .sort(cmp);
   }, [onBoard, search, filter, sort]);
 
-  if (ipos.length === 0) return <EmptyState text="No IPOs yet. Tap + to add one." />;
+  if (ipos.length === 0) return <EmptyState text="No IPOs yet. Tap + to add one." icon={Receipt} subtitle="Track applications, allotments and returns." />;
 
   return (
     <div>
@@ -3004,7 +3062,7 @@ function AccountList({ accounts, ipos, transfers = [], onEdit, onDelete }) {
       .sort(cmp);
   }, [accounts, search, filter, sort, stats, dupPans]);
 
-  if (accounts.length === 0) return <EmptyState text="No family accounts added yet. Tap + to add one." />;
+  if (accounts.length === 0) return <EmptyState text="No family accounts added yet. Tap + to add one." icon={Users} subtitle="Add demat accounts for each family member." />;
 
   return (
     <div>
@@ -3218,7 +3276,7 @@ function TransferList({ transfers, accounts, ipos = [], onEdit, onDelete }) {
       .sort(cmp);
   }, [transfers, accounts, ipos, search, filter, sort]);
 
-  if (transfers.length === 0) return <EmptyState text="No fund transfers logged yet. Tap + to record one." />;
+  if (transfers.length === 0) return <EmptyState text="No fund transfers logged yet. Tap + to record one." icon={ArrowRightLeft} subtitle="Track money moved between accounts for IPO applications." />;
 
   const linked = transfers.filter((t) => t.relatedIpoId).length;
 
