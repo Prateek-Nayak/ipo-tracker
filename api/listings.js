@@ -27,19 +27,39 @@ async function fetchIpoDetail(token, id) {
   try { const data = await upstoxFetch(`/ipos/${encodeURIComponent(id)}`, token); return data.status === "success" && data.data ? data.data : null; }
   catch { return null; }
 }
-async function fetchLtp(token, instrumentKeys) {
-  if (!instrumentKeys.length) return {};
+/* Last traded prices, by ISIN.
+ *
+ * Two things had to be right and neither was. Upstox answers keyed by exchange
+ * and trading symbol — "NSE_EQ:TEMPSENS" — not by the instrument key it was
+ * asked with, so every price was found and then thrown away. And an SME issue
+ * lists on BSE, not NSE: asking NSE_EQ for all of them answered for 50 of 95,
+ * and the 45 it missed were 44 SME issues plus one that is not trading. Asking
+ * BSE for whatever NSE did not know brings that to 94.
+ */
+async function fetchLtp(token, isins) {
   const results = {};
-  for (let i = 0; i < instrumentKeys.length; i += 500) {
-    const batch = instrumentKeys.slice(i, i + 500);
-    const param = batch.map((k) => encodeURIComponent(k)).join(",");
-    try {
-      const data = await upstoxFetch(`/market-quote/ltp?instrument_key=${param}`, token);
-      if (data.status === "success" && data.data) {
-        Object.entries(data.data).forEach(([instrumentKey, val]) => { if (val) results[instrumentKey] = val; });
+  const ask = async (segment, list) => {
+    for (let i = 0; i < list.length; i += 500) {
+      const batch = list.slice(i, i + 500);
+      const param = batch.map((isin) => encodeURIComponent(`${segment}|${isin}`)).join(",");
+      try {
+        const data = await upstoxFetch(`/market-quote/ltp?instrument_key=${param}`, token);
+        if (data.status !== "success" || !data.data) continue;
+        Object.values(data.data).forEach((val) => {
+          // The instrument key is inside the value, which is how it maps back.
+          const isin = String(val?.instrument_token || "").split("|")[1];
+          if (isin && val.last_price != null) results[isin] = val;
+        });
+      } catch (e) {
+        // Partial results beat none, but silence about why does not.
+        console.error(`Upstox LTP ${segment} batch failed`, e?.message || e);
       }
-    } catch { /* continue with partial results */ }
-  }
+    }
+  };
+
+  await ask("NSE_EQ", isins);
+  const stillMissing = isins.filter((isin) => !results[isin]);
+  if (stillMissing.length) await ask("BSE_EQ", stillMissing);
   return results;
 }
 function num(v) { if (v === null || v === undefined || String(v).trim() === "") return null; const n = Number(v); return Number.isFinite(n) ? n : null; }
@@ -79,11 +99,12 @@ export default async function handler(req, res) {
     } else toEnrich = filtered.slice(0, 80);
     const details = await mapLimited(toEnrich, 6, (item) => fetchIpoDetail(token, item.id));
     const detailMap = new Map(); details.forEach((d, i) => { if (d) detailMap.set(toEnrich[i].id, d); });
-    const listedWithIsin = filtered.filter((item) => item.status === "listed" && item.isin);
-    const instrumentKeys = listedWithIsin.map((item) => `NSE_EQ|${item.isin}`);
-    const ltpData = await fetchLtp(token, [...new Set(instrumentKeys)]);
+    const listedIsins = [...new Set(
+      filtered.filter((item) => item.status === "listed" && item.isin).map((item) => item.isin)
+    )];
+    const ltpData = await fetchLtp(token, listedIsins);
     const listings = filtered.map((item) => {
-      const detail = detailMap.get(item.id), key = nameKey(item.name), instKey = item.isin ? `NSE_EQ|${item.isin}` : "", ltp = instKey ? ltpData[instKey] : null;
+      const detail = detailMap.get(item.id), key = nameKey(item.name), instKey = item.isin ? `NSE_EQ|${item.isin}` : "", ltp = item.isin ? ltpData[item.isin] : null;
       const issuePrice = price(item.maximum_price) || price(item.minimum_price), listingPrice = detail ? price(detail.listing_price) : null, currentPrice = ltp ? price(ltp.last_price) : null;
       const listingDayGain = listingPrice != null && issuePrice != null ? ((listingPrice - issuePrice) / issuePrice) * 100 : null;
       const gainSinceIssue = currentPrice != null && issuePrice != null ? ((currentPrice - issuePrice) / issuePrice) * 100 : null;
