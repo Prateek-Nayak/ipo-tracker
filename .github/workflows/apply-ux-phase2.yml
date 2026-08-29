@@ -17,111 +17,34 @@ jobs:
           ref: feat/upstox-migration
           fetch-depth: 0
 
-      - name: Apply IPO detail UX changes
+      - name: Diagnose patch targets
         run: |
           python - <<'PY'
           from pathlib import Path
           import re
-
-          path = Path('src/App.jsx')
-          text = path.read_text()
-
-          def replace_once(old, new, label):
-              global text
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit(f'{label}: expected 1 match, found {count}')
-              text = text.replace(old, new, 1)
-
-          replace_once(
-              'function IpoCard({ ipo, accounts, onClick, onEdit, onDelete, showActions }) {',
-              'function IpoCard({ ipo, accounts, onClick }) {',
-              'IpoCard signature'
+          text = Path('src/App.jsx').read_text()
+          checks = {}
+          checks['IpoCard signature'] = text.count('function IpoCard({ ipo, accounts, onClick, onEdit, onDelete, showActions }) {')
+          checks['card action marker'] = text.count('{showActions && (')
+          checks['IpoList signature'] = text.count('function IpoList({ ipos, accounts, onOpen, onEdit, onDelete }) {')
+          checks['IpoList card props'] = text.count('onEdit={() => onEdit(ipo)} onDelete={() => onDelete(ipo.id)} showActions />')
+          checks['detail signature'] = text.count('function IpoDetailSheet({ ipo, accounts, onClose, onEditIpo, onAddApplication, onBulkApply, onBulkStatus, onEditApplication, onDeleteApplication }) {')
+          checks['detail conflicts'] = len(re.findall(r'function IpoDetailSheet\(\{.*?const conflicts = panConflicts\(ipo, accounts\);', text, re.S))
+          checks['detail old remarks'] = text.count('{ipo.remarks && (')
+          checks['detail edit link'] = text.count('Edit IPO details')
+          checks['detail sheet close before ApplicationRow'] = text.count('    </Sheet>\n  );\n}\n\nfunction ApplicationRow')
+          checks['main IPO delete callback'] = text.count('discard("ipo", gone, gone.company || "Untitled IPO")')
+          checks['detail edit callback'] = text.count('onEditIpo={(ipo) => { setIpoDetail(null); setIpoSheet({ ipo }); }}')
+          checks['IPO creation remarks field'] = text.count('<Field label="Remarks">')
+          Path('docs/ux_patch_diagnostics.md').write_text(
+              '# UX patch diagnostics\n\n' + '\n'.join(f'- **{k}**: `{v}`' for k,v in checks.items()) + '\n'
           )
-
-          action_block = '''      {showActions && (\n        <div style={{ display: "flex", flexDirection: "column", borderLeft: `1px solid ${COLORS.border}` }}>\n          <button onClick={(e) => { e.stopPropagation(); onEdit(); }} aria-label="Edit IPO" style={iconBtnStyle}><Pencil size={14} color={COLORS.inkSoft} /></button>\n          <button onClick={(e) => {\n            e.stopPropagation();\n            // An IPO owns its applications, so deleting it deletes them too.\n            const n = apps.length;\n            const msg = n\n              ? `Delete ${ipo.company || "this IPO"} and its ${n} application${n === 1 ? "" : "s"}?`\n              : `Delete ${ipo.company || "this IPO entry"}?`;\n            if (confirm(msg)) onDelete();\n          }} aria-label="Delete IPO" style={{ ...iconBtnStyle, borderTop: `1px solid ${COLORS.border}` }}><Trash2 size={14} color={COLORS.red} /></button>\n        </div>\n      )}\n'''
-          replace_once(action_block, '', 'card action block')
-
-          replace_once(
-              'function IpoList({ ipos, accounts, onOpen, onEdit, onDelete }) {',
-              'function IpoList({ ipos, accounts, onOpen }) {',
-              'IpoList signature'
-          )
-          replace_once(
-              '''            <IpoCard key={ipo.id} ipo={ipo} accounts={accounts} onClick={() => onOpen(ipo.id)}\n              onEdit={() => onEdit(ipo)} onDelete={() => onDelete(ipo.id)} showActions />''',
-              '''            <IpoCard key={ipo.id} ipo={ipo} accounts={accounts} onClick={() => onOpen(ipo.id)} />''',
-              'IpoList card props'
-          )
-
-          replace_once(
-              'function IpoDetailSheet({ ipo, accounts, onClose, onEditIpo, onAddApplication, onBulkApply, onBulkStatus, onEditApplication, onDeleteApplication }) {',
-              'function IpoDetailSheet({ ipo, accounts, onClose, onDeleteIpo, onSaveNote, onAddApplication, onBulkApply, onBulkStatus, onEditApplication, onDeleteApplication }) {',
-              'detail signature'
-          )
-
-          # Scope the state insertion to the detail component so another use of
-          # panConflicts elsewhere cannot accidentally match it.
-          detail_head = re.compile(
-              r'(function IpoDetailSheet\(\{.*?\n  const conflicts = panConflicts\(ipo, accounts\);)(\n  return \()',
-              re.S,
-          )
-          text, n = detail_head.subn(
-              r'''\1\n  const [note, setNote] = useState(() => ipo.remarks || "");\n  const [noteSaved, setNoteSaved] = useState(false);\n\n  useEffect(() => {\n    setNote(ipo.remarks || "");\n    setNoteSaved(false);\n  }, [ipo.id, ipo.remarks]);\n\n  const saveNote = () => {\n    onSaveNote(ipo.id, note);\n    setNoteSaved(true);\n  };\2''',
-              text,
-              count=1,
-          )
-          if n != 1:
-              raise SystemExit(f'detail note state: expected 1 match, found {n}')
-
-          replace_once(
-              '''      {ipo.remarks && (\n        <div style={{ fontSize: 13, color: COLORS.ink, background: COLORS.goldSoft, borderRadius: 8, padding: "8px 10px", marginBottom: 10 }}>\n          {ipo.remarks}\n        </div>\n      )}\n\n      <button onClick={() => onEditIpo(ipo)} style={{\n        fontSize: 12.5, color: COLORS.navy, background: "none", border: "none", padding: 0,\n        marginBottom: 16, cursor: "pointer", fontWeight: 600, textDecoration: "underline",\n      }}>Edit IPO details</button>\n''',
-              '''      <div style={{ marginBottom: 16 }}>\n        <SectionLabel>Note</SectionLabel>\n        <textarea\n          value={note}\n          onChange={(e) => { setNote(e.target.value); setNoteSaved(false); }}\n          rows={3}\n          placeholder="Add a personal note about this IPO"\n          aria-label="IPO note"\n          style={{ ...inputStyle, resize: "vertical", marginTop: 6 }}\n        />\n        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginTop: 6 }}>\n          <span style={{ fontSize: 11, color: COLORS.inkSoft }}>Only this note is editable here.</span>\n          <button onClick={saveNote} style={{ ...chipBase, padding: "6px 10px", color: COLORS.navy, fontWeight: 700 }}>\n            {noteSaved ? "Saved" : "Save note"}\n          </button>\n        </div>\n      </div>\n''',
-              'detail note UI'
-          )
-
-          replace_once(
-              '''      )}\n    </Sheet>\n  );\n}\n\nfunction ApplicationRow''',
-              '''      )}\n\n      <div style={{ marginTop: 20, paddingTop: 14, borderTop: `1px solid ${COLORS.border}` }}>\n        <SectionLabel>IPO actions</SectionLabel>\n        <button\n          onClick={() => {\n            const n = apps.length;\n            const msg = n\n              ? `Delete ${ipo.company || "this IPO"} and its ${n} application${n === 1 ? "" : "s"}?`\n              : `Delete ${ipo.company || "this IPO entry"}?`;\n            if (confirm(msg)) onDeleteIpo(ipo.id);\n          }}\n          style={{\n            width: "100%", marginTop: 6, minHeight: 44, borderRadius: 10,\n            border: `1px solid ${COLORS.red}`, background: COLORS.redSoft, color: COLORS.red,\n            fontSize: 13, fontWeight: 700, cursor: "pointer",\n          }}\n        >\n          Delete IPO\n        </button>\n      </div>\n    </Sheet>\n  );\n}\n\nfunction ApplicationRow''',
-              'detail delete action'
-          )
-
-          replace_once(
-              '''            onOpen={(id) => setIpoDetail(id)}\n            onEdit={(ipo) => setIpoSheet({ ipo })}\n            onDelete={(id) => {\n              const gone = ipos.find((x) => x.id === id);\n              if (!gone) return;\n              discard("ipo", gone, gone.company || "Untitled IPO");\n              persistIpos(ipos.filter((x) => x.id !== id));\n            }}''',
-              '''            onOpen={(id) => setIpoDetail(id)}''',
-              'main IPO list callbacks'
-          )
-
-          replace_once(
-              '''          onClose={() => setIpoDetail(null)}\n          onEditIpo={(ipo) => { setIpoDetail(null); setIpoSheet({ ipo }); }}\n          onAddApplication={(ipoId) => setAppSheet({ ipoId, application: null })}''',
-              '''          onClose={() => setIpoDetail(null)}\n          onDeleteIpo={(id) => {\n            const gone = ipos.find((x) => x.id === id);\n            if (!gone) return;\n            discard("ipo", gone, gone.company || "Untitled IPO");\n            persistIpos(ipos.filter((x) => x.id !== id));\n            setIpoDetail(null);\n          }}\n          onSaveNote={(id, noteValue) => {\n            persistIpos(ipos.map((i) => i.id === id ? { ...i, remarks: noteValue } : i));\n          }}\n          onAddApplication={(ipoId) => setAppSheet({ ipoId, application: null })}''',
-              'detail callbacks'
-          )
-
-          replace_once(
-              '<Field label="Remarks">\n        <textarea value={f.remarks} onChange={set("remarks")} rows={3} style={{ ...inputStyle, resize: "vertical" }} placeholder="Any notes about this IPO" /></Field>',
-              '<Field label="Note">\n        <textarea value={f.remarks} onChange={set("remarks")} rows={3} style={{ ...inputStyle, resize: "vertical" }} placeholder="Add a personal note about this IPO" /></Field>',
-              'IPO creation note label'
-          )
-
-          path.write_text(text)
-
-          doc = Path('docs/UX_UI_IMPROVEMENTS.md')
-          d = doc.read_text()
-          d = d.replace('### 10. Immutable IPO metadata\nStatus: **Pending**', '### 10. Immutable IPO metadata\nStatus: **Completed in this group**')
-          d = d.replace('### 11. Replace IPO edit with Notes\nStatus: **Pending**', '### 11. Replace IPO edit with Notes\nStatus: **Completed in this group**')
-          d = d.replace('### 12. Move card actions to logical detail/panel location\nStatus: **Pending**', '### 12. Move card actions to logical detail/panel location\nStatus: **Completed in this group**')
-          d = d.replace('| — | Phase 2 | Pending | — |', '| pending | Phase 2 | Completed in first detail/actions group | IPO metadata immutable, IPO note added, card actions moved to detail |')
-          if '### IPO detail/actions — completed' not in d:
-              d += '\n\n## Latest completed group\n\n### IPO detail/actions — completed\n\n- IPO cards no longer show edit/delete controls.\n- Existing IPO metadata is no longer user-editable from the UI.\n- IPO detail now provides a personal Note field backed by the existing `remarks` storage field for compatibility.\n- IPO deletion is available from the IPO detail action area.\n- Application edit/delete controls remain unchanged because applications are user-owned records, not exchange metadata.\n\n'
-          doc.write_text(d)
           PY
 
-      - name: Commit completed group and remove patch workflow
+      - name: Commit diagnostics
         run: |
-          rm -f .github/workflows/apply-ux-phase2.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/App.jsx docs/UX_UI_IMPROVEMENTS.md .github/workflows/apply-ux-phase2.yml
-          git diff --cached --check
-          git commit -m "feat: make IPO metadata immutable and add notes"
+          git add docs/ux_patch_diagnostics.md
+          git commit -m "chore: record UX patch diagnostics"
           git push origin feat/upstox-migration
