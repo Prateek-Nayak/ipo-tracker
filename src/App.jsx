@@ -386,7 +386,14 @@ function issueStage(x) {
   const close = x?.closeDate || "";
 
   if (listed && listed < today) return { label: "LISTED", color: COLORS.navy, bg: "#EAEFF5" };
-  if (listed && listed === today) return { label: "LISTS TODAY", color: COLORS.green, bg: COLORS.greenSoft };
+  if (listed && listed === today) {
+    // Scheduled to list today is not the same as actually trading: until a
+    // real, positive last-traded price shows up there is nothing to show yet.
+    const hasLtp = Number(x?.currentPrice) > 0;
+    return hasLtp
+      ? { label: "LISTED TODAY", color: COLORS.green, bg: COLORS.greenSoft }
+      : { label: "LISTS TODAY", color: COLORS.green, bg: COLORS.greenSoft };
+  }
 
   /* Allotment day sits between the close and the listing, and on the day itself
      it is the nearer event — so it outranks a listing still days away. */
@@ -750,7 +757,14 @@ function mergeIpos(current, incoming) {
 /* A badge is a label, not a highlight. It carries its colour in the text and a
    hairline, on a background barely off the card — a filled block of colour on
    every row is what made a list of IPOs read as a colour chart. */
-function Badge({ children, color, bg }) {
+function Badge({ children, color, bg, strong }) {
+  // The Allotted / Not Allotted badges read as washed-out in light mode not
+  // because the treatment lacked a fill, but because every badge — including
+  // these — was dimmed to 90% opacity. Removing that dimming for the ones
+  // that matter gets the same "stronger" look the progress bar has, without
+  // introducing a second, solid-fill badge style into the app. Dark mode
+  // already reads fine at 90%, so it is left alone.
+  const full = strong && !isDark();
   return (
     <span
       style={{
@@ -758,7 +772,7 @@ function Badge({ children, color, bg }) {
         fontFamily: "'JetBrains Mono', monospace",
         fontSize: 8, fontWeight: 600, letterSpacing: 0.3,
         padding: "2px 7px", borderRadius: 5, whiteSpace: "nowrap",
-        opacity: .9,
+        opacity: full ? 1 : .9,
       }}
     >
       {children}
@@ -1598,7 +1612,6 @@ export default function App() {
           onClose={() => setIpoDetail(null)}
           onDeleteIpo={(id) => { const gone=ipos.find((x)=>x.id===id); if(!gone)return; discard("ipo",gone,gone.company||"Untitled IPO"); persistIpos(ipos.filter((x)=>x.id!==id)); setIpoDetail(null); }}
           onSaveNote={(id,noteValue)=>{ persistIpos(ipos.map((i)=>i.id===id?{...i,remarks:noteValue}:i)); }}
-          onAddApplication={(ipoId) => setAppSheet({ ipoId, application: null })}
           onBulkApply={(ipoId) => { setIpoDetail(null); setBulkApplyFor(ipoId); }}
           onBulkStatus={(ipoId) => { setIpoDetail(null); setBulkStatusFor(ipoId); }}
           onEditApplication={(ipoId, application) => setAppSheet({ ipoId, application })}
@@ -2647,9 +2660,26 @@ function IpoDetailSheet({ ipo, accounts, onClose, onDeleteIpo, onSaveNote, onAdd
   const tally = allotmentTally(ipo);
   const conflicts = panConflicts(ipo, accounts);
   const [note, setNote] = useState(() => ipo.remarks || "");
-  const [noteSaved, setNoteSaved] = useState(false);
-  useEffect(() => { setNote(ipo.remarks || ""); setNoteSaved(false); }, [ipo.id, ipo.remarks]);
-  const saveNote = () => { onSaveNote(ipo.id, note); setNoteSaved(true); };
+  // The baseline is the last-saved value, so "changed" always means changed
+  // from what is actually on record — not just "touched since the sheet
+  // opened", which used to leave Save enabled even when nothing was edited.
+  const [savedNote, setSavedNote] = useState(() => ipo.remarks || "");
+  useEffect(() => { setNote(ipo.remarks || ""); setSavedNote(ipo.remarks || ""); }, [ipo.id, ipo.remarks]);
+  const noteDirty = note !== savedNote;
+  const saveNote = () => { onSaveNote(ipo.id, note); setSavedNote(note); };
+
+  const allot = allotmentDateOf(ipo);
+  const allotValue = (!hasListed(ipo) && !allotmentSettled(ipo) && allot.date)
+    ? `${fmtDate(allot.date)}${allot.exact ? "" : " (expected)"}`
+    : "—";
+  const listExpected = listingDateOf(ipo);
+  const listValue = ipo.listingDate
+    ? fmtDate(ipo.listingDate)
+    : (listExpected.date ? `${fmtDate(listExpected.date)} (expected)` : "—");
+  const closeValue = ipo.closeDate
+    ? fmtDate(ipo.closeDate)
+    : (ipo.applicationDate ? `${fmtDate(ipo.applicationDate)} (applied)` : "—");
+
   return (
     <Sheet title={ipo.company} onClose={onClose}>
       <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
@@ -2671,27 +2701,29 @@ function IpoDetailSheet({ ipo, accounts, onClose, onDeleteIpo, onSaveNote, onAdd
         )}
       </div>
 
-      <div style={{ fontSize: 12.5, color: COLORS.inkSoft, marginBottom: 6, display: "flex", flexWrap: "wrap", gap: "4px 14px" }}>
-        {ipo.openDate && <span>Opens {fmtDate(ipo.openDate)}</span>}
-        {ipo.closeDate
-          ? <span>Closes {fmtDate(ipo.closeDate)}</span>
-          : ipo.applicationDate && <span>Applied {fmtDate(ipo.applicationDate)}</span>}
-        {!hasListed(ipo) && !allotmentSettled(ipo) && allotmentDateOf(ipo).date && (
-          <span>
-            Allotment {fmtDate(allotmentDateOf(ipo).date)}
-            {allotmentDateOf(ipo).exact ? "" : " (expected)"}
-          </span>
-        )}
-        {ipo.listingDate
-          ? <span>{hasListed(ipo) ? "Listed" : "Lists"} {fmtDate(ipo.listingDate)}</span>
-          : listingDateOf(ipo).date && <span>Lists {fmtDate(listingDateOf(ipo).date)} (expected)</span>}
+      {/* A fixed 2x2 matrix rather than a row that wraps: Open/Close and
+          Allotment/Listing keep the same position every time, so the eye
+          doesn't have to re-find each date depending on which ones exist. */}
+      <div style={{
+        display: "grid", gridTemplateColumns: "1fr 1fr", columnGap: 14, rowGap: 8, marginBottom: 16,
+      }}>
+        <DateCell label="Open" value={ipo.openDate ? fmtDate(ipo.openDate) : "—"} />
+        <DateCell label="Close" value={closeValue} />
+        <DateCell label="Allotment" value={allotValue} />
+        <DateCell label="Listing" value={listValue} />
       </div>
       <div style={{ marginBottom: 16 }}>
         <SectionLabel>Note</SectionLabel>
-        <textarea value={note} onChange={(e) => { setNote(e.target.value); setNoteSaved(false); }} rows={3} placeholder="Add a personal note about this IPO" aria-label="IPO note" style={{ ...inputStyle, resize: "vertical", marginTop: 6 }} />
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginTop: 6 }}>
-          <span style={{ fontSize: 11, color: COLORS.inkSoft }}>Only this note is editable here.</span>
-          <button onClick={saveNote} style={{ ...chipBase, padding: "6px 10px", color: COLORS.navy, fontWeight: 700 }}>{noteSaved ? "Saved" : "Save note"}</button>
+        <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={3} placeholder="Add a personal note about this IPO" aria-label="IPO note" style={{ ...inputStyle, resize: "vertical", marginTop: 6 }} />
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", marginTop: 6 }}>
+          <button
+            onClick={saveNote}
+            disabled={!noteDirty}
+            style={{
+              ...chipBase, padding: "6px 10px", color: COLORS.navy, fontWeight: 700,
+              opacity: noteDirty ? 1 : 0.5, cursor: noteDirty ? "pointer" : "default",
+            }}
+          >Save note</button>
         </div>
       </div>
 
@@ -2728,7 +2760,7 @@ function IpoDetailSheet({ ipo, accounts, onClose, onDeleteIpo, onSaveNote, onAdd
           flex: "1 1 46%", display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
           background: COLORS.action, color: COLORS.onAction, border: "none", borderRadius: 10,
           padding: "11px 10px", fontSize: 12.5, fontWeight: 600, cursor: "pointer",
-        }}><Layers size={14} color={COLORS.onAction} /> Apply in bulk</button>
+        }}><Layers size={14} color={COLORS.onAction} /> Apply IPO</button>
         <button onClick={() => onBulkStatus(ipo.id)} disabled={!apps.length} style={{
           flex: "1 1 46%", display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
           background: COLORS.surface, color: apps.length ? COLORS.ink : COLORS.inkSoft,
@@ -2740,14 +2772,10 @@ function IpoDetailSheet({ ipo, accounts, onClose, onDeleteIpo, onSaveNote, onAdd
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
         <SectionLabel>Applications ({apps.length})</SectionLabel>
-        <button onClick={() => onAddApplication(ipo.id)} style={{
-          display: "flex", alignItems: "center", gap: 4, background: "transparent", color: COLORS.navy,
-          border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: "8px 10px", fontSize: 12, fontWeight: 600, cursor: "pointer",
-        }}><Plus size={13} color={COLORS.navy} /> Add one</button>
       </div>
 
       {apps.length === 0 ? (
-        <EmptyState text="No applications yet for this IPO. Use “Apply in bulk” to add several at once." />
+        <EmptyState text="No applications yet for this IPO. Use “Apply IPO” to add one or more at once." />
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {apps.map((app) => (
@@ -2776,10 +2804,14 @@ function ApplicationRow({ app, ipo, accounts, onEdit, onDelete }) {
     if (mark) pnl = shares * (mark - price);
   }
   const accountName = accounts.find((a) => a.id === app.accountId)?.name;
+  const strongStatus = app.allotmentStatus === "Allotted" || app.allotmentStatus === "Not Allotted";
   return (
     <div style={{
-      background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: "10px 12px",
+      background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: "9px 10px",
     }}>
+      {/* Actions live in the same row as the status badge instead of a row of
+          their own — one less line per application in a list that can run to
+          dozens of rows. */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
         <div style={{ minWidth: 0 }}>
           <div style={{ fontWeight: 600, fontSize: 14, color: COLORS.ink }}>
@@ -2789,9 +2821,13 @@ function ApplicationRow({ app, ipo, accounts, onEdit, onDelete }) {
             <div style={{ fontSize: 11.5, color: COLORS.inkSoft }}>on behalf of {app.appliedFor}</div>
           )}
         </div>
-        <Badge color={meta.color} bg={meta.bg}>{app.allotmentStatus}</Badge>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+          <Badge color={meta.color} bg={meta.bg} strong={strongStatus}>{app.allotmentStatus}</Badge>
+          <button onClick={onEdit} aria-label="Edit application" style={smallIconBtn}><Pencil size={13} color={COLORS.inkSoft} /></button>
+          <button onClick={onDelete} aria-label="Delete application" style={smallIconBtn}><Trash2 size={13} color={COLORS.red} /></button>
+        </div>
       </div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8, fontFamily: "'JetBrains Mono', monospace", fontSize: 12 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6, fontFamily: "'JetBrains Mono', monospace", fontSize: 12 }}>
         <span style={{ color: COLORS.inkSoft }}>{app.lots || 0} lot(s) · {inrOrDash(app.amountBlocked)} blocked</span>
         {pnl !== null && (
           <span style={{ fontWeight: 700, color: pnl >= 0 ? COLORS.green : COLORS.red }}>
@@ -2799,11 +2835,7 @@ function ApplicationRow({ app, ipo, accounts, onEdit, onDelete }) {
           </span>
         )}
       </div>
-      {app.remarks && <div style={{ fontSize: 12, color: COLORS.inkSoft, marginTop: 6, fontStyle: "italic" }}>“{app.remarks}”</div>}
-      <div style={{ display: "flex", gap: 6, marginTop: 8, justifyContent: "flex-end" }}>
-        <button onClick={onEdit} aria-label="Edit application" style={roundIconBtn}><Pencil size={13} color={COLORS.inkSoft} /></button>
-        <button onClick={onDelete} aria-label="Delete application" style={roundIconBtn}><Trash2 size={13} color={COLORS.red} /></button>
-      </div>
+      {app.remarks && <div style={{ fontSize: 12, color: COLORS.inkSoft, marginTop: 5, fontStyle: "italic" }}>“{app.remarks}”</div>}
     </div>
   );
 }
