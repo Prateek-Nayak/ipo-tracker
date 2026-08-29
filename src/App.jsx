@@ -60,7 +60,7 @@ const COLORS_DARK = {
   greenSoft: "#182A22",
   red: "#E0736B",
   redSoft: "#2E1C1C",
-  heading: "#F0EDE6",
+  heading: "#F5F3EE",
   action: "#634e30",
   onAction: "#ffffff",
   field: "#131417",
@@ -760,21 +760,19 @@ function mergeIpos(current, incoming) {
    hairline, on a background barely off the card — a filled block of colour on
    every row is what made a list of IPOs read as a colour chart. */
 function Badge({ children, color, bg, strong }) {
-  // The Allotted / Not Allotted badges read as washed-out in light mode not
-  // because the treatment lacked a fill, but because every badge — including
-  // these — was dimmed to 90% opacity. Removing that dimming for the ones
-  // that matter gets the same "stronger" look the progress bar has, without
-  // introducing a second, solid-fill badge style into the app. Dark mode
-  // already reads fine at 90%, so it is left alone.
-  const full = strong && !isDark();
+  /* The Allotted / Not Allotted badges need to read as clearly as the
+     progress bar. In light mode the border goes heavier and the font
+     bolder so the colour carries; dark mode already reads fine as-is. */
+  const emphasis = strong && !isDark();
   return (
     <span
       style={{
-        color, background: "transparent", border: `1px solid ${color}`,
+        color, background: "transparent",
+        border: `${emphasis ? 1.5 : 1}px solid ${color}`,
         fontFamily: "'JetBrains Mono', monospace",
-        fontSize: 8, fontWeight: 600, letterSpacing: 0.3,
+        fontSize: 8, fontWeight: emphasis ? 700 : 600, letterSpacing: 0.3,
         padding: "2px 7px", borderRadius: 5, whiteSpace: "nowrap",
-        opacity: full ? 1 : .9,
+        opacity: emphasis ? 1 : 0.9,
       }}
     >
       {children}
@@ -857,6 +855,7 @@ function Sheet({ title, onClose, children }) {
     <div style={{
       position: "fixed", inset: 0, background: "rgba(24, 27, 32, 0.45)", zIndex: 50,
       display: "flex", alignItems: "flex-end", justifyContent: "center",
+      animation: "sheetFadeIn 200ms ease-out",
     }} onClick={onClose}>
       <div
         onClick={(e) => e.stopPropagation()}
@@ -870,7 +869,8 @@ function Sheet({ title, onClose, children }) {
           display: "flex", flexDirection: "column", minHeight: 0,
           boxShadow: "0 -8px 30px rgba(0,0,0,0.2)",
           transform: dragY ? `translateY(${dragY}px)` : undefined,
-          transition: dragging ? "none" : "transform 180ms ease",
+          transition: dragging ? "none" : "transform 280ms ease-out",
+          animation: "sheetSlideUp 280ms ease-out",
         }}
       >
         <div style={{
@@ -2039,14 +2039,12 @@ function Header({ tab, onAdd, onOpenData, onFetchLive, syncing, syncError, cloud
           fontFamily: "'Fraunces', serif", fontWeight: 700, fontSize: 21, color: "#fff",
           whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
         }}>{titles[tab]}</div>
-        {/* Kept on every screen, empty where there is nothing to say, so the
-            header is the same height throughout and the page does not shift. */}
-        <div style={{
-          fontFamily: "'JetBrains Mono', monospace", fontSize: 10.5, color: COLORS.gold,
-          marginTop: 2, letterSpacing: 0.5, minHeight: 14,
-        }}>
-          {tab === "dashboard" ? "FAMILY IPO REGISTER" : " "}
-        </div>
+        {tab === "dashboard" && (
+          <div style={{
+            fontFamily: "'JetBrains Mono', monospace", fontSize: 10.5, color: COLORS.gold,
+            marginTop: 2, letterSpacing: 0.5,
+          }}>FAMILY IPO REGISTER</div>
+        )}
       </div>
       <div style={{ display: "flex", gap: 8, flexShrink: 0, marginLeft: "auto" }}>
         {tab === "ipos" && (
@@ -2517,11 +2515,16 @@ function IpoList({ ipos, accounts, onOpen }) {
   );
 
   const counts = useMemo(() => {
-    const c = { all: onBoard.length, pending: 0, allotted: 0, rejected: 0, incomplete: 0 };
+    const c = { all: onBoard.length, pending: 0, allotted: 0, rejected: 0, incomplete: 0, listed: 0, open: 0 };
+    const today = todayISO();
     onBoard.forEach((i) => {
       const b = ipoBucket(i);
       if (c[b] != null) c[b]++;
       if (missingIpoFields(i).length) c.incomplete++;
+      if (hasListed(i)) c.listed++;
+      const openD = i.openDate || "";
+      const closeD = i.closeDate || "";
+      if (openD && openD <= today && (!closeD || closeD >= today)) c.open++;
     });
     return c;
   }, [onBoard]);
@@ -2557,13 +2560,22 @@ function IpoList({ ipos, accounts, onOpen }) {
         if (q && !`${i.company || ""} ${i.symbol || ""}`.toLowerCase().includes(q)) return false;
         if (!filter.length) return true;
         // Any of the chosen filters, not all of them: they name kinds, not tests.
-        return filter.some((f) =>
-          f === "incomplete" ? missingIpoFields(i).length > 0 : ipoBucket(i) === f);
+        return filter.some((f) => {
+          if (f === "incomplete") return missingIpoFields(i).length > 0;
+          if (f === "listed") return hasListed(i);
+          if (f === "open") {
+            const today = todayISO();
+            const openD = i.openDate || "";
+            const closeD = i.closeDate || "";
+            return openD && openD <= today && (!closeD || closeD >= today);
+          }
+          return ipoBucket(i) === f;
+        });
       })
       .sort(cmp);
   }, [onBoard, search, filter, sort]);
 
-  if (ipos.length === 0) return <EmptyState text="No IPOs yet. Tap + to add one." icon={Receipt} subtitle="Track applications, allotments and returns." />;
+  if (ipos.length === 0) return <EmptyState text="No IPOs yet. Use 'Add from exchange' above to sync IPOs." icon={Receipt} subtitle="Track applications, allotments and returns across your family." />;
 
   return (
     <div>
@@ -2571,9 +2583,11 @@ function IpoList({ ipos, accounts, onOpen }) {
         search={search} setSearch={setSearch} placeholder="Search company or symbol"
         filter={filter} setFilter={setFilter}
         filters={[
+          ...(counts.open ? [{ id: "open", label: "Open now", count: counts.open }] : []),
           { id: "pending", label: "Pending", count: counts.pending },
           { id: "allotted", label: "Allotted", count: counts.allotted },
-          { id: "rejected", label: "Missed", count: counts.rejected },
+          { id: "rejected", label: "Not allotted", count: counts.rejected },
+          { id: "listed", label: "Listed", count: counts.listed },
           { id: "incomplete", label: "Needs details", count: counts.incomplete },
         ]}
         boards={[
@@ -2958,16 +2972,13 @@ function ApplicationRow({ app, ipo, accounts, onEdit, onDelete }) {
     <div style={{
       background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: "9px 10px",
     }}>
-      {/* Actions live in the same row as the status badge instead of a row of
-          their own — one less line per application in a list that can run to
-          dozens of rows. */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
-        <div style={{ minWidth: 0 }}>
-          <div style={{ fontWeight: 600, fontSize: 14, color: COLORS.ink }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ fontFamily: "Inter, sans-serif", fontWeight: 600, fontSize: 14, color: COLORS.ink }}>
             {accountName || "Unknown account"}
           </div>
           {app.appliedFor && app.appliedFor !== accountName && (
-            <div style={{ fontSize: 11.5, color: COLORS.inkSoft }}>on behalf of {app.appliedFor}</div>
+            <div style={{ fontSize: 11.5, color: COLORS.inkSoft, fontFamily: "Inter, sans-serif" }}>on behalf of {app.appliedFor}</div>
           )}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
@@ -2976,15 +2987,15 @@ function ApplicationRow({ app, ipo, accounts, onEdit, onDelete }) {
           <button onClick={onDelete} aria-label="Delete application" style={smallIconBtn}><Trash2 size={13} color={COLORS.red} /></button>
         </div>
       </div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6, fontFamily: "'JetBrains Mono', monospace", fontSize: 12 }}>
-        <span style={{ color: COLORS.inkSoft }}>{app.lots || 0} lot(s) · {inrOrDash(app.amountBlocked)} blocked</span>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 5, fontFamily: "'JetBrains Mono', monospace", fontSize: 12 }}>
+        <span style={{ color: COLORS.inkSoft }}>{app.lots || 0} lot(s) {inrOrDash(app.amountBlocked) !== "—" ? `· ${inrOrDash(app.amountBlocked)} blocked` : ""}</span>
         {pnl !== null && (
           <span style={{ fontWeight: 700, color: pnl >= 0 ? COLORS.green : COLORS.red }}>
             {app.sold ? "P&L " : "Unreal. "}{inr(pnl)}
           </span>
         )}
       </div>
-      {app.remarks && <div style={{ fontSize: 12, color: COLORS.inkSoft, marginTop: 5, fontStyle: "italic" }}>“{app.remarks}”</div>}
+      {app.remarks && <div style={{ fontSize: 11.5, color: COLORS.inkSoft, marginTop: 4, fontFamily: "Inter, sans-serif", fontStyle: "italic" }}>"{app.remarks}"</div>}
     </div>
   );
 }
@@ -3479,8 +3490,17 @@ function ApplicationFormSheet({ initial, ipo, accounts, onClose, onSave }) {
         <Input value={f.appliedFor} onChange={set("appliedFor")} placeholder="Leave blank if same as account holder" />
       </Field>
       <div style={{ display: "flex", gap: 10 }}>
-        <div style={{ flex: 1 }}><Field label="Lots"><Input type="number" inputMode="numeric" value={f.lots} onChange={set("lots")} /></Field></div>
-        <div style={{ flex: 1 }}><Field label="Amount Blocked (₹)"><Input type="number" inputMode="numeric" value={f.amountBlocked} onChange={set("amountBlocked")} /></Field></div>
+        <div style={{ flex: 1 }}><Field label="Lots"><Input type="number" inputMode="numeric" value={f.lots} onChange={(e) => {
+          const lots = e.target.value;
+          const next = { ...f, lots };
+          if (lotSize > 0 && Number(ipo?.priceBand) > 0) next.amountBlocked = String((Number(lots) || 0) * lotSize * Number(ipo.priceBand));
+          setF(next);
+        }} /></Field></div>
+        <div style={{ flex: 1 }}><Field label="Amount Blocked (₹)">
+          <div style={{ ...inputStyle, background: COLORS.bg, color: COLORS.inkSoft, display: "flex", alignItems: "center" }}>
+            {f.amountBlocked ? inr(f.amountBlocked) : "—"}
+          </div>
+        </Field></div>
       </div>
       <Field label="Allotment Status">
         <Select value={f.allotmentStatus} onChange={setStatus}>

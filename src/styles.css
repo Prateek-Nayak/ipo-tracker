@@ -27,3 +27,12 @@ button, input, select, textarea {
 .spin {
   animation: spin 1s linear infinite;
 }
+
+@keyframes sheetSlideUp {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+@keyframes sheetFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
