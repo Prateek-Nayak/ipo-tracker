@@ -1,551 +1,117 @@
 /*
- * Listing-day and current market prices for IPOs that have already listed,
- * proxied from BSE.
- *
- * This is what turns `listingPrice` from a number typed once into something
- * that stays true. BSE also gives the current traded price, which is the
- * honest basis for an unrealised gain — a stock that listed at 372 and now
- * trades at 251 has not gained anything.
- *
- * No API key: the data is public. BSE only requires browser-ish headers.
+ * Listing-day and current market prices for IPOs, from Upstox.
+ * Upstox is the source of truth for listing, pricing, dates and IPO metadata.
+ * BSE category demand is NOT fetched here — that lives in /api/ipos for open ones.
  */
-
-const BSE = "https://api.bseindia.com/BseIndiaAPI/api";
-const UA =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-  "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
-
-// Company names never match exactly across sources: "Aye Finance Limited" here,
-// "AYE FINANCE LTD" there. Reduce both sides to the same shape before comparing.
-const MONTHS = {
-  jan: "01", feb: "02", mar: "03", apr: "04", may: "05", jun: "06",
-  jul: "07", aug: "08", sep: "09", oct: "10", nov: "11", dec: "12",
-};
-
-function nameKey(s) {
-  return String(s || "")
-    .toLowerCase()
-    .replace(/[^a-z0-9 ]+/g, " ")
-    .replace(/\b(limited|ltd|private|pvt|india|the)\b/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+const UPSTOX = "https://api.upstox.com/v2";
+async function upstoxFetch(path, token) {
+  const r = await fetch(`${UPSTOX}${path}`, { headers: { Accept: "application/json", Authorization: `Bearer ${token}` } });
+  if (!r.ok) { const text = await r.text(); throw new Error(`Upstox ${path} responded ${r.status}: ${text.slice(0, 200)}`); }
+  return r.json();
 }
-
-const num = (v) => {
-  // Number(null) and Number("") are both 0, which is how "BSE has not said yet"
-  // arrived as a real figure of zero.
-  if (v === null || v === undefined || String(v).trim() === "") return null;
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
-};
-
-/* A traded price is never zero. BSE reports one it does not have yet as null or
-   blank, and a gain of zero is meaningful where a price of zero is not — so
-   prices go through this and gains do not. */
-const price = (v) => {
-  const n = num(v);
-  return n != null && n > 0 ? n : null;
-};
-
-const isoDate = (v) => (typeof v === "string" && v.length >= 10 ? v.slice(0, 10) : "");
-
-/* BSE drops connections intermittently — a given query can throw "fetch failed"
-   for a spell and then recover — so a transient failure gets one more go before
-   being believed. */
-async function bseFetch(url, attempts = 2) {
-  let last;
-  for (let i = 0; i < attempts; i++) {
-    try {
-      const r = await fetch(url, {
-        headers: {
-          "User-Agent": UA,
-          Accept: "application/json, text/plain, */*",
-          Referer: "https://www.bseindia.com/",
-          Origin: "https://www.bseindia.com",
-        },
-      });
-      if (!r.ok) throw new Error(`BSE responded ${r.status}`);
-      return r;
-    } catch (e) {
-      last = e;
-      if (i < attempts - 1) await new Promise((res) => setTimeout(res, 400));
+async function fetchAllIpos(token, status) {
+  const all = [];
+  for (const issueType of ["regular", "sme"]) {
+    let page = 1, totalPages = 1;
+    while (page <= totalPages) {
+      try {
+        const data = await upstoxFetch(`/ipos?status=${status}&issue_type=${issueType}&page_number=${page}&records=30`, token);
+        if (data.status !== "success" || !Array.isArray(data.data)) break;
+        all.push(...data.data); totalPages = data.meta_data?.page?.total_pages || 1; page++;
+      } catch { break; }
     }
   }
-  throw last;
+  return all;
 }
-
-async function moreCompany(year, type) {
-  const r = await bseFetch(`${BSE}/MoreCompanyN/w?Fromdt=${year}&company=&flag=1&type=${type}`);
-  const text = await r.text();
-  if (!text.trim()) return [];
-  let data;
-  try {
-    data = JSON.parse(text);
-  } catch {
-    throw new Error(`BSE returned a non-JSON body for ${year}`);
-  }
-  return Array.isArray(data?.Table) ? data.Table : [];
+async function fetchIpoDetail(token, id) {
+  try { const data = await upstoxFetch(`/ipos/${encodeURIComponent(id)}`, token); return data.status === "success" && data.data ? data.data : null; }
+  catch { return null; }
 }
-
-/* The two variants carry different things and both are needed: type=1 lists
-   mainboard and SME together but omits the company link, while type=2 is
-   mainboard only and includes it. That link is the only place the scrip code
-   appears, and without a scrip code there is no listing-day price to fetch. */
-async function bseYear(year) {
-  /* The two variants behave differently: type=1 is cumulative, so one call from
-     the earliest year returns everything since. type=2 is per-year, so it has
-     to be asked for each year separately - which is worth doing only because it
-     is the sole carrier of the company link, and so of the scrip code. */
-  const thisYear = new Date().getFullYear();
-  const years = [];
-  for (let y = year; y <= thisYear && years.length < 8; y++) years.push(y);
-
-  const [all, ...perYear] = await Promise.all([
-    moreCompany(year, 1),
-    ...years.map((y) => moreCompany(y, 2).then((rows) => ({ ok: true, rows })).catch(() => ({ ok: false, rows: [] }))),
-  ]);
-
-  /* Category is inferred from absence — an issue is SME because it is *not* in
-     the mainboard list — so it can only be asserted when that list actually
-     arrived. A failed fetch would otherwise relabel every mainboard IPO as SME,
-     which looks like data rather than like a failure. */
-  const mainboardKnown = perYear.some((p) => p.ok && p.rows.length);
-
-  const links = new Map();
-  const mainboard = new Set();
-  perYear.forEach((p) => p.rows.forEach((r) => {
-    const k = nameKey(r.CompanyName);
-    if (!k) return;
-    mainboard.add(k);
-    if (r.IMAGE) links.set(k, { IMAGE: r.IMAGE, Company_Short_Name: r.Company_Short_Name });
-  }));
-
-  const rows = all.map((r) => {
-    const k = nameKey(r.CompanyName);
-    const extra = links.get(k);
-    return {
-      ...r,
-      ...(extra || {}),
-      __category: mainboardKnown ? (mainboard.has(k) ? "Mainboard" : "SME") : "",
-    };
-  });
-
-  return { rows, mainboardKnown, listingsKnown: all.length > 0 };
-}
-
-/* Bidding windows. flag=1 is live and forthcoming, flag=2 is closed issues;
-   between them they carry the open and close dates that the listing feed does
-   not. BSE only keeps the current year here, so older IPOs get a listing date
-   but no bidding window - there is nowhere to read one from. */
-async function bseIssueWindows() {
-  const pull = async (flag) => {
-    const url = `${BSE}/GetPublicIssue_par_updated/w?flag=${flag}`;
-    const r = await fetch(url, {
-      headers: {
-        "User-Agent": UA,
-        Accept: "application/json, text/plain, */*",
-        Referer: "https://www.bseindia.com/",
-        Origin: "https://www.bseindia.com",
-      },
-    });
-    if (!r.ok) return [];
-    const t = await r.text();
-    if (!t.trim()) return [];
-    try {
-      return JSON.parse(t)?.Table || [];
-    } catch {
-      return [];
-    }
-  };
-
-  const rows = (await Promise.all([pull(1), pull(2)])).flat();
-  const byKey = new Map();
-  rows.forEach((r) => {
-    /* The feed is public issues of every kind, and only a minority are IPOs:
-       alongside them sit OFS, OTB, RI, FPO, DPI, BuyBack, ZCZP and CMN — better
-       than half the rows. Hindustan Copper appearing as a closed 2026 "IPO" was
-       an offer for sale by its promoter. Their dates must not be attached to a
-       company's IPO record either, so the filter belongs here rather than only
-       where standalone rows are added. */
-    if (!/^ipo$/i.test(String(r.IR_flag || "").trim())) return;
-    const key = nameKey(r.Scrip_Name || r.LONG_NAME || r.short_name);
-    if (!key) return;
-    const openDate = isoDate(r.Start_Dt);
-    const closeDate = isoDate(r.End_Dt);
-    if (!openDate && !closeDate) return;
-    if (!byKey.has(key)) {
-      const band = parseBand(r.Price_Band);
-      byKey.set(key, {
-        openDate,
-        closeDate,
-        priceMin: band.min,
-        priceMax: band.max,
-        ipoNo: String(r.IPO_NO || "").trim(),
-        /* The window feed says which board outright, so an issue that has not
-           listed yet — and therefore has no listing row to take a board from —
-           does not have to go down as unlabelled. */
-        category: /sme/i.test(String(r.eXCHANGE_PLATFORM || "")) ? "SME"
-          : /main/i.test(String(r.eXCHANGE_PLATFORM || "")) ? "Mainboard" : "",
-        company: String(r.Scrip_Name || r.LONG_NAME || "").replace(/\s+/g, " ").trim(),
-      });
-    }
-  });
-  return byKey;
-}
-
-// "131.00 - 138.00" -> { min: 131, max: 138 }
-function parseBand(s) {
-  const nums = String(s || "").match(/\d+(?:\.\d+)?/g);
-  if (!nums || !nums.length) return { min: null, max: null };
-  const vals = nums.map(Number);
-  return { min: Math.min(...vals), max: Math.max(...vals) };
-}
-
-/* Market lot, which lives only on the per-issue endpoint. One request each, so
-   it is fetched for the issues the caller actually asked about rather than for
-   every issue BSE has ever run. */
-/* The whole issue record behind an IPO_NO — dates, lot size and price band.
-   BSE keeps these indefinitely, unlike the bidding-window feed. */
-/* Survives between invocations on a warm function, so a second refresh pays
-   for far fewer probes than the first. */
-const issueCache = new Map();
-
-async function bseIssue(ipoNo) {
-  if (issueCache.has(ipoNo)) return issueCache.get(ipoNo);
-  const url = `${BSE}/GetMkt_ISSUE_BBS_IPO/w?IPO_NO=${encodeURIComponent(ipoNo)}`;
-  try {
-    const res = await bseFetch(url, 1);
-    const text = await res.text();
-    if (!text.trim()) return null;
-    const row = JSON.parse(text)?.IPONO_0?.[0] || null;
-    if (issueCache.size < 4000) issueCache.set(ipoNo, row);
-    return row;
-  } catch {
-    return null;
-  }
-}
-
-// "29 Jun 2026 to 01 Jul 2026" — sometimes with a revision note after a pipe.
-function issuePeriod(row) {
-  const m = String(row?.Issue_Period || "").split("|")[0]
-    .match(/(\d{1,2})\s+([A-Za-z]{3})\w*\s+(\d{4})\s+to\s+(\d{1,2})\s+([A-Za-z]{3})\w*\s+(\d{4})/);
-  if (!m) return null;
-  const iso = (d, mo, y) => {
-    const mm = MONTHS[mo.toLowerCase()];
-    return mm ? `${y}-${mm}-${d.padStart(2, "0")}` : "";
-  };
-  const open = iso(m[1], m[2], m[3]);
-  const close = iso(m[4], m[5], m[6]);
-  return open && close ? { open, close } : null;
-}
-
-/* BSE's bidding-window feed is a rolling few weeks: an issue that closed two
-   months ago keeps its listing price but loses its dates, its lot size and the
-   IPO_NO that would fetch them. Nothing indexes an old issue by name — but
-   IPO_NO runs in date order, so the number can be found by bisecting on the
-   issue period and then sweeping outward to match the name. About a dozen
-   requests, against several hundred for a linear scan. */
-async function bseIssueByName(name, listedOn, high) {
-  /* One register writes "Laser Power & Infra", the other "Laser Power and
-     Infra". nameKey drops the ampersand but leaves the word, so the two do not
-     meet; here, where a wrong match costs nothing but a retry, the conjunction
-     goes too. */
-  const looseKey = (s) => nameKey(s).replace(/\band\b/g, " ").replace(/\s+/g, " ").trim();
-  const target = looseKey(name);
-  if (!target || !/^\d{4}-\d{2}-\d{2}$/.test(listedOn || "")) return null;
-
-  const at = async (no) => (no < high - 1200 || no > high ? null : bseIssue(no));
-  // A dated neighbour, for the numbers BSE returns blank.
-  const dated = async (no) => {
-    for (let k = 0; k <= 6; k++) {
-      for (const probe of k === 0 ? [no] : [no + k, no - k]) {
-        const row = await at(probe);
-        const p = issuePeriod(row);
-        if (p) return { no: probe, row, period: p };
+/* Last traded prices, by ISIN.
+ *
+ * Two things had to be right and neither was. Upstox answers keyed by exchange
+ * and trading symbol — "NSE_EQ:TEMPSENS" — not by the instrument key it was
+ * asked with, so every price was found and then thrown away. And an SME issue
+ * lists on BSE, not NSE: asking NSE_EQ for all of them answered for 50 of 95,
+ * and the 45 it missed were 44 SME issues plus one that is not trading. Asking
+ * BSE for whatever NSE did not know brings that to 94.
+ */
+async function fetchLtp(token, isins) {
+  const results = {};
+  const ask = async (segment, list) => {
+    for (let i = 0; i < list.length; i += 500) {
+      const batch = list.slice(i, i + 500);
+      const param = batch.map((isin) => encodeURIComponent(`${segment}|${isin}`)).join(",");
+      try {
+        const data = await upstoxFetch(`/market-quote/ltp?instrument_key=${param}`, token);
+        if (data.status !== "success" || !data.data) continue;
+        Object.values(data.data).forEach((val) => {
+          // The instrument key is inside the value, which is how it maps back.
+          const isin = String(val?.instrument_token || "").split("|")[1];
+          if (isin && val.last_price != null) results[isin] = val;
+        });
+      } catch (e) {
+        // Partial results beat none, but silence about why does not.
+        console.error(`Upstox LTP ${segment} batch failed`, e?.message || e);
       }
     }
-    return null;
   };
 
-  // Bidding usually opens a week or so before listing; that is where to look.
-  const want = Date.parse(listedOn) - 9 * 86400000;
-  let lo = high - 1200;
-  let hi = high;
-  let anchor = null;
-  while (lo <= hi) {
-    const hit = await dated((lo + hi) >> 1);
-    if (!hit) break;
-    anchor = hit.no;
-    if (Date.parse(hit.period.open) < want) lo = hit.no + 1;
-    else hi = hit.no - 1;
-  }
-  if (anchor == null) return null;
-
-  for (let d = 0; d <= 40; d++) {
-    for (const no of d === 0 ? [anchor] : [anchor + d, anchor - d]) {
-      const row = await at(no);
-      const found = looseKey(row?.ScripName);
-      if (!found) continue;
-      if (found === target || found.startsWith(target) || target.startsWith(found)) {
-        const p = issuePeriod(row);
-        const lot = parseInt(String(row.Market_Lot || "").replace(/[^0-9]/g, ""), 10);
-        const band = String(row.Price_Band || "").split("|")[0].split("-");
-        return {
-          ipoNo: no,
-          openDate: p?.open || "",
-          closeDate: p?.close || "",
-          lotSize: Number.isFinite(lot) && lot > 0 ? lot : null,
-          priceMin: num(band[0]),
-          priceMax: num(band[1]),
-        };
-      }
-    }
-  }
-  return null;
+  await ask("NSE_EQ", isins);
+  const stillMissing = isins.filter((isin) => !results[isin]);
+  if (stillMissing.length) await ask("BSE_EQ", stillMissing);
+  return results;
 }
-
-async function bseLotSize(ipoNo) {
-  const url = `${BSE}/GetMkt_ISSUE_BBS_IPO/w?IPO_NO=${encodeURIComponent(ipoNo)}`;
-  const r = await fetch(url, {
-    headers: {
-      "User-Agent": UA,
-      Accept: "application/json, text/plain, */*",
-      Referer: "https://www.bseindia.com/",
-      Origin: "https://www.bseindia.com",
-    },
-  });
-  if (!r.ok) return null;
-  const t = await r.text();
-  if (!t.trim()) return null;
-  try {
-    const d = JSON.parse(t)?.IPONO_0?.[0];
-    const lot = parseInt(String(d?.Market_Lot || "").replace(/[^0-9]/g, ""), 10);
-    return Number.isFinite(lot) && lot > 0 ? lot : null;
-  } catch {
-    return null;
-  }
-}
-
-/* The price a share actually listed at — the opening print on its first day.
-   MoreCompanyN only carries the listing-day close, which on a volatile debut is
-   a different number entirely. This is the daily OHLC endpoint, asked for a
-   single date. Verified against a known listing: it returns the same close that
-   MoreCompanyN reports, so its open is trustworthy too. */
-async function bseListingOpen(scripCode, isoDay) {
-  if (!scripCode || !/^\d{4}-\d{2}-\d{2}$/.test(isoDay || "")) return null;
-  const [y, m, d] = isoDay.split("-");
-  const dmy = `${d}/${m}/${y}`;
-  const url =
-    `${BSE}/StockpricesearchData/w?MonthDate=${dmy}&YearDate=${dmy}` +
-    `&pageType=0&Scode=${encodeURIComponent(scripCode)}&Seg=C&rbType=D`;
-  const r = await fetch(url, {
-    headers: {
-      "User-Agent": UA,
-      Accept: "application/json, text/plain, */*",
-      Referer: "https://www.bseindia.com/",
-      Origin: "https://www.bseindia.com",
-    },
-  });
-  if (!r.ok) return null;
-  const t = await r.text();
-  if (!t.trim()) return null;
-  try {
-    const row = JSON.parse(t)?.StockData?.[0];
-    // This endpoint returns prices as display strings, so anything over a
-    // thousand arrives grouped: "1,193.80". Number() makes that NaN, which
-    // silently dropped every listing above Rs.1000.
-    return { open: money(row?.qe_open), close: money(row?.qe_close) };
-  } catch {
-    return null;
-  }
-}
-
-const money = (v) => {
-  // Number("") is 0, so an absent price would otherwise become a confident zero,
-  // and BSE writes anything over a thousand as "1,193.80".
-  const s = String(v ?? "").replace(/,/g, "").trim();
-  return s ? price(s) : null;
-};
-
-// The scrip code is embedded in the company link BSE returns: .../aye/544699/
-function scripCodeFrom(url) {
-  const m = String(url || "").match(/\/(\d{6})\/?$/);
-  return m ? m[1] : "";
-}
-
+function num(v) { if (v === null || v === undefined || String(v).trim() === "") return null; const n = Number(v); return Number.isFinite(n) ? n : null; }
+function price(v) { const n = num(v); return n != null && n > 0 ? n : null; }
+function nameKey(s) { return String(s || "").toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\b(limited|ltd|private|pvt|india|the|ipo)\b/g, " ").replace(/\s+/g, " ").trim(); }
+function compactKey(s) { return String(s || "").toUpperCase().replace(/[^A-Z0-9]/g, ""); }
 async function mapLimited(items, limit, fn) {
-  const out = new Array(items.length);
-  let i = 0;
-  await Promise.all(
-    Array.from({ length: Math.min(limit, items.length) }, async () => {
-      while (i < items.length) {
-        const idx = i++;
-        try { out[idx] = await fn(items[idx]); } catch { out[idx] = null; }
-      }
-    })
-  );
+  const out = new Array(items.length); let i = 0;
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => { while (i < items.length) { const idx = i++; try { out[idx] = await fn(items[idx]); } catch { out[idx] = null; } } }));
   return out;
 }
-
-function normalise(row) {
-  return {
-    company: String(row.CompanyName || "").replace(/\s+/g, " ").trim(),
-    key: nameKey(row.CompanyName),
-    shortName: row.Company_Short_Name || "",
-    category: row.__category || "",
-    issuePrice: price(row.IssuePrice),
-    listedOn: isoDate(row.ListedOn),
-    listingClose: price(row.ListingDayClose),
-    lotSize: null,
-    listingOpen: null,
-    priceMin: null,
-    priceMax: null,
-    listingDayGain: num(row.ListingDayGain),
-    currentPrice: price(row.CurrentPrice),
-    gainSinceIssue: num(row.GainLoss),
-    bseUrl: row.IMAGE || "",
-  };
-}
-
 export const config = { maxDuration: 60 };
-
 export default async function handler(req, res) {
-  if (req.method !== "GET") {
-    return res.status(405).json({ error: "Method not allowed" });
-  }
-
-  /* BSE's Fromdt is a starting year, not a single one: Fromdt=2023 returns
-     2023 through today in one response. So one call with the earliest year
-     the caller cares about covers everything, and asking for several years
-     would just fetch the same rows repeatedly. */
-  const thisYear = new Date().getFullYear();
-  const asked = parseInt(String(req.query?.from ?? req.query?.years ?? "").split(",").pop(), 10);
-  const from = Number.isFinite(asked)
-    ? Math.min(Math.max(asked, 2010), thisYear)
-    : thisYear - 1;
-
+  if (req.method !== "GET") return res.status(405).json({ error: "Method not allowed" });
+  const token = process.env.UPSTOX_ANALYTICS_TOKEN;
+  if (!token) return res.status(500).json({ error: "UPSTOX_ANALYTICS_TOKEN not configured" });
   try {
-    const [yearData, windows] = await Promise.all([
-      bseYear(from),
-      bseIssueWindows().catch(() => new Map()),
-    ]);
-    const rows = yearData.rows;
-
-    // One row per company. A row that actually carries a current price beats
-    // one that does not; otherwise the more recent listing wins.
-    const byKey = new Map();
-    rows.forEach((raw) => {
-      const row = normalise(raw);
-      if (!row.key) return;
-      const prev = byKey.get(row.key);
-      if (!prev) { byKey.set(row.key, row); return; }
-      const better =
-        (row.currentPrice != null && prev.currentPrice == null) ||
-        (row.listedOn || "") > (prev.listedOn || "");
-      if (better) byKey.set(row.key, row);
+    const [listed, closed] = await Promise.all([fetchAllIpos(token, "listed"), fetchAllIpos(token, "closed")]);
+    const byId = new Map(); [...listed, ...closed].forEach((item) => { if (item.id && !byId.has(item.id)) byId.set(item.id, item); });
+    const items = [...byId.values()];
+    const requestedYear = String(req.query?.from || "").trim();
+    /* `from` is a starting year, not a single one — the ledger sends the earliest
+       year it holds and expects everything since. Reading it as "that year only"
+       returned nothing an 18-IPO ledger spanning two years could match, which is
+       how "0 of 17 IPOs matched" happened while the prices themselves were fine.
+       The import sheet, which does want one year, filters to it on its own. */
+    const filtered = requestedYear
+      ? items.filter((item) => (item.bidding_start_date || "").slice(0, 4) >= requestedYear)
+      : items;
+    if (!filtered.length) return res.status(200).json({ source: "Upstox", fetchedAt: new Date().toISOString(), from: requestedYear || null, categoryKnown: true, listingsKnown: true, listings: [] });
+    const rawKeys = String(req.query?.keys || "").split("|").map((k) => String(k || "").trim()).filter(Boolean).slice(0, 120);
+    const wanted = new Set(rawKeys.flatMap((k) => [nameKey(k), compactKey(k)]).filter(Boolean));
+    let toEnrich = filtered;
+    if (wanted.size) {
+      toEnrich = filtered.filter((item) => [nameKey(item.name), nameKey(item.short_name), compactKey(item.symbol), compactKey(item.isin)].filter(Boolean).some((a) => wanted.has(a)));
+      if (!toEnrich.length) toEnrich = filtered.slice(0, 80);
+    } else toEnrich = filtered.slice(0, 80);
+    const details = await mapLimited(toEnrich, 6, (item) => fetchIpoDetail(token, item.id));
+    const detailMap = new Map(); details.forEach((d, i) => { if (d) detailMap.set(toEnrich[i].id, d); });
+    const listedIsins = [...new Set(
+      filtered.filter((item) => item.status === "listed" && item.isin).map((item) => item.isin)
+    )];
+    const ltpData = await fetchLtp(token, listedIsins);
+    const listings = filtered.map((item) => {
+      const detail = detailMap.get(item.id), key = nameKey(item.name), instKey = item.isin ? `NSE_EQ|${item.isin}` : "", ltp = item.isin ? ltpData[item.isin] : null;
+      const issuePrice = price(item.maximum_price) || price(item.minimum_price), listingPrice = detail ? price(detail.listing_price) : null, currentPrice = ltp ? price(ltp.last_price) : null;
+      const listingDayGain = listingPrice != null && issuePrice != null ? ((listingPrice - issuePrice) / issuePrice) * 100 : null;
+      const gainSinceIssue = currentPrice != null && issuePrice != null ? ((currentPrice - issuePrice) / issuePrice) * 100 : null;
+      return { source: "Upstox", upstoxId: item.id || "", company: (item.name || "").replace(/\s*ipo\s*$/i, "").trim(), key, shortName: item.symbol || "", symbol: item.symbol || "", category: item.issue_type === "sme" ? "SME" : "Mainboard", issuePrice, listedOn: detail?.timeline?.listing_date || "", listingClose: null, listingOpen: listingPrice, lotSize: detail ? num(detail.lot_size) : null, priceMin: num(item.minimum_price), priceMax: num(item.maximum_price), listingDayGain, currentPrice, gainSinceIssue, openDate: item.bidding_start_date || "", closeDate: item.bidding_end_date || "", ipoNo: "", isin: item.isin || "", instrumentKey: instKey, allotmentDate: detail?.timeline?.allotment_start_date || detail?.timeline?.allotment_date || "", listingDate: detail?.timeline?.listing_date || "", industry: item.industry || "", subscription: num(item.total_subscription) };
     });
-
-    // Attach bidding windows, and keep issues that have not listed yet — they
-    // have no price but they do have dates worth filling in.
-    windows.forEach((w, key) => {
-      const existing = byKey.get(key);
-      if (existing) {
-        Object.assign(existing, {
-          openDate: w.openDate, closeDate: w.closeDate,
-          priceMin: w.priceMin, priceMax: w.priceMax, ipoNo: w.ipoNo,
-        });
-        // Only where the listing feed had nothing to say.
-        if (!existing.category && w.category) existing.category = w.category;
-      } else {
-        byKey.set(key, {
-          company: w.company || "", key, shortName: "", category: w.category || "",
-          issuePrice: null, listedOn: "", listingClose: null, listingDayGain: null,
-          currentPrice: null, gainSinceIssue: null, bseUrl: "",
-          openDate: w.openDate, closeDate: w.closeDate,
-          priceMin: w.priceMin, priceMax: w.priceMax, ipoNo: w.ipoNo,
-        });
-      }
-    });
-
-    /* Lot sizes for the companies the caller named. Without this the blocked
-       amount cannot be worked out, and it is one request per issue, so the
-       caller says which ones matter instead of us fetching all of them. */
-    const wanted = String(req.query?.keys || "")
-      .split("|")
-      .map((k) => nameKey(k))
-      .filter(Boolean);
-
-    if (wanted.length) {
-      const rowsFor = wanted.map((k) => byKey.get(k)).filter(Boolean);
-
-      const lotTargets = rowsFor.filter((r) => r.ipoNo && r.lotSize == null).slice(0, 25);
-      const openTargets = rowsFor
-        .filter((r) => r.listedOn && scripCodeFrom(r.bseUrl))
-        .slice(0, 25);
-
-      const [lots, opens] = await Promise.all([
-        mapLimited(lotTargets, 5, (r) => bseLotSize(r.ipoNo)),
-        mapLimited(openTargets, 5, (r) => bseListingOpen(scripCodeFrom(r.bseUrl), r.listedOn)),
-      ]);
-
-      lots.forEach((lot, i) => { if (lot) lotTargets[i].lotSize = lot; });
-
-      /* Anything the caller named that still has no bidding window: its issue
-         has aged out of the rolling feed, so go and find its IPO_NO. Bounded,
-         because each one costs a dozen requests — the rest are picked up on a
-         later refresh, and a refresh that returns nothing new is cheap. */
-      const highNo = Math.max(
-        0,
-        ...[...byKey.values()].map((r) => Number(r.ipoNo) || 0)
-      );
-      if (highNo) {
-        const stale = rowsFor
-          .filter((r) => r.listedOn && (!r.closeDate || r.lotSize == null))
-          .slice(0, 8);
-        const found = await mapLimited(stale, 8, (r) =>
-          bseIssueByName(r.company, r.listedOn, highNo).catch(() => null)
-        );
-        found.forEach((hit, i) => {
-          if (!hit) return;
-          const row = stale[i];
-          row.ipoNo = row.ipoNo || hit.ipoNo;
-          if (!row.openDate && hit.openDate) row.openDate = hit.openDate;
-          if (!row.closeDate && hit.closeDate) row.closeDate = hit.closeDate;
-          if (row.lotSize == null && hit.lotSize != null) row.lotSize = hit.lotSize;
-          if (row.priceMin == null && hit.priceMin != null) row.priceMin = hit.priceMin;
-          if (row.priceMax == null && hit.priceMax != null) row.priceMax = hit.priceMax;
-        });
-      }
-      opens.forEach((o, i) => {
-        if (!o) return;
-        const row = openTargets[i];
-        if (o.open != null) row.listingOpen = o.open;
-        // Same-day close straight from the OHLC record, rather than the
-        // aggregate feed's copy of it.
-        if (o.close != null) row.listingClose = o.close;
-      });
-    }
-
-    const listings = [...byKey.values()].sort((a, b) => (b.listedOn || "").localeCompare(a.listedOn || ""));
-
-    if (!listings.length) {
-      return res.status(502).json({ error: "BSE returned no listings. It may be blocking this server." });
-    }
-
-    /* These rows carry the last traded price, so ten minutes of edge cache made
-       a live number look like yesterday's. A minute is short enough that the
-       figure on screen is the market's, and long enough that a burst of
-       refreshes still costs BSE one request. */
+    listings.sort((a, b) => (b.listedOn || b.closeDate || "").localeCompare(a.listedOn || a.closeDate || ""));
     res.setHeader("Cache-Control", "s-maxage=60, stale-while-revalidate=300");
-    return res.status(200).json({
-      source: "BSE",
-      fetchedAt: new Date().toISOString(),
-      from,
-      categoryKnown: yearData.mainboardKnown,
-      listingsKnown: yearData.listingsKnown,
-      listings,
-    });
-  } catch (error) {
-    return res.status(502).json({ error: error.message || "Could not reach BSE" });
-  }
+    return res.status(200).json({ source: "Upstox", fetchedAt: new Date().toISOString(), from: requestedYear || null, categoryKnown: true, listingsKnown: true, listings });
+  } catch (error) { return res.status(502).json({ error: error.message || "Could not reach Upstox" }); }
 }

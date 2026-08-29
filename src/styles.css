@@ -1,7 +1,10 @@
+/* The page is painted before any script runs, so the background lives here and
+   is set from the stored theme by a snippet in index.html. Hardcoding the paper
+   colour meant a dark install flashed cream on every load. */
 html, body, #root {
   margin: 0;
   min-height: 100%;
-  background: #F7F5F0;
+  background: var(--ledger-bg, #F7F5F0);
 }
 html {
   -webkit-text-size-adjust: 100%;
@@ -23,4 +26,13 @@ button, input, select, textarea {
 }
 .spin {
   animation: spin 1s linear infinite;
+}
+
+@keyframes sheetSlideUp {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+@keyframes sheetFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }

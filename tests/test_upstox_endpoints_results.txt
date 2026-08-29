@@ -1,0 +1,186 @@
+============================================================
+UPSTOX API ENDPOINT TESTS
+============================================================
+Token (first 20 chars): eyJ0eXAiOiJKV1QiLCJr...
+Base URL: https://api.upstox.com/v2
+  Response status: success
+  IPO count: 5
+  Pagination: {'page_number': 1, 'total_pages': 1, 'records': 5, 'total_records': 5}
+
+  First item keys: ['id', 'symbol', 'name', 'status', 'isin', 'issue_type', 'issue_size', 'industry', 'minimum_price', 'maximum_price', 'bidding_start_date', 'bidding_end_date', 'total_subscription', 'investors']
+  First item sample:
+{
+  "id": "purple-style-labs-limited-ipo",
+  "symbol": "PERNIASPOP",
+  "name": "Purple Style Labs IPO",
+  "status": "open",
+  "isin": "INE0I1B01016",
+  "issue_type": "regular",
+  "issue_size": 680.0,
+  "industry": null,
+  "minimum_price": 546.0,
+  "maximum_price": 575.0,
+  "bidding_start_date": "2026-08-31",
+  "bidding_end_date": "2026-09-02",
+  "total_subscription": "0.0",
+  "investors": []
+}
+
+============================================================
+[PASS] Open IPOs (regular)
+============================================================
+  Response status: success
+  IPO count: 6
+  All issue_type=sme: True
+
+============================================================
+[PASS] Open IPOs (sme)
+============================================================
+  Response status: success
+  IPO count: 30
+  All status=upcoming: True
+
+============================================================
+[PASS] Upcoming IPOs
+============================================================
+  Response status: success
+  IPO count: 30
+  First listed item:
+{
+  "id": "tempsens-instruments-india-limited-ipo",
+  "symbol": "TEMPSENS",
+  "name": "Tempsens Instruments (India) IPO",
+  "status": "listed",
+  "isin": "INE1KZI01025",
+  "issue_type": "regular",
+  "issue_size": 650.0,
+  "industry": "Engineering - Industrial Equipments",
+  "minimum_price": 285.0,
+  "maximum_price": 300.0,
+  "bidding_start_date": "2026-08-20",
+  "bidding_end_date": "2026-08-24",
+  "total_subscription": "213.92",
+  "investors": []
+}
+
+============================================================
+[PASS] Listed IPOs
+============================================================
+  Response status: success
+  IPO count: 7
+
+============================================================
+[PASS] Closed IPOs
+============================================================
+
+  Using IPO id for detail test: tempsens-instruments-india-limited-ipo
+  Using ISIN for LTP test: INE1KZI01025
+  IPO: Tempsens Instruments (India) IPO
+  Status: listed
+  ISIN: INE1KZI01025
+  Lot size: 50
+  Listing price: 634.0
+  Timeline: {
+    "pre_apply_start_date": "2026-08-18",
+    "application_start_date": "2026-08-20",
+    "application_end_date": "2026-08-24",
+    "allotment_start_date": "2026-08-25",
+    "allotment_date": "2026-08-27",
+    "refund_initiation_date": "2026-08-27",
+    "listing_date": "2026-08-28",
+    "mandate_end_date": "2026-10-05"
+}
+  Registrar: KFin Technologies Limited
+  Total subscription: 213.92
+
+  Full detail keys: ['id', 'symbol', 'name', 'status', 'isin', 'issue_type', 'issue_size', 'industry', 'minimum_price', 'maximum_price', 'bidding_start_date', 'bidding_end_date', 'daily_start_time', 'daily_end_time', 'face_value', 'tick_size', 'lot_size', 'minimum_quantity', 'cut_off_price', 'listing_price', 'listing_exchange', 'rhp_url', 'drhp_url', 'timeline', 'registrar_info', 'total_subscription', 'investors']
+
+============================================================
+[PASS] IPO Details
+============================================================
+  Response status: success
+  Data keys (THIS IS CRITICAL): ['NSE_EQ:TEMPSENS']
+  Full data:
+{
+  "NSE_EQ:TEMPSENS": {
+    "last_price": 586.65,
+    "instrument_token": "NSE_EQ|INE1KZI01025"
+  }
+}
+
+============================================================
+[PASS] LTP Quote (single)
+  Instrument: NSE_EQ|INE1KZI01025
+============================================================
+  Response status: success
+  Number of instruments returned: 2
+  Data keys: ['NSE_EQ:NHPC', 'NSE_EQ:IDEA']
+  Full data:
+{
+  "NSE_EQ:NHPC": {
+    "last_price": 74.82,
+    "instrument_token": "NSE_EQ|INE848E01016"
+  },
+  "NSE_EQ:IDEA": {
+    "last_price": 14.68,
+    "instrument_token": "NSE_EQ|INE669E01016"
+  }
+}
+
+============================================================
+[PASS] LTP Quote (multiple)
+============================================================
+  Response status: success
+  Holiday count: 22
+  Holiday types found: {'SETTLEMENT_HOLIDAY', 'SPECIAL_TIMING', 'TRADING_HOLIDAY'}
+    2026-01-15 | TRADING_HOLIDAY | Municipal Corporation Election
+      closed: ['NSE', 'NFO', 'CDS', 'BSE', 'BFO', 'BCD']
+    2026-01-26 | TRADING_HOLIDAY | Republic Day
+      closed: ['NSE', 'NFO', 'CDS', 'BSE', 'BFO', 'BCD', 'MCX', 'NSCOM']
+    2026-02-01 | SPECIAL_TIMING | Budget Day Session
+      closed: ['CDS', 'BCD']
+
+============================================================
+[PASS] Market Holidays
+============================================================
+  Response status: success
+  Data keys (KEY FORMAT): ['NSE_EQ:NHPC']
+
+  Key format example: 'NSE_EQ:NHPC'
+  Value keys: ['ohlc', 'depth', 'timestamp', 'instrument_token', 'symbol', 'last_price', 'volume', 'average_price', 'oi', 'net_change', 'total_buy_quantity', 'total_sell_quantity', 'lower_circuit_limit', 'upper_circuit_limit', 'last_trade_time', 'oi_day_high', 'oi_day_low']
+  last_price: 74.82
+  instrument_token: NSE_EQ|INE848E01016
+  symbol: NHPC
+  ohlc: {'open': 76.2, 'high': 76.39, 'low': 74.82, 'close': 74.82}
+
+============================================================
+[PASS] Full Market Quote
+============================================================
+
+
+============================================================
+SUMMARY
+============================================================
+  PASS - Open IPOs (regular)
+  PASS - Open IPOs (sme)
+  PASS - Upcoming IPOs
+  PASS - Listed IPOs
+  PASS - Closed IPOs
+  PASS - IPO Details
+  PASS - LTP Quote (single)
+  PASS - LTP Quote (multiple)
+  PASS - Market Holidays
+  PASS - Full Market Quote
+
+  Total: 10 passed, 0 failed, 10 total
+============================================================
+
+
+CRITICAL INFO TO REPORT BACK:
+----------------------------------------
+1. What is the key format in LTP response data?
+   (e.g. 'NSE_EQ:NHPC' or 'NSE_EQ|INE848E01016')
+2. What is the key format in Full Quote response data?
+3. Does listing_price show up for listed IPOs in detail?
+4. Any unexpected errors or missing fields?
+

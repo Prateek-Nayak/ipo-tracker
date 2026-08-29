@@ -7,7 +7,7 @@ import { createPortal } from "react-dom";
    navy ink, brass-gold for pending, forest green for gains,
    brick red for losses.
 ---------------------------------------------------------- */
-const COLORS = {
+const COLORS_LIGHT = {
   bg: "#F7F5F0",
   surface: "#FFFFFF",
   border: "#E4DFD3",
@@ -17,11 +17,137 @@ const COLORS = {
   navyDeep: "#152A44",
   gold: "#B08D57",
   goldSoft: "#F1E6D2",
-  green: "#2F6F4E",
+  green: "#266e43",
   greenSoft: "#E4F0E9",
   red: "#A13D3D",
   redSoft: "#F5E4E2",
+  /* Headings are the deep navy on paper, but that same colour is the header's
+     background — so it needs a name of its own, or a dark theme has to choose
+     between an invisible heading and a washed-out header. */
+  heading: "#152A44",
+  // What a button you press is made of, and the text that sits on it.
+  action: "#1F3A5F",
+  onAction: "#FFFFFF",
+  // What you type into, a shade off the surface it sits on.
+  field: "#FDFCFA",
+  // The quiet blue a neutral badge sits on.
+  chip: "#EAEFF5",
 };
+
+/* The same ledger after dark, not a different app: warm paper becomes warm
+   ink, and the brass, forest and brick keep their jobs. The greys are tinted
+   towards the navy rather than neutral — a flat #121212 under warm accents is
+   what makes a dark theme look like a bug report. Surfaces lift as they come
+   forward (bg < surface < border) so a card still reads as a card, and the
+   accents are lightened to hold contrast against them rather than reused from
+   the light palette, where they were chosen to sit on white. */
+const COLORS_DARK = {
+  /* Near-neutral, very slightly warm. An earlier pass tinted these towards the
+     navy and the whole app read as blue-grey — the accents carry the colour,
+     the surfaces should not compete with them. */
+  bg: "#000000",
+  surface: "#0d0d0d",
+  border: "#2C2F37",
+  ink: "#fbfbfb",
+  inkSoft: "#9A9CA4",
+  // The header keeps its weight by going darker than the page, as it does in
+  // daylight by going deeper than the paper.
+  navy: "#7BA7D9",
+  navyDeep: "#101216",
+  gold: "#D6A96A",
+  goldSoft: "#33291A",
+  green: "#6FBF8F",
+  greenSoft: "#182A22",
+  red: "#E0736B",
+  redSoft: "#2E1C1C",
+  heading: "#F5F3EE",
+  action: "#634e30",
+  onAction: "#ffffff",
+  field: "#131417",
+  chip: "#262A33",
+};
+
+const THEME_KEY = "ipo_ledger_theme";
+
+function storedTheme() {
+  try { return localStorage.getItem(THEME_KEY) === "dark" ? "dark" : "light"; } catch { return "light"; }
+}
+
+/* One object, mutated in place, that every style in the app reads. Reassigning
+   it would leave the styles built at module load pointing at the old palette,
+   which is why changing theme used to need a reload. */
+let themeName = storedTheme();
+const COLORS = { ...(themeName === "dark" ? COLORS_DARK : COLORS_LIGHT) };
+const themeListeners = new Set();
+const isDark = () => themeName === "dark";
+
+function applyTheme(next) {
+  themeName = next === "dark" ? "dark" : "light";
+  Object.assign(COLORS, themeName === "dark" ? COLORS_DARK : COLORS_LIGHT);
+  buildStyles();
+  paintDocument();
+  try { localStorage.setItem(THEME_KEY, themeName); } catch { /* it still applies for this session */ }
+  themeListeners.forEach((fn) => fn());
+}
+
+/* Declared here, above the call that fills them. A `let` cannot be assigned
+   before its own declaration has run, so leaving these beside the components
+   that use them meant buildStyles() threw on load and nothing rendered at all. */
+let inputStyle, selectStyle, chipBase, chipOn, iconBtnStyle, smallIconBtn, roundIconBtn;
+
+/* Styles that quote the palette have to be rebuilt when it changes. They are
+   module bindings rather than fixed objects, so every component picks up the
+   new one on its next render without any of them being touched. */
+function buildStyles() {
+  inputStyle = {
+    width: "100%", boxSizing: "border-box", padding: "10px 12px",
+    minHeight: 44, WebkitAppearance: "none",
+    border: `1px solid ${COLORS.border}`, borderRadius: 8, fontSize: 16,
+    fontFamily: "Inter, sans-serif", color: COLORS.ink, background: COLORS.field,
+    outline: "none",
+  };
+  selectStyle = {
+    ...inputStyle, width: "auto", minWidth: 0, minHeight: 36, padding: "6px 8px",
+    fontSize: 12, fontWeight: 600,
+  };
+  chipBase = {
+    border: `1px solid ${COLORS.border}`, background: COLORS.surface, color: COLORS.inkSoft,
+    borderRadius: 999, padding: "7px 12px", fontSize: 12, fontWeight: 600,
+    fontFamily: "Inter, sans-serif", cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0,
+    touchAction: "manipulation",
+  };
+  // Reads on both: white on deep navy in daylight, dark on pale blue after it.
+  chipOn = { background: COLORS.action, border: `1px solid ${COLORS.action}`, color: COLORS.onAction };
+  iconBtnStyle = {
+    border: "none", background: COLORS.surface, width: 44, flex: 1, cursor: "pointer",
+    display: "flex", alignItems: "center", justifyContent: "center", touchAction: "manipulation",
+  };
+  smallIconBtn = {
+    width: 30, height: 30, borderRadius: 8, border: `1px solid ${COLORS.border}`, background: COLORS.bg,
+    display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0,
+    touchAction: "manipulation",
+  };
+  roundIconBtn = {
+    width: 36, height: 36, borderRadius: 8, border: `1px solid ${COLORS.border}`, background: COLORS.bg,
+    display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", touchAction: "manipulation",
+  };
+}
+buildStyles();
+paintDocument();
+
+/* The page behind React, which is painted before any of it runs and shows
+   through wherever the app does not reach. */
+function paintDocument() {
+  if (typeof document === "undefined") return;
+  const root = document.documentElement;
+  if (root) root.style.background = COLORS.bg;
+  if (document.body) {
+    document.body.style.background = COLORS.bg;
+    document.body.style.colorScheme = themeName;
+  }
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute("content", COLORS.navyDeep);
+}
 
 const FONT_IMPORT = `@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');`;
 
@@ -56,6 +182,8 @@ const TrendingDown = (p) => <SvgIcon {...p}><polyline points="22 17 13.5 8.5 8.5
 const ArrowRightLeft = (p) => <SvgIcon {...p}><path d="m16 3 4 4-4 4" /><path d="M20 7H4" /><path d="m8 21-4-4 4-4" /><path d="M4 17h16" /></SvgIcon>;
 const Pencil = (p) => <SvgIcon {...p}><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z" /><path d="m15 5 4 4" /></SvgIcon>;
 const Trash2 = (p) => <SvgIcon {...p}><path d="M3 6h18" /><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" /><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" /><line x1="10" x2="10" y1="11" y2="17" /><line x1="14" x2="14" y1="11" y2="17" /></SvgIcon>;
+const Check = (p) => <SvgIcon {...p}><path d="M20 6 9 17l-5-5" /></SvgIcon>;
+const SlidersHorizontal = (p) => <SvgIcon {...p}><line x1="21" x2="14" y1="4" y2="4" /><line x1="10" x2="3" y1="4" y2="4" /><line x1="21" x2="12" y1="12" y2="12" /><line x1="8" x2="3" y1="12" y2="12" /><line x1="21" x2="16" y1="20" y2="20" /><line x1="12" x2="3" y1="20" y2="20" /><line x1="14" x2="14" y1="2" y2="6" /><line x1="8" x2="8" y1="10" y2="14" /><line x1="16" x2="16" y1="18" y2="22" /></SvgIcon>;
 const CheckCircle2 = (p) => <SvgIcon {...p}><circle cx="12" cy="12" r="10" /><path d="m9 12 2 2 4-4" /></SvgIcon>;
 const Clock = (p) => <SvgIcon {...p}><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></SvgIcon>;
 const XCircle = (p) => <SvgIcon {...p}><circle cx="12" cy="12" r="10" /><path d="m15 9-6 6" /><path d="m9 9 6 6" /></SvgIcon>;
@@ -68,9 +196,17 @@ const LogOut = (p) => <SvgIcon {...p}><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1
 const AlertTriangle = (p) => <SvgIcon {...p}><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" /><line x1="12" x2="12" y1="9" y2="13" /><line x1="12" x2="12.01" y1="17" y2="17" /></SvgIcon>;
 const ChevronRight = (p) => <SvgIcon {...p}><path d="m9 18 6-6-6-6" /></SvgIcon>;
 const Sparkles = (p) => <SvgIcon {...p}><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z" /></SvgIcon>;
+const Moon = (p) => <SvgIcon {...p}><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" /></SvgIcon>;
+const Sun = (p) => <SvgIcon {...p}><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" /></SvgIcon>;
 const Search = (p) => <SvgIcon {...p}><circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" /></SvgIcon>;
 const Layers = (p) => <SvgIcon {...p}><path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z" /><path d="m22 12.18-9.17 4.16a2 2 0 0 1-1.66 0L2 12.18" /><path d="m22 17.18-9.17 4.16a2 2 0 0 1-1.66 0L2 17.18" /></SvgIcon>;
 const ClipboardCheck = (p) => <SvgIcon {...p}><rect width="8" height="4" x="8" y="2" rx="1" ry="1" /><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" /><path d="m9 14 2 2 4-4" /></SvgIcon>;
+const Settings = (p) => (
+  <SvgIcon {...p}>
+    <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.1a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+    <circle cx="12" cy="12" r="3" />
+  </SvgIcon>
+);
 
 /* ---------------------------------------------------------
    FORMATTING HELPERS
@@ -252,7 +388,14 @@ function issueStage(x) {
   const close = x?.closeDate || "";
 
   if (listed && listed < today) return { label: "LISTED", color: COLORS.navy, bg: "#EAEFF5" };
-  if (listed && listed === today) return { label: "LISTS TODAY", color: COLORS.green, bg: COLORS.greenSoft };
+  if (listed && listed === today) {
+    // Scheduled to list today is not the same as actually trading: until a
+    // real, positive last-traded price shows up there is nothing to show yet.
+    const hasLtp = Number(x?.currentPrice) > 0;
+    return hasLtp
+      ? { label: "LISTED TODAY", color: COLORS.green, bg: COLORS.greenSoft }
+      : { label: "LISTS TODAY", color: COLORS.green, bg: COLORS.greenSoft };
+  }
 
   /* Allotment day sits between the close and the listing, and on the day itself
      it is the nearer event — so it outranks a listing still days away. */
@@ -609,28 +752,27 @@ function mergeIpos(current, incoming) {
   return Array.from(byId.values());
 }
 
-function parseImport(text) {
-  const parsed = JSON.parse(text);
-  const out = {};
-  LEDGER_TABLES.forEach((k) => {
-    if (!Array.isArray(parsed[k])) throw new Error(`Missing or invalid "${k}" list in the pasted data.`);
-    out[k] = parsed[k];
-  });
-  // Backups taken before deleted records were kept simply have none.
-  out.trash = Array.isArray(parsed.trash) ? parsed.trash : [];
-  return out;
-}
 
 /* ---------------------------------------------------------
    SMALL UI PRIMITIVES
 ---------------------------------------------------------- */
-function Badge({ children, color, bg }) {
+/* A badge is a label, not a highlight. It carries its colour in the text and a
+   hairline, on a background barely off the card — a filled block of colour on
+   every row is what made a list of IPOs read as a colour chart. */
+function Badge({ children, color, bg, strong }) {
+  /* The Allotted / Not Allotted badges need to read as clearly as the
+     progress bar. In light mode the border goes heavier and the font
+     bolder so the colour carries; dark mode already reads fine as-is. */
+  const emphasis = strong && !isDark();
   return (
     <span
       style={{
-        color, background: bg, fontFamily: "'JetBrains Mono', monospace",
-        fontSize: 11, fontWeight: 600, letterSpacing: 0.3,
-        padding: "3px 8px", borderRadius: 5, whiteSpace: "nowrap",
+        color, background: "transparent",
+        border: `${emphasis ? 1.5 : 1}px solid ${color}`,
+        fontFamily: "'JetBrains Mono', monospace",
+        fontSize: 8, fontWeight: emphasis ? 700 : 600, letterSpacing: 0.3,
+        padding: "2px 7px", borderRadius: 5, whiteSpace: "nowrap",
+        opacity: emphasis ? 1 : 0.9,
       }}
     >
       {children}
@@ -651,13 +793,6 @@ function Field({ label, children }) {
   );
 }
 
-const inputStyle = {
-  width: "100%", boxSizing: "border-box", padding: "10px 12px",
-  minHeight: 44, WebkitAppearance: "none",
-  border: `1px solid ${COLORS.border}`, borderRadius: 8, fontSize: 16,
-  fontFamily: "Inter, sans-serif", color: COLORS.ink, background: "#FDFCFA",
-  outline: "none",
-};
 
 function Input(props) {
   return <input {...props} style={{ ...inputStyle, ...(props.style || {}) }} />;
@@ -674,18 +809,68 @@ function Sheet({ title, onClose, children }) {
      footer slot below both. The footer used to sit inside the scroll area,
      stuck to its bottom edge, which left rows sliding underneath it. */
   const [footerEl, setFooterEl] = useState(null);
+  const bodyRef = useRef(null);
+  const touch = useRef({ active: false, startY: 0, lastY: 0 });
+  const [dragY, setDragY] = useState(0);
+  const [dragging, setDragging] = useState(false);
+
+  /* Swipe-down-to-dismiss lives here, on the sheet itself, so every sheet in
+     the app gets it for free rather than each one needing its own gesture
+     code. It only arms when the body is scrolled to the very top — anywhere
+     else the gesture is just scrolling — and never on a touch that starts on
+     something interactive, so editing a field can never be mistaken for a
+     dismiss swipe. Because it is driven by React state (dragY) rather than a
+     CSS variable poked from outside, a short sheet with nothing to scroll
+     still gets the same treatment as a long one. */
+  const onTouchStart = (e) => {
+    const body = bodyRef.current;
+    if (!body || body.scrollTop > 0) return;
+    if (e.target.closest("input, textarea, select, button, a")) return;
+    const y = e.touches[0].clientY;
+    touch.current = { active: true, startY: y, lastY: y };
+  };
+  const onTouchMove = (e) => {
+    const t = touch.current;
+    const body = bodyRef.current;
+    if (!t.active || !body || body.scrollTop > 0) return;
+    const y = e.touches[0].clientY;
+    t.lastY = y;
+    const delta = y - t.startY;
+    if (delta <= 0) return; // upward/no movement is ordinary scrolling
+    setDragging(true);
+    setDragY(Math.min(delta, 240));
+    if (e.cancelable) e.preventDefault();
+  };
+  const onTouchEnd = () => {
+    const t = touch.current;
+    if (!t.active) return;
+    const delta = t.lastY - t.startY;
+    touch.current.active = false;
+    setDragging(false);
+    setDragY(0);
+    if (delta > 80 && bodyRef.current && bodyRef.current.scrollTop === 0) onClose();
+  };
+
   return (
     <div style={{
-      position: "fixed", inset: 0, background: "rgba(28,35,51,0.45)", zIndex: 50,
+      position: "fixed", inset: 0, background: "rgba(24, 27, 32, 0.45)", zIndex: 50,
       display: "flex", alignItems: "flex-end", justifyContent: "center",
+      animation: "sheetFadeIn 200ms ease-out",
     }} onClick={onClose}>
       <div
         onClick={(e) => e.stopPropagation()}
+        onTouchStart={onTouchStart}
+        onTouchMove={onTouchMove}
+        onTouchEnd={onTouchEnd}
+        onTouchCancel={onTouchEnd}
         style={{
           background: COLORS.bg, width: "100%", maxWidth: 480,
           maxHeight: "92vh", borderRadius: "18px 18px 0 0",
           display: "flex", flexDirection: "column", minHeight: 0,
           boxShadow: "0 -8px 30px rgba(0,0,0,0.2)",
+          transform: dragY ? `translateY(${dragY}px)` : undefined,
+          transition: dragging ? "none" : "transform 280ms ease-out",
+          animation: "sheetSlideUp 280ms ease-out",
         }}
       >
         <div style={{
@@ -693,18 +878,39 @@ function Sheet({ title, onClose, children }) {
           padding: "18px 18px 16px", flexShrink: 0,
         }}>
           <h2 style={{
-            fontFamily: "'Fraunces', serif", fontWeight: 600, fontSize: 20, color: COLORS.navyDeep, margin: 0,
-          }}>{title}</h2>
+            fontFamily: "'Fraunces', serif", fontWeight: 600, fontSize: 20, color: COLORS.heading, margin: 0,
+          }}>{title}</h2> 
+          {title && title == "Sync & Data" ? <div style={{
+          display: "flex", 
+        }}><button
+              onClick={() => applyTheme(isDark() ? "light" : "dark")}
+              aria-label={isDark() ? "Switch to light theme" : "Switch to dark theme"}
+              style={{
+                display: "inline-flex", alignItems: "center", gap: 7,
+                background: COLORS.surface, border: `1px solid ${COLORS.border}`,
+                borderRadius: 999, padding: "8px 14px", marginRight: 10, cursor: "pointer",
+                fontFamily: "Inter, sans-serif", fontSize: 12.5, fontWeight: 600, color: COLORS.ink, height: 36, 
+              }} 
+            >
+              {isDark() ? <Sun size={16} color={COLORS.gold} /> : <Moon size={16} color={COLORS.navy} />}
+              {/* {isDark() ? "Light" : "Dark"} */}
+            </button>  
           <button onClick={onClose} aria-label="Close" style={{
             background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 20,
             width: 36, height: 36, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer",
-          }}><X size={16} color={COLORS.inkSoft} /></button>
+          }}><X size={16} color={COLORS.inkSoft} /></button></div> : <button onClick={onClose} aria-label="Close" style={{
+            background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 20,
+            width: 36, height: 36, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer",
+          }}><X size={16} color={COLORS.inkSoft} /></button>}
         </div>
-        <div style={{
-          flex: "1 1 auto", overflowY: "auto", minHeight: 0,
-          WebkitOverflowScrolling: "touch",
-          padding: "0 18px calc(28px + env(safe-area-inset-bottom))",
-        }}>
+        <div
+          ref={bodyRef}
+          style={{
+            flex: "1 1 auto", overflowY: "auto", minHeight: 0,
+            WebkitOverflowScrolling: "touch",
+            padding: "0 18px calc(28px + env(safe-area-inset-bottom))",
+          }}
+        >
           <SheetFooterSlot.Provider value={footerEl}>{children}</SheetFooterSlot.Provider>
         </div>
         {/* Empty and invisible until a StickyFooter fills it. */}
@@ -742,11 +948,11 @@ function PrimaryButton({ children, onClick, danger, ghost, disabled, type = "but
       style={{
         width: "100%", padding: "13px 16px", borderRadius: 10,
         border: ghost ? `1px solid ${COLORS.border}` : "none",
-        background: ghost ? COLORS.surface : danger ? COLORS.red : COLORS.navy,
-        color: ghost ? COLORS.ink : "#fff",
+        background: ghost ? COLORS.surface : danger ? COLORS.red : COLORS.action,
+        color: ghost ? COLORS.ink : COLORS.onAction,
         fontFamily: "Inter, sans-serif", fontWeight: 600, fontSize: 15,
         cursor: disabled ? "default" : "pointer", marginTop: 6,
-        opacity: disabled ? 0.6 : 1,
+        opacity: disabled ? 0.6 : 1, touchAction: "manipulation",
       }}
     >{children}</button>
   );
@@ -791,10 +997,21 @@ export default function App() {
   const [transfers, setTransfers] = useState([]);
   const [trash, setTrash] = useState([]);
   const [loaded, setLoaded] = useState(false);
+  /* Drawn and settled are different moments now. The ledger is drawn from the
+     copy on this device straight away; it is settled once the cloud has been
+     heard from. Anything that writes to the ledger has to wait for settled, or
+     it races the reconcile and loses — a price refresh that finished first had
+     its results overwritten by the cloud copy landing after it. */
+  const [reconciled, setReconciled] = useState(false);
 
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState("");
   const [lastSync, setLastSync] = useState(null);
+
+  /* A subtle offline flag. The cached ledger still works, but the user should
+     know that prices and sync are paused. Updates on the same online/offline
+     events the reconnect logic already listens for. */
+  const [isOffline, setIsOffline] = useState(() => typeof navigator !== "undefined" && !navigator.onLine);
 
   const [ipoSheet, setIpoSheet] = useState(null);           // { ipo }
   const [appSheet, setAppSheet] = useState(null);           // { ipoId, application }
@@ -811,6 +1028,14 @@ export default function App() {
   const skipNextAutoSync = useRef(true);
   const pricedOnce = useRef(false);
   const [, bumpHolidays] = useState(0);
+
+  // The palette is mutated in place, so a theme change needs a nudge to redraw.
+  const [, bumpTheme] = useState(0);
+  useEffect(() => {
+    const listener = () => bumpTheme((n) => n + 1);
+    themeListeners.add(listener);
+    return () => { themeListeners.delete(listener); };
+  }, []);
 
   /* The holiday calendar changes about once a year, so it is cached and only
      refetched when a day old. Every date shown is computed from it, hence the
@@ -894,6 +1119,7 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
     setLoaded(false);
+    setReconciled(false);
     skipNextAutoSync.current = true;
 
     (async () => {
@@ -907,6 +1133,7 @@ export default function App() {
       if (!cloudEnabled() || !userId) {
         apply(local);
         setLoaded(true);
+        setReconciled(true);
         return;
       }
 
@@ -914,7 +1141,16 @@ export default function App() {
       const localIsOurs = !owner || owner === userId;
       const empty = { accounts: [], ipos: [], transfers: [], trash: [] };
 
-      apply(localIsOurs ? local : empty); // show something immediately, then reconcile
+      apply(localIsOurs ? local : empty);
+
+      /* Show the ledger the moment there is one worth showing. The copy on this
+         device is the same ledger the cloud holds, so waiting for the round trip
+         before drawing anything meant staring at "Loading ledger…" for as long
+         as Supabase took — several seconds — with the answer already in hand.
+
+         Only when this device holds nothing, or holds somebody else's, is there
+         genuinely nothing to draw, and only then is the wait real. */
+      if (localIsOurs && !isEmptyState(local)) setLoaded(true);
       setSyncing(true);
       try {
         const remote = await cloudLoad();
@@ -958,7 +1194,7 @@ export default function App() {
           setSyncError(e.message || "Could not reach the cloud.");
         }
       } finally {
-        if (!cancelled) { setSyncing(false); setLoaded(true); }
+        if (!cancelled) { setSyncing(false); setLoaded(true); setReconciled(true); }
       }
     })();
 
@@ -1270,9 +1506,11 @@ export default function App() {
     [ipos, refreshPricesFrom]
   );
 
-  // Refresh once per session when there is something whose value can move.
+  /* Refresh once per session when there is something whose value can move.
+     It runs after the ledger is on screen, never before it: a slow price feed
+     delays a number, and must never delay the page. */
   useEffect(() => {
-    if (!loaded || pricedOnce.current) return;
+    if (!reconciled || pricedOnce.current) return;
     // Worth doing whenever anything could be filled in: a live holding to
     // value, or simply a date or listing price still missing.
     const worthFetching = ipos.some((i) =>
@@ -1282,20 +1520,19 @@ export default function App() {
     if (!worthFetching) return;
     pricedOnce.current = true;
     refreshPrices({ silent: true });
-  }, [loaded, ipos, refreshPrices]);
+  }, [reconciled, ipos, refreshPrices]);
 
   /* The figure on the cards is the last traded price, so it goes stale simply
      by being looked at later. Coming back to the app is the moment that shows,
      and it is also the only moment worth spending a request on — a tab sitting
-     in the background needs nothing. Refetched when what is on screen is more
-     than a few minutes old and the market could have moved since. */
+     in the background needs nothing. */
   const priceAsOfRef = useRef("");
   priceAsOfRef.current = priceInfo.asOf;
   const refreshRef = useRef(refreshPrices);
   refreshRef.current = refreshPrices;
 
   useEffect(() => {
-    if (!loaded || typeof document === "undefined") return;
+    if (!reconciled || typeof document === "undefined") return;
     const onVisible = () => {
       if (document.visibilityState !== "visible") return;
       const asOf = priceAsOfRef.current;
@@ -1309,39 +1546,79 @@ export default function App() {
       document.removeEventListener("visibilitychange", onVisible);
       window.removeEventListener("focus", onVisible);
     };
-  }, [loaded]);
+  }, [reconciled]);
 
-  const replaceAll = useCallback((state) => {
-    persistAccounts(state.accounts);
-    persistIpos(state.ipos);
-    persistTransfers(state.transfers);
-    persistTrash(state.trash || []);
-  }, [persistAccounts, persistIpos, persistTransfers, persistTrash]);
-
-  /* Putting a record back. An application needs its IPO to still be there; if
-     that went too, the IPO has to come back first — so say so rather than drop
-     the application into nothing. */
-  const restore = useCallback((entryId) => {
-    const entry = trash.find((t) => t.id === entryId);
-    if (!entry) return;
-    const rest = trash.filter((t) => t.id !== entryId);
-    const put = (list, item) => (list.some((x) => x.id === item.id) ? list : [item, ...list]);
-
-    if (entry.kind === "account") persistAccounts(put(accounts, entry.payload));
-    else if (entry.kind === "ipo") persistIpos(put(ipos, entry.payload));
-    else if (entry.kind === "transfer") persistTransfers(put(transfers, entry.payload));
-    else if (entry.kind === "application") {
-      const owner = ipos.find((i) => i.id === entry.parentId);
-      if (!owner) {
-        alert("That IPO was deleted too. Restore it first, then restore this application.");
-        return;
-      }
-      persistIpos(ipos.map((i) =>
-        i.id !== owner.id ? i : { ...i, applications: put(i.applications || [], entry.payload) }
-      ));
+  /* Sync now sends what is here and then takes what is there, so a change made
+     on another device arrives without waiting for a reload — which is what the
+     old handler achieved by reloading the page out from under you. */
+  const syncNow = useCallback(async () => {
+    await pushToCloud();
+    if (!cloudEnabled() || !userId) return;
+    try {
+      const remote = await cloudLoad();
+      if (isEmptyState(remote)) return;
+      setAccounts(remote.accounts); setIpos(remote.ipos);
+      setTransfers(remote.transfers); setTrash(remote.trash || []);
+      TABLES.forEach((k) => saveTable(k, remote[k] || []));
+      // Already in step with the cloud; no need to push it straight back.
+      skipNextAutoSync.current = true;
+    } catch (e) {
+      setSyncError(e.message || "Could not reach the cloud.");
     }
-    persistTrash(rest);
-  }, [trash, accounts, ipos, transfers, persistAccounts, persistIpos, persistTransfers, persistTrash]);
+  }, [pushToCloud, userId]);
+  const syncNowRef = useRef(syncNow);
+  syncNowRef.current = syncNow;
+
+  /* When the browser regains connectivity, reconcile and refresh in the
+     background — no reload, and no need to notice the app looks stale and
+     do it yourself. The cached ledger stays on screen throughout; this only
+     ever adds fresher data on top of it, and a failed request here leaves
+     what is already showing untouched. */
+  const reconnectBusyRef = useRef(false);
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    let settleTimer = null;
+    const handleOnline = () => {
+      // Several tabs/interfaces can each fire "online" within the same
+      // moment; only one reconnect pass should ever be in flight.
+      if (reconnectBusyRef.current || !reconciled) return;
+      reconnectBusyRef.current = true;
+      clearTimeout(settleTimer);
+      // The event fires the instant an interface reappears, not once it can
+      // actually reach anything — give it a beat before spending a request.
+      settleTimer = setTimeout(async () => {
+        try {
+          if (cloudEnabled() && userId) await syncNowRef.current();
+          await refreshRef.current({ silent: true });
+        } catch {
+          // A failed reconnect attempt is not worth surfacing; the next
+          // online event, or the visibility-based refresh above, will retry.
+        } finally {
+          reconnectBusyRef.current = false;
+        }
+      }, 700);
+    };
+    window.addEventListener("online", handleOnline);
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      clearTimeout(settleTimer);
+    };
+  }, [reconciled, userId]);
+
+  /* Track the browser's online/offline state so we can show a subtle indicator. */
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const goOnline = () => setIsOffline(false);
+    const goOffline = () => setIsOffline(true);
+    window.addEventListener("online", goOnline);
+    window.addEventListener("offline", goOffline);
+    return () => {
+      window.removeEventListener("online", goOnline);
+      window.removeEventListener("offline", goOffline);
+    };
+  }, []);
+
+
 
   /* ---------- derived numbers ---------- */
   const stats = useMemo(() => {
@@ -1367,13 +1644,13 @@ export default function App() {
   }, [ipos]);
 
   /* ---------- gates ---------- */
-  if (linkBusy) return <Splash text="Signing you in…" />;
+  if (linkBusy) return <LedgerSkeleton text="SIGNING YOU IN" tab={tab} />;
 
   if (cloudEnabled() && !session) {
     return <AuthScreen mode={authMode} setMode={setAuthMode} notice={linkNotice} />;
   }
 
-  if (!loaded) return <Splash text="Loading ledger…" />;
+  if (!loaded) return <LedgerSkeleton text="LOADING YOUR LEDGER" tab={tab} />;
 
   return (
     <div style={{
@@ -1397,6 +1674,17 @@ export default function App() {
         }}
       />
 
+      {isOffline && (
+        <div style={{
+          background: COLORS.goldSoft, display: "flex", alignItems: "center", justifyContent: "center",
+          gap: 6, padding: "6px 14px", fontSize: 11.5, fontWeight: 600, color: COLORS.ink,
+          fontFamily: "Inter, sans-serif",
+        }}>
+          <CloudOff size={13} color={COLORS.gold} />
+          <span>You're offline — showing cached data</span>
+        </div>
+      )}
+
       <div style={{ padding: "14px 14px 0" }}>
         {tab === "dashboard" && (
           <Dashboard stats={stats} ipos={ipos} accounts={accounts} onOpenIpo={(id) => setIpoDetail(id)} />
@@ -1405,13 +1693,6 @@ export default function App() {
           <IpoList
             ipos={ipos} accounts={accounts}
             onOpen={(id) => setIpoDetail(id)}
-            onEdit={(ipo) => setIpoSheet({ ipo })}
-            onDelete={(id) => {
-              const gone = ipos.find((x) => x.id === id);
-              if (!gone) return;
-              discard("ipo", gone, gone.company || "Untitled IPO");
-              persistIpos(ipos.filter((x) => x.id !== id));
-            }}
           />
         )}
         {tab === "accounts" && (
@@ -1449,8 +1730,8 @@ export default function App() {
           ipo={ipos.find((i) => i.id === ipoDetail)}
           accounts={accounts}
           onClose={() => setIpoDetail(null)}
-          onEditIpo={(ipo) => { setIpoDetail(null); setIpoSheet({ ipo }); }}
-          onAddApplication={(ipoId) => setAppSheet({ ipoId, application: null })}
+          onDeleteIpo={(id) => { const gone=ipos.find((x)=>x.id===id); if(!gone)return; discard("ipo",gone,gone.company||"Untitled IPO"); persistIpos(ipos.filter((x)=>x.id!==id)); setIpoDetail(null); }}
+          onSaveNote={(id,noteValue)=>{ persistIpos(ipos.map((i)=>i.id===id?{...i,remarks:noteValue}:i)); }}
           onBulkApply={(ipoId) => { setIpoDetail(null); setBulkApplyFor(ipoId); }}
           onBulkStatus={(ipoId) => { setIpoDetail(null); setBulkStatusFor(ipoId); }}
           onEditApplication={(ipoId, application) => setAppSheet({ ipoId, application })}
@@ -1597,18 +1878,16 @@ export default function App() {
       {dataSheetOpen && (
         <DataSheet
           state={{ accounts, ipos, transfers, trash }}
-          onRestore={restore}
           session={session}
           cloudOn={cloudEnabled()}
           syncing={syncing}
           syncError={syncError}
           lastSync={lastSync}
           onClose={() => setDataSheetOpen(false)}
-          onSyncNow={pushToCloud}
+          onSyncNow={syncNow}
           pricing={pricing}
           priceInfo={priceInfo}
           onRefreshPrices={refreshPrices}
-          onReplaceAll={replaceAll}
           onSignOut={async () => { setDataSheetOpen(false); await cloudSignOut(); }}
         />
       )}
@@ -1616,13 +1895,125 @@ export default function App() {
   );
 }
 
-function Splash({ text }) {
+
+/* A block standing in for something not here yet. Breathing rather than
+   sliding: a shimmer sweeping across a phone is a lot of movement to look at
+   for something that is only going to be replaced. */
+function Bone({ w = "100%", h = 12, r = 6, style = {} }) {
   return (
     <div style={{
-      minHeight: "100dvh", background: COLORS.bg,
-      display: "flex", alignItems: "center", justifyContent: "center",
+      width: w, height: h, borderRadius: r, background: COLORS.border,
+      animation: "ledgerPulse 1.4s ease-in-out infinite", ...style,
+    }} />
+  );
+}
+
+/* The first load on a new device has nothing cached to draw, and a blank page
+   for the length of a network round trip reads as a broken app. This is the
+   same furniture the ledger has, in the shape of the screen you are about to
+   land on — so what arrives fills a layout that was already there instead of
+   replacing a white one. */
+function LedgerSkeleton({ text, tab = "dashboard" }) {
+  const titles = {
+    dashboard: "The Ledger", ipos: "IPOs", transfers: "Transfers", accounts: "Accounts",
+  };
+  const items = [
+    { id: "dashboard", label: "Overview" }, { id: "ipos", label: "IPOs" },
+    { id: "transfers", label: "Transfers" }, { id: "accounts", label: "Accounts" },
+  ];
+  // Overview leads with figures; the other three lead with a search and filters.
+  const isDashboard = tab === "dashboard";
+  // A transfer is a two-line row; an IPO or an account is a card with a bar.
+  const rowsOnly = tab === "transfers";
+
+  return (
+    <div style={{
+      minHeight: "100dvh", background: COLORS.bg, fontFamily: "Inter, sans-serif",
+      maxWidth: 520, margin: "0 auto", position: "relative",
+      paddingBottom: "calc(78px + env(safe-area-inset-bottom))",
     }}>
-      <div style={{ fontFamily: "'Fraunces', serif", color: COLORS.navy, fontSize: 18 }}>{text}</div>
+      <style>{FONT_IMPORT}</style>
+      <style>{`@keyframes ledgerPulse { 0%,100% { opacity: .45 } 50% { opacity: .85 } }`}</style>
+
+      <div style={{
+        background: COLORS.navyDeep,
+        padding: "calc(18px + env(safe-area-inset-top)) 14px 14px",
+        borderBottom: `3px double ${COLORS.gold}`,
+      }}>
+        <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 700, fontSize: 21, color: "#fff" }}>
+          {titles[tab] || "The Ledger"}
+        </div>
+        <div style={{
+          fontFamily: "'JetBrains Mono', monospace", fontSize: 10.5, color: COLORS.gold,
+          marginTop: 2, letterSpacing: 0.5,
+        }}>{text}</div>
+      </div>
+
+      <div style={{ padding: 14 }}>
+        {isDashboard ? (
+          <>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
+              {[0, 1, 2, 3].map((i) => (
+                <div key={i} style={{
+                  background: COLORS.surface, border: `1px solid ${COLORS.border}`,
+                  borderRadius: 12, padding: "14px 12px",
+                }}>
+                  <Bone w={18} h={18} r={5} />
+                  <Bone w="72%" h={20} style={{ marginTop: 10 }} />
+                  <Bone w="52%" h={10} style={{ marginTop: 8 }} />
+                </div>
+              ))}
+            </div>
+            <Bone w={110} h={11} style={{ marginBottom: 10 }} />
+          </>
+        ) : (
+          <>
+            <Bone h={44} r={8} style={{ marginBottom: 8 }} />
+            <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+              <Bone h={36} r={8} />
+              <Bone h={36} r={8} />
+            </div>
+          </>
+        )}
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {[0, 1, 2, 3].map((i) => (
+            <div key={i} style={{
+              background: COLORS.surface, border: `1px solid ${COLORS.border}`,
+              borderRadius: 12, display: "flex", overflow: "hidden",
+            }}>
+              {!rowsOnly && <div style={{ width: 8, background: COLORS.border, flexShrink: 0 }} />}
+              <div style={{ padding: rowsOnly ? "10px 12px" : "12px 14px", flex: 1 }}>
+                <Bone w="62%" h={15} />
+                <Bone w="80%" h={10} style={{ marginTop: 7 }} />
+                {!rowsOnly && <Bone w={72} h={16} r={8} style={{ marginTop: 9 }} />}
+                {!rowsOnly && <Bone h={5} r={3} style={{ marginTop: 10 }} />}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div style={{
+        position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)",
+        width: "100%", maxWidth: 520, background: COLORS.navyDeep,
+        display: "flex", justifyContent: "space-around",
+        padding: "10px 6px calc(14px + env(safe-area-inset-bottom))",
+        borderTop: `1px solid ${COLORS.navy}`,
+      }}>
+        {items.map(({ id, label }) => {
+          const active = id === tab;
+          return (
+            <div key={id} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4, padding: "4px 10px" }}>
+              <div style={{
+                width: 20, height: 20, borderRadius: 5,
+                background: active ? COLORS.gold : COLORS.navy, opacity: active ? 0.8 : 0.35,
+              }} />
+              <span style={{ fontSize: 10, color: active ? COLORS.gold : "#8592A6", fontWeight: active ? 700 : 500 }}>{label}</span>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -1634,7 +2025,7 @@ function Header({ tab, onAdd, onOpenData, onFetchLive, syncing, syncError, cloud
   const titles = { dashboard: "The Ledger", ipos: "IPOs", accounts: "Accounts", transfers: "Transfers" };
   const showAdd = tab !== "dashboard";
   const statusColor = !cloudOn ? COLORS.inkSoft : syncError ? COLORS.red : COLORS.gold;
-  const StatusIcon = !cloudOn ? CloudOff : syncing ? Loader2 : CloudIcon;
+  const StatusIcon = !cloudOn ? CloudOff : syncing ? Loader2 : Settings;
   return (
     <div style={{
       background: COLORS.navyDeep,
@@ -1649,9 +2040,10 @@ function Header({ tab, onAdd, onOpenData, onFetchLive, syncing, syncError, cloud
           whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
         }}>{titles[tab]}</div>
         {tab === "dashboard" && (
-          <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10.5, color: COLORS.gold, marginTop: 2, letterSpacing: 0.5 }}>
-            FAMILY IPO REGISTER
-          </div>
+          <div style={{
+            fontFamily: "'JetBrains Mono', monospace", fontSize: 10.5, color: COLORS.gold,
+            marginTop: 2, letterSpacing: 0.5,
+          }}>FAMILY IPO REGISTER</div>
         )}
       </div>
       <div style={{ display: "flex", gap: 8, flexShrink: 0, marginLeft: "auto" }}>
@@ -1834,7 +2226,7 @@ function Dashboard({ stats, ipos, accounts, onOpenIpo }) {
 
       <SectionLabel>Recent Entries</SectionLabel>
       {ipos.length === 0 ? (
-        <EmptyState text="No IPOs logged yet. Tap the IPOs tab to add your first application." />
+        <EmptyState text="No IPOs logged yet. Tap the IPOs tab to add your first application." icon={Receipt} subtitle="Your family IPO register starts here." />
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {recent.map((ipo) => (
@@ -1864,7 +2256,7 @@ function StatCard({ label, value, icon: Icon, tone }) {
 function SectionLabel({ children }) {
   return (
     <div style={{
-      fontFamily: "'Fraunces', serif", fontWeight: 600, fontSize: 15, color: COLORS.navyDeep,
+      fontFamily: "'Fraunces', serif", fontWeight: 600, fontSize: 15, color: COLORS.heading,
       marginBottom: 10, display: "flex", alignItems: "center", gap: 8,
     }}>
       <span style={{ width: 14, height: 2, background: COLORS.gold, display: "inline-block" }} />
@@ -1873,26 +2265,45 @@ function SectionLabel({ children }) {
   );
 }
 
-function EmptyState({ text }) {
+function EmptyState({ text, icon: Icon, subtitle }) {
   return (
     <div style={{
-      border: `1px dashed ${COLORS.border}`, borderRadius: 12, padding: "26px 18px",
+      border: `1px dashed ${COLORS.border}`, borderRadius: 12, padding: "30px 18px",
       textAlign: "center", color: COLORS.inkSoft, fontSize: 13.5, background: COLORS.surface,
-    }}>{text}</div>
+    }}>
+      {Icon && (
+        <div style={{ marginBottom: 10, opacity: 0.5 }}>
+          <Icon size={28} color={COLORS.inkSoft} />
+        </div>
+      )}
+      <div>{text}</div>
+      {subtitle && (
+        <div style={{ fontSize: 11.5, color: COLORS.inkSoft, marginTop: 6, opacity: 0.7 }}>{subtitle}</div>
+      )}
+    </div>
   );
 }
 
-const chipBase = {
-  border: `1px solid ${COLORS.border}`, background: COLORS.surface, color: COLORS.inkSoft,
-  borderRadius: 999, padding: "7px 12px", fontSize: 12, fontWeight: 600,
-  fontFamily: "Inter, sans-serif", cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0,
-};
-const chipOn = { background: COLORS.navy, border: `1px solid ${COLORS.navy}`, color: "#fff" };
+/* One cell in the 2×2 date grid on the IPO detail sheet. Label and value are
+   always in the same place, so the eye doesn't have to re-find each date
+   depending on which ones exist. */
+function DateCell({ label, value }) {
+  return (
+    <div>
+      <div style={{
+        fontSize: 10, fontWeight: 600, color: COLORS.inkSoft,
+        textTransform: "uppercase", letterSpacing: 0.5,
+        fontFamily: "Inter, sans-serif", marginBottom: 2,
+      }}>{label}</div>
+      <div style={{
+        fontSize: 13, fontWeight: 500, color: COLORS.ink,
+        fontFamily: "'JetBrains Mono', monospace",
+      }}>{value}</div>
+    </div>
+  );
+}
 
-const selectStyle = {
-  ...inputStyle, width: "auto", minWidth: 0, minHeight: 36, padding: "6px 8px",
-  fontSize: 12, fontWeight: 600,
-};
+
 
 
 /* Boards are not mutually exclusive — you may want one, or both. Turning the
@@ -1912,13 +2323,12 @@ function BoardToggles({ options, selected, onToggle }) {
             aria-label={`${b.label}${on ? " (showing)" : ""}`}
             title={last ? "At least one board has to be shown" : b.label}
             style={{
-              border: `1px solid ${on ? COLORS.navy : COLORS.border}`,
-              background: on ? COLORS.navy : COLORS.surface,
-              color: on ? "#fff" : COLORS.inkSoft,
-              borderRadius: 999, padding: "7px 11px", minHeight: 36,
-              fontFamily: "Inter, sans-serif", fontSize: 12, fontWeight: 600,
+              border: `1px solid ${on ? COLORS.action : COLORS.border}`,
+              background: on ? COLORS.action : COLORS.surface,
+              color: on ? COLORS.onAction : COLORS.inkSoft,
+              borderRadius: 999, padding: "7px 11px", minHeight: 24,
+              fontFamily: "Inter, sans-serif", fontSize: 12, fontWeight: 600, 
               whiteSpace: "nowrap", cursor: last ? "default" : "pointer",
-              opacity: last ? 0.92 : 1,
             }}
           >
             {b.label}{b.count != null ? ` ${b.count}` : ""}
@@ -1939,13 +2349,43 @@ function boardIsWorthAsking(boards) {
 /* `boards` is a second, independent dimension. Which board an issue is on says
    nothing about how the application went, so folding it into the status chips
    would make "pending, mainboard only" unaskable. */
+/* Filtering and sorting live behind one control beside the search rather than
+   two selects taking a row of their own. A list is mostly read, not filtered,
+   so the row that is always there is the one you always use — and the panel
+   has room to let you pick several filters at once, which a select never did. */
 function ListControls({ search, setSearch, placeholder, filters, filter, setFilter, sorts, sort, setSort, boards, board, toggleBoard }) {
+  const [open, setOpen] = useState(false);
+  const panelRef = useRef(null);
+  const buttonRef = useRef(null);
+
+  // Clicking away closes it, as a panel like this should.
+  useEffect(() => {
+    if (!open) return;
+    const away = (e) => {
+      if (panelRef.current?.contains(e.target) || buttonRef.current?.contains(e.target)) return;
+      setOpen(false);
+    };
+    const esc = (e) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", away);
+    document.addEventListener("keydown", esc);
+    return () => {
+      document.removeEventListener("mousedown", away);
+      document.removeEventListener("keydown", esc);
+    };
+  }, [open]);
+
+  const chosen = Array.isArray(filter) ? filter : [];
+  const sortLabel = (sorts.find((x) => x.id === sort) || {}).label || "";
+  // "All" is the absence of a filter, so it is not something narrowing you to.
+  const narrowed = chosen.length;
+
+  const toggleFilter = (id) => {
+    setFilter(chosen.includes(id) ? chosen.filter((f) => f !== id) : [...chosen, id]);
+  };
+
   return (
-    <div style={{ marginBottom: 12 }}>
-      {/* The board sits beside the search rather than under it: two toggles are
-          narrow, the search box has width to spare, and it keeps the controls
-          below to a single row. */}
-      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
+    <div style={{ marginBottom: 12, position: "relative" }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: boardIsWorthAsking(boards) ? 8 : 0 }}>
         <div style={{ position: "relative", flex: "1 1 0", minWidth: 0 }}>
           <span style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)", display: "flex", pointerEvents: "none" }}>
             <Search size={15} color={COLORS.inkSoft} />
@@ -1957,37 +2397,105 @@ function ListControls({ search, setSearch, placeholder, filters, filter, setFilt
             style={{ paddingLeft: 34 }}
           />
         </div>
-        {boardIsWorthAsking(boards) && (
-          <BoardToggles options={boards} selected={board} onToggle={toggleBoard} />
-        )}
-      </div>
-      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-        <select
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-          aria-label="Filter"
-          style={{ ...selectStyle, flex: "1 1 0" }}
+
+        <button
+          ref={buttonRef}
+          onClick={() => setOpen((v) => !v)}
+          aria-label="Filter and sort"
+          aria-expanded={open}
+          style={{
+            position: "relative", width: 44, height: 44, flexShrink: 0,
+            borderRadius: 8, cursor: "pointer",
+            border: `1px solid ${narrowed || open ? COLORS.navy : COLORS.border}`,
+            background: narrowed ? COLORS.navy : COLORS.field,
+            display: "flex", alignItems: "center", justifyContent: "center",
+          }}
         >
-          {filters.map((f) => (
-            <option key={f.id} value={f.id}>{f.label}{f.count != null ? ` ${f.count}` : ""}</option>
-          ))}
-        </select>
-        <select
-          value={sort}
-          onChange={(e) => setSort(e.target.value)}
-          aria-label="Sort order"
-          style={{ ...selectStyle, flex: "1 1 0" }}
-        >
-          {sorts.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
-        </select>
+          <SlidersHorizontal size={17} color={narrowed ? COLORS.surface : COLORS.inkSoft} />
+          {narrowed > 0 && (
+            <span style={{
+              position: "absolute", top: -5, right: -5, minWidth: 17, height: 17, borderRadius: 9,
+              background: COLORS.gold, color: COLORS.navyDeep, fontSize: 10, fontWeight: 700,
+              display: "flex", alignItems: "center", justifyContent: "center",
+              fontFamily: "'JetBrains Mono', monospace", padding: "0 4px",
+            }}>{narrowed}</span>
+          )}
+        </button>
       </div>
+
+      {boardIsWorthAsking(boards) && (
+        <BoardToggles options={boards} selected={board} onToggle={toggleBoard} />
+      )}
+
+      {open && (
+        <div
+          ref={panelRef}
+          style={{
+            position: "absolute", top: "calc(100% + 6px)", right: 0, zIndex: 30,
+            width: "min(300px, 100%)", background: COLORS.surface,
+            border: `1px solid ${COLORS.border}`, borderRadius: 12,
+            boxShadow: "0 10px 30px rgba(0,0,0,0.28)", padding: 12,
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+            <SectionLabel>Show</SectionLabel>
+            {narrowed > 0 && (
+              <button
+                onClick={() => setFilter([])}
+                style={{ ...chipBase, padding: "4px 9px", fontSize: 11 }}
+              >Clear</button>
+            )}
+          </div>
+          {/* Several at once: an issue can be pending and need details both. */}
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 14 }}>
+            {filters.map((f) => {
+              const on = chosen.includes(f.id);
+              return (
+                <button
+                  key={f.id}
+                  onClick={() => toggleFilter(f.id)}
+                  aria-pressed={on}
+                  style={{ ...chipBase, padding: "6px 10px", ...(on ? chipOn : null) }}
+                >
+                  {f.label}{f.count != null ? ` ${f.count}` : ""}
+                </button>
+              );
+            })}
+          </div>
+
+          <SectionLabel>Order</SectionLabel>
+          <div style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: 6 }}>
+            {sorts.map((o) => {
+              const on = o.id === sort;
+              return (
+                <button
+                  key={o.id}
+                  onClick={() => { setSort(o.id); setOpen(false); }}
+                  style={{
+                    display: "flex", alignItems: "center", justifyContent: "space-between",
+                    width: "100%", textAlign: "left", cursor: "pointer",
+                    background: "transparent", border: 0, padding: "8px 6px", borderRadius: 6,
+                    fontFamily: "Inter, sans-serif", fontSize: 13,
+                    color: on ? COLORS.ink : COLORS.inkSoft, fontWeight: on ? 700 : 500,
+                  }}
+                >
+                  {o.label}
+                  {on && <Check size={14} color={COLORS.navy} />}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-function IpoList({ ipos, accounts, onOpen, onEdit, onDelete }) {
+function IpoList({ ipos, accounts, onOpen }) {
   const [search, setSearch] = useState("");
-  const [filter, setFilter] = useState("all");
+  /* No filters chosen means everything, so there is no "All" to select — an
+     empty selection is what All meant. Several may be on at once. */
+  const [filter, setFilter] = useState([]);
   /* Which boards are showing. Mainboard is what this ledger is mostly made of,
      so that is where it opens; both can be on at once, and never neither. */
   const [board, setBoard] = useState(["Mainboard"]);
@@ -2007,11 +2515,16 @@ function IpoList({ ipos, accounts, onOpen, onEdit, onDelete }) {
   );
 
   const counts = useMemo(() => {
-    const c = { all: onBoard.length, pending: 0, allotted: 0, rejected: 0, incomplete: 0 };
+    const c = { all: onBoard.length, pending: 0, allotted: 0, rejected: 0, incomplete: 0, listed: 0, open: 0 };
+    const today = todayISO();
     onBoard.forEach((i) => {
       const b = ipoBucket(i);
       if (c[b] != null) c[b]++;
       if (missingIpoFields(i).length) c.incomplete++;
+      if (hasListed(i)) c.listed++;
+      const openD = i.openDate || "";
+      const closeD = i.closeDate || "";
+      if (openD && openD <= today && (!closeD || closeD >= today)) c.open++;
     });
     return c;
   }, [onBoard]);
@@ -2045,14 +2558,24 @@ function IpoList({ ipos, accounts, onOpen, onEdit, onDelete }) {
     return onBoard
       .filter((i) => {
         if (q && !`${i.company || ""} ${i.symbol || ""}`.toLowerCase().includes(q)) return false;
-        if (filter === "all") return true;
-        if (filter === "incomplete") return missingIpoFields(i).length > 0;
-        return ipoBucket(i) === filter;
+        if (!filter.length) return true;
+        // Any of the chosen filters, not all of them: they name kinds, not tests.
+        return filter.some((f) => {
+          if (f === "incomplete") return missingIpoFields(i).length > 0;
+          if (f === "listed") return hasListed(i);
+          if (f === "open") {
+            const today = todayISO();
+            const openD = i.openDate || "";
+            const closeD = i.closeDate || "";
+            return openD && openD <= today && (!closeD || closeD >= today);
+          }
+          return ipoBucket(i) === f;
+        });
       })
       .sort(cmp);
   }, [onBoard, search, filter, sort]);
 
-  if (ipos.length === 0) return <EmptyState text="No IPOs yet. Tap + to add one." />;
+  if (ipos.length === 0) return <EmptyState text="No IPOs yet. Use 'Add from exchange' above to sync IPOs." icon={Receipt} subtitle="Track applications, allotments and returns across your family." />;
 
   return (
     <div>
@@ -2060,10 +2583,11 @@ function IpoList({ ipos, accounts, onOpen, onEdit, onDelete }) {
         search={search} setSearch={setSearch} placeholder="Search company or symbol"
         filter={filter} setFilter={setFilter}
         filters={[
-          { id: "all", label: "All", count: counts.all },
+          ...(counts.open ? [{ id: "open", label: "Open now", count: counts.open }] : []),
           { id: "pending", label: "Pending", count: counts.pending },
           { id: "allotted", label: "Allotted", count: counts.allotted },
-          { id: "rejected", label: "Missed", count: counts.rejected },
+          { id: "rejected", label: "Not allotted", count: counts.rejected },
+          { id: "listed", label: "Listed", count: counts.listed },
           { id: "incomplete", label: "Needs details", count: counts.incomplete },
         ]}
         boards={[
@@ -2086,7 +2610,7 @@ function IpoList({ ipos, accounts, onOpen, onEdit, onDelete }) {
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {shown.map((ipo) => (
             <IpoCard key={ipo.id} ipo={ipo} accounts={accounts} onClick={() => onOpen(ipo.id)}
-              onEdit={() => onEdit(ipo)} onDelete={() => onDelete(ipo.id)} showActions />
+              />
           ))}
         </div>
       )}
@@ -2178,7 +2702,7 @@ function AllotmentBar({ tally }) {
     n > 0 ? <div key={color} style={{ flex: n, background: color }} /> : null;
   return (
     <div style={{
-      display: "flex", height: 5, borderRadius: 3, overflow: "hidden",
+      display: "flex", height: 3, borderRadius: 3, overflow: "hidden",
       background: COLORS.border, marginTop: 8,
     }}>
       {seg(tally.won, COLORS.green)}
@@ -2208,7 +2732,7 @@ function AllotmentCounts({ tally }) {
   );
 }
 
-function IpoCard({ ipo, accounts, onClick, onEdit, onDelete, showActions }) {
+function IpoCard({ ipo, accounts, onClick }) {
   const tally = allotmentTally(ipo);
   const apps = ipo.applications || [];
   const totalLots = apps.reduce((s, a) => s + (Number(a.lots) || 0), 0);
@@ -2227,14 +2751,13 @@ function IpoCard({ ipo, accounts, onClick, onEdit, onDelete, showActions }) {
       background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 12,
       display: "flex", overflow: "hidden", cursor: "pointer",
     }} onClick={onClick}>
-      <div style={{
-        width: 8, backgroundColor: spine, flexShrink: 0,
-        backgroundImage: `repeating-linear-gradient(180deg, transparent 0 6px, ${COLORS.surface} 6px 8px)`,
-      }} />
+      {/* The narrow rule the stat cards use. An 8px striped band down every card
+          turned a list into a colour chart; the state is still there, quietly. */}
+      <div style={{ width: 4, backgroundColor: spine, flexShrink: 0, opacity: 1 }} />
       <div style={{ padding: "12px 14px", flex: 1, minWidth: 0 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
           <div style={{ minWidth: 0 }}>
-            <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 600, fontSize: 16.5, color: COLORS.navyDeep, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+            <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 600, fontSize: 15.5, color: COLORS.heading, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
               {ipo.company || "Untitled IPO"}
             </div>
             {/* Held to one line: it is a summary, and a summary that wraps has
@@ -2269,7 +2792,7 @@ function IpoCard({ ipo, accounts, onClick, onEdit, onDelete, showActions }) {
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
             <AllotmentCounts tally={tally} />
             <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-              {apps.some((a) => a.sold) && <Badge color={COLORS.navy} bg="#EAEFF5">SOLD {apps.filter((a) => a.sold).length}/{apps.length}</Badge>}
+              {apps.some((a) => a.sold) && <Badge color={COLORS.navy} bg={COLORS.chip}>SOLD {apps.filter((a) => a.sold).length}/{tally.allotted}</Badge>}
               {gainPct !== null && (
                 <span style={{
                   fontFamily: "'JetBrains Mono', monospace", fontSize: 12, fontWeight: 700,
@@ -2282,54 +2805,48 @@ function IpoCard({ ipo, accounts, onClick, onEdit, onDelete, showActions }) {
               )}
             </div>
           </div>
-          <AllotmentBar tally={tally} />
+          <AllotmentBar tally={tally} tone={spine} />
         </div>
       </div>
-      {showActions && (
-        <div style={{ display: "flex", flexDirection: "column", borderLeft: `1px solid ${COLORS.border}` }}>
-          <button onClick={(e) => { e.stopPropagation(); onEdit(); }} aria-label="Edit IPO" style={iconBtnStyle}><Pencil size={14} color={COLORS.inkSoft} /></button>
-          <button onClick={(e) => {
-            e.stopPropagation();
-            // An IPO owns its applications, so deleting it deletes them too.
-            const n = apps.length;
-            const msg = n
-              ? `Delete ${ipo.company || "this IPO"} and its ${n} application${n === 1 ? "" : "s"}?`
-                + " It is kept, and can be put back from Sync & Data."
-              : `Delete ${ipo.company || "this IPO entry"}? It can be put back from Sync & Data.`;
-            if (confirm(msg)) onDelete();
-          }} aria-label="Delete IPO" style={{ ...iconBtnStyle, borderTop: `1px solid ${COLORS.border}` }}><Trash2 size={14} color={COLORS.red} /></button>
-        </div>
-      )}
     </div>
   );
 }
 
-const iconBtnStyle = {
-  border: "none", background: COLORS.surface, width: 44, flex: 1, cursor: "pointer",
-  display: "flex", alignItems: "center", justifyContent: "center",
-};
 
 /* The list rows are two lines tall, so a 36px control would set their height
    rather than fit inside it. */
-const smallIconBtn = {
-  width: 30, height: 30, borderRadius: 8, border: `1px solid ${COLORS.border}`, background: COLORS.bg,
-  display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0,
-};
 
-const roundIconBtn = {
-  width: 36, height: 36, borderRadius: 8, border: `1px solid ${COLORS.border}`, background: COLORS.bg,
-  display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer",
-};
 
-function IpoDetailSheet({ ipo, accounts, onClose, onEditIpo, onAddApplication, onBulkApply, onBulkStatus, onEditApplication, onDeleteApplication }) {
+function IpoDetailSheet({ ipo, accounts, onClose, onDeleteIpo, onSaveNote, onAddApplication, onBulkApply, onBulkStatus, onEditApplication, onDeleteApplication }) {
   if (!ipo) return null;
   const apps = ipo.applications || [];
   const tally = allotmentTally(ipo);
   const conflicts = panConflicts(ipo, accounts);
+  const [note, setNote] = useState(() => ipo.remarks || "");
+  // The baseline is the last-saved value, so "changed" always means changed
+  // from what is actually on record — not just "touched since the sheet
+  // opened", which used to leave Save enabled even when nothing was edited.
+  const [savedNote, setSavedNote] = useState(() => ipo.remarks || "");
+  useEffect(() => { setNote(ipo.remarks || ""); setSavedNote(ipo.remarks || ""); }, [ipo.id, ipo.remarks]);
+  const noteDirty = note !== savedNote;
+  const saveNote = () => { onSaveNote(ipo.id, note); setSavedNote(note); };
+
+  const allot = allotmentDateOf(ipo);
+  const allotValue = (!hasListed(ipo) && !allotmentSettled(ipo) && allot.date)
+    ? `${fmtDate(allot.date)}${allot.exact ? "" : " (expected)"}`
+    : "—";
+  const listExpected = listingDateOf(ipo);
+  const listValue = ipo.listingDate
+    ? fmtDate(ipo.listingDate)
+    : (listExpected.date ? `${fmtDate(listExpected.date)} (expected)` : "—");
+  const closeValue = ipo.closeDate
+    ? fmtDate(ipo.closeDate)
+    : (ipo.applicationDate ? `${fmtDate(ipo.applicationDate)} (applied)` : "—");
+
   return (
     <Sheet title={ipo.company} onClose={onClose}>
       <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
-        <Badge color={COLORS.navy} bg="#EAEFF5">{ipo.category || "Mainboard"}</Badge>
+        <Badge color={COLORS.navy} bg={COLORS.chip}>{ipo.category || "Mainboard"}</Badge>
         <Badge color={COLORS.inkSoft} bg="#EFEDE7">Price ₹{ipo.priceBand || "—"}</Badge>
         <Badge color={COLORS.inkSoft} bg="#EFEDE7">Lot {ipo.lotSize || "—"} sh</Badge>
         {Number(ipo.listingPrice) > 0 && hasListed(ipo) && (
@@ -2347,31 +2864,31 @@ function IpoDetailSheet({ ipo, accounts, onClose, onEditIpo, onAddApplication, o
         )}
       </div>
 
-      <div style={{ fontSize: 12.5, color: COLORS.inkSoft, marginBottom: 6, display: "flex", flexWrap: "wrap", gap: "4px 14px" }}>
-        {ipo.openDate && <span>Opens {fmtDate(ipo.openDate)}</span>}
-        {ipo.closeDate
-          ? <span>Closes {fmtDate(ipo.closeDate)}</span>
-          : ipo.applicationDate && <span>Applied {fmtDate(ipo.applicationDate)}</span>}
-        {!hasListed(ipo) && !allotmentSettled(ipo) && allotmentDateOf(ipo).date && (
-          <span>
-            Allotment {fmtDate(allotmentDateOf(ipo).date)}
-            {allotmentDateOf(ipo).exact ? "" : " (expected)"}
-          </span>
-        )}
-        {ipo.listingDate
-          ? <span>{hasListed(ipo) ? "Listed" : "Lists"} {fmtDate(ipo.listingDate)}</span>
-          : listingDateOf(ipo).date && <span>Lists {fmtDate(listingDateOf(ipo).date)} (expected)</span>}
+      {/* A fixed 2x2 matrix rather than a row that wraps: Open/Close and
+          Allotment/Listing keep the same position every time, so the eye
+          doesn't have to re-find each date depending on which ones exist. */}
+      <div style={{
+        display: "grid", gridTemplateColumns: "1fr 1fr", columnGap: 14, rowGap: 8, marginBottom: 16,
+      }}>
+        <DateCell label="Open" value={ipo.openDate ? fmtDate(ipo.openDate) : "—"} />
+        <DateCell label="Close" value={closeValue} />
+        <DateCell label="Allotment" value={allotValue} />
+        <DateCell label="Listing" value={listValue} />
       </div>
-      {ipo.remarks && (
-        <div style={{ fontSize: 13, color: COLORS.ink, background: COLORS.goldSoft, borderRadius: 8, padding: "8px 10px", marginBottom: 10 }}>
-          {ipo.remarks}
+      <div style={{ marginBottom: 16 }}>
+        <SectionLabel>Note</SectionLabel>
+        <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={3} placeholder="Add a personal note about this IPO" aria-label="IPO note" style={{ ...inputStyle, resize: "vertical", marginTop: 6 }} />
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", marginTop: 6 }}>
+          <button
+            onClick={saveNote}
+            disabled={!noteDirty}
+            style={{
+              ...chipBase, padding: "6px 10px", color: COLORS.navy, fontWeight: 700,
+              opacity: noteDirty ? 1 : 0.5, cursor: noteDirty ? "pointer" : "default",
+            }}
+          >Save note</button>
         </div>
-      )}
-
-      <button onClick={() => onEditIpo(ipo)} style={{
-        fontSize: 12.5, color: COLORS.navy, background: "none", border: "none", padding: 0,
-        marginBottom: 16, cursor: "pointer", fontWeight: 600, textDecoration: "underline",
-      }}>Edit IPO details</button>
+      </div>
 
       {conflicts.length > 0 && (
         <div style={{
@@ -2397,16 +2914,16 @@ function IpoDetailSheet({ ipo, accounts, onClose, onEditIpo, onAddApplication, o
       {apps.length > 0 && (
         <div style={{ marginBottom: 14 }}>
           <AllotmentCounts tally={tally} />
-          <AllotmentBar tally={tally} />
+          <AllotmentBar tally={tally} tone={tally.pending ? COLORS.gold : tally.won ? COLORS.green : COLORS.red} />
         </div>
       )}
 
       <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
         <button onClick={() => onBulkApply(ipo.id)} style={{
           flex: "1 1 46%", display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
-          background: COLORS.navy, color: "#fff", border: "none", borderRadius: 10,
+          background: COLORS.action, color: COLORS.onAction, border: "none", borderRadius: 10,
           padding: "11px 10px", fontSize: 12.5, fontWeight: 600, cursor: "pointer",
-        }}><Layers size={14} color="#fff" /> Apply in bulk</button>
+        }}><Layers size={14} color={COLORS.onAction} /> Apply IPO</button>
         <button onClick={() => onBulkStatus(ipo.id)} disabled={!apps.length} style={{
           flex: "1 1 46%", display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
           background: COLORS.surface, color: apps.length ? COLORS.ink : COLORS.inkSoft,
@@ -2418,23 +2935,23 @@ function IpoDetailSheet({ ipo, accounts, onClose, onEditIpo, onAddApplication, o
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
         <SectionLabel>Applications ({apps.length})</SectionLabel>
-        <button onClick={() => onAddApplication(ipo.id)} style={{
-          display: "flex", alignItems: "center", gap: 4, background: "transparent", color: COLORS.navy,
-          border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: "8px 10px", fontSize: 12, fontWeight: 600, cursor: "pointer",
-        }}><Plus size={13} color={COLORS.navy} /> Add one</button>
       </div>
 
       {apps.length === 0 ? (
-        <EmptyState text="No applications yet for this IPO. Use “Apply in bulk” to add several at once." />
+        <EmptyState text="No applications yet for this IPO. Use “Apply IPO” to add one or more at once." />
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {apps.map((app) => (
             <ApplicationRow key={app.id} app={app} ipo={ipo} accounts={accounts}
               onEdit={() => onEditApplication(ipo.id, app)}
-              onDelete={() => { if (confirm("Delete this application? It can be put back from Sync & Data.")) onDeleteApplication(ipo.id, app.id); }} />
+              onDelete={() => { if (confirm("Delete this application?")) onDeleteApplication(ipo.id, app.id); }} />
           ))}
         </div>
       )}
+      <div style={{ marginTop: 20, paddingTop: 14, borderTop: `1px solid ${COLORS.border}` }}>
+        <SectionLabel>IPO actions</SectionLabel>
+        <button onClick={() => { const n=apps.length; const msg=n ? `Delete ${ipo.company || "this IPO"} and its ${n} application${n===1?"":"s"}?` : `Delete ${ipo.company || "this IPO entry"}?`; if(confirm(msg)) onDeleteIpo(ipo.id); }} style={{ width: "100%", marginTop: 6, minHeight: 44, borderRadius: 10, border: `1px solid ${COLORS.red}`, background: COLORS.redSoft, color: COLORS.red, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>Delete IPO</button>
+      </div>
     </Sheet>
   );
 }
@@ -2450,41 +2967,42 @@ function ApplicationRow({ app, ipo, accounts, onEdit, onDelete }) {
     if (mark) pnl = shares * (mark - price);
   }
   const accountName = accounts.find((a) => a.id === app.accountId)?.name;
+  const strongStatus = app.allotmentStatus === "Allotted" || app.allotmentStatus === "Not Allotted";
   return (
     <div style={{
-      background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: "10px 12px",
+      background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: "9px 10px",
     }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
-        <div style={{ minWidth: 0 }}>
-          <div style={{ fontWeight: 600, fontSize: 14, color: COLORS.ink }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ fontFamily: "Inter, sans-serif", fontWeight: 600, fontSize: 14, color: COLORS.ink }}>
             {accountName || "Unknown account"}
           </div>
           {app.appliedFor && app.appliedFor !== accountName && (
-            <div style={{ fontSize: 11.5, color: COLORS.inkSoft }}>on behalf of {app.appliedFor}</div>
+            <div style={{ fontSize: 11.5, color: COLORS.inkSoft, fontFamily: "Inter, sans-serif" }}>on behalf of {app.appliedFor}</div>
           )}
         </div>
-        <Badge color={meta.color} bg={meta.bg}>{app.allotmentStatus}</Badge>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+          <Badge color={meta.color} bg={meta.bg} strong={strongStatus}>{app.allotmentStatus}</Badge>
+          <button onClick={onEdit} aria-label="Edit application" style={smallIconBtn}><Pencil size={13} color={COLORS.inkSoft} /></button>
+          <button onClick={onDelete} aria-label="Delete application" style={smallIconBtn}><Trash2 size={13} color={COLORS.red} /></button>
+        </div>
       </div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8, fontFamily: "'JetBrains Mono', monospace", fontSize: 12 }}>
-        <span style={{ color: COLORS.inkSoft }}>{app.lots || 0} lot(s) · {inrOrDash(app.amountBlocked)} blocked</span>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 5, fontFamily: "'JetBrains Mono', monospace", fontSize: 12 }}>
+        <span style={{ color: COLORS.inkSoft }}>{app.lots || 0} lot(s) {inrOrDash(app.amountBlocked) !== "—" ? `· ${inrOrDash(app.amountBlocked)} blocked` : ""}</span>
         {pnl !== null && (
           <span style={{ fontWeight: 700, color: pnl >= 0 ? COLORS.green : COLORS.red }}>
             {app.sold ? "P&L " : "Unreal. "}{inr(pnl)}
           </span>
         )}
       </div>
-      {app.remarks && <div style={{ fontSize: 12, color: COLORS.inkSoft, marginTop: 6, fontStyle: "italic" }}>“{app.remarks}”</div>}
-      <div style={{ display: "flex", gap: 6, marginTop: 8, justifyContent: "flex-end" }}>
-        <button onClick={onEdit} aria-label="Edit application" style={roundIconBtn}><Pencil size={13} color={COLORS.inkSoft} /></button>
-        <button onClick={onDelete} aria-label="Delete application" style={roundIconBtn}><Trash2 size={13} color={COLORS.red} /></button>
-      </div>
+      {app.remarks && <div style={{ fontSize: 11.5, color: COLORS.inkSoft, marginTop: 4, fontFamily: "Inter, sans-serif", fontStyle: "italic" }}>"{app.remarks}"</div>}
     </div>
   );
 }
 
 function AccountList({ accounts, ipos, transfers = [], onEdit, onDelete }) {
   const [search, setSearch] = useState("");
-  const [filter, setFilter] = useState("all");
+  const [filter, setFilter] = useState([]);
   const [sort, setSort] = useState("name");
 
   const stats = useMemo(() => {
@@ -2526,15 +3044,14 @@ function AccountList({ accounts, ipos, transfers = [], onEdit, onDelete }) {
       (t) => t.fromAccountId === acc.id || t.toAccountId === acc.id
     ).length;
     if (!apps && !moves) {
-      return confirm(`Delete ${acc.name || "this account"}? You can put it back from Sync & Data.`);
+      return confirm(`Delete ${acc.name || "this account"}?`);
     }
     const bits = [];
     if (apps) bits.push(`${apps} application${apps === 1 ? "" : "s"}`);
     if (moves) bits.push(`${moves} transfer${moves === 1 ? "" : "s"}`);
     return confirm(
       `${acc.name || "This account"} has ${bits.join(" and ")} on record.\n\n` +
-      "Those stay in the ledger but will have no holder against them. " +
-      "The account itself is kept and can be put back from Sync & Data.\n\nDelete it?"
+      "Those stay in the ledger but will have no holder against them.\n\nDelete it?"
     );
   };
 
@@ -2549,14 +3066,14 @@ function AccountList({ accounts, ipos, transfers = [], onEdit, onDelete }) {
     return accounts
       .filter((a) => {
         if (q && !`${a.name || ""} ${a.relation || ""} ${a.bank || ""} ${a.pan || ""}`.toLowerCase().includes(q)) return false;
-        if (filter === "nopan") return !panOf(a);
-        if (filter === "dup") return dupPans.has(panOf(a));
-        return true;
+        if (!filter.length) return true;
+        return filter.some((f) =>
+          f === "nopan" ? !panOf(a) : f === "dup" ? dupPans.has(panOf(a)) : true);
       })
       .sort(cmp);
   }, [accounts, search, filter, sort, stats, dupPans]);
 
-  if (accounts.length === 0) return <EmptyState text="No family accounts added yet. Tap + to add one." />;
+  if (accounts.length === 0) return <EmptyState text="No family accounts added yet. Tap + to add one." icon={Users} subtitle="Add demat accounts for each family member." />;
 
   return (
     <div>
@@ -2564,7 +3081,6 @@ function AccountList({ accounts, ipos, transfers = [], onEdit, onDelete }) {
         search={search} setSearch={setSearch} placeholder="Search name, relation, bank or PAN"
         filter={filter} setFilter={setFilter}
         filters={[
-          { id: "all", label: "All", count: accounts.length },
           { id: "nopan", label: "No PAN", count: missingPan },
           ...(dupPans.size ? [{ id: "dup", label: "Duplicate PAN", count: dupPans.size }] : []),
         ]}
@@ -2590,7 +3106,7 @@ function AccountList({ accounts, ipos, transfers = [], onEdit, onDelete }) {
                 display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10,
               }}>
                 <div style={{ minWidth: 0 }}>
-                  <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 600, fontSize: 15.5, color: COLORS.navyDeep }}>{acc.name}</div>
+                  <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 600, fontSize: 15.5, color: COLORS.heading }}>{acc.name}</div>
                   <div style={{ fontSize: 12, color: COLORS.inkSoft, marginTop: 2 }}>
                     {acc.relation || "Self"}{acc.bank ? ` · ${acc.bank}` : ""}
                   </div>
@@ -2632,7 +3148,7 @@ function TransfersScreen({ transfers, accounts, ipos = [], onEdit, onDelete }) {
             flex: 1, padding: "10px 0", border: "none", borderRadius: 8, cursor: "pointer",
             fontFamily: "Inter, sans-serif", fontWeight: 600, fontSize: 13,
             background: view === id ? COLORS.navy : "transparent",
-            color: view === id ? "#fff" : COLORS.inkSoft,
+            color: view === id ? COLORS.surface : COLORS.inkSoft,
           }}>{label}</button>
         ))}
       </div>
@@ -2736,7 +3252,7 @@ function ReconciliationView({ transfers, accounts }) {
 
 function TransferList({ transfers, accounts, ipos = [], onEdit, onDelete }) {
   const [search, setSearch] = useState("");
-  const [filter, setFilter] = useState("all");
+  const [filter, setFilter] = useState([]);
   const [sort, setSort] = useState("recent");
 
   const name = (id) => accounts.find((a) => a.id === id)?.name || "Unknown";
@@ -2757,18 +3273,21 @@ function TransferList({ transfers, accounts, ipos = [], onEdit, onDelete }) {
           const hay = `${name(t.fromAccountId)} ${name(t.toAccountId)} ${t.remarks || ""} ${ipoName(t.relatedIpoId)}`.toLowerCase();
           if (!hay.includes(q)) return false;
         }
-        if (filter === "linked") return !!t.relatedIpoId;
-        if (filter === "unlinked") return !t.relatedIpoId;
-        if (filter.startsWith("acct:")) {
-          const id = filter.slice(5);
-          return t.fromAccountId === id || t.toAccountId === id;
-        }
-        return true;
+        if (!filter.length) return true;
+        return filter.some((f) => {
+          if (f === "linked") return !!t.relatedIpoId;
+          if (f === "unlinked") return !t.relatedIpoId;
+          if (f.startsWith("acct:")) {
+            const id = f.slice(5);
+            return t.fromAccountId === id || t.toAccountId === id;
+          }
+          return true;
+        });
       })
       .sort(cmp);
   }, [transfers, accounts, ipos, search, filter, sort]);
 
-  if (transfers.length === 0) return <EmptyState text="No fund transfers logged yet. Tap + to record one." />;
+  if (transfers.length === 0) return <EmptyState text="No fund transfers logged yet. Tap + to record one." icon={ArrowRightLeft} subtitle="Track money moved between accounts for IPO applications." />;
 
   const linked = transfers.filter((t) => t.relatedIpoId).length;
 
@@ -2778,7 +3297,6 @@ function TransferList({ transfers, accounts, ipos = [], onEdit, onDelete }) {
         search={search} setSearch={setSearch} placeholder="Search account, IPO or remark"
         filter={filter} setFilter={setFilter}
         filters={[
-          { id: "all", label: "All", count: transfers.length },
           { id: "linked", label: "For an IPO", count: linked },
           { id: "unlinked", label: "Unlinked", count: transfers.length - linked },
           ...accounts.slice(0, 6).map((a) => ({ id: `acct:${a.id}`, label: a.name })),
@@ -2810,7 +3328,7 @@ function TransferList({ transfers, accounts, ipos = [], onEdit, onDelete }) {
               <ArrowRightLeft size={13} color={COLORS.gold} style={{ flexShrink: 0 }} />
               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name(t.toAccountId)}</span>
             </div>
-            <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, color: COLORS.navy, flexShrink: 0 }}>{inrOrDash(t.amount)}</span>
+            <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, color: COLORS.ink, flexShrink: 0 }}>{inrOrDash(t.amount)}</span>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 2 }}>
             <div
@@ -2825,7 +3343,7 @@ function TransferList({ transfers, accounts, ipos = [], onEdit, onDelete }) {
             </div>
             <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
               <button onClick={() => onEdit(t)} aria-label="Edit transfer" style={smallIconBtn}><Pencil size={13} color={COLORS.inkSoft} /></button>
-              <button onClick={() => { if (confirm("Delete this transfer? It can be put back from Sync & Data.")) onDelete(t.id); }} aria-label="Delete transfer" style={smallIconBtn}><Trash2 size={13} color={COLORS.red} /></button>
+              <button onClick={() => { if (confirm("Delete this transfer?")) onDelete(t.id); }} aria-label="Delete transfer" style={smallIconBtn}><Trash2 size={13} color={COLORS.red} /></button>
             </div>
           </div>
         </div>
@@ -2857,8 +3375,8 @@ function IpoFormSheet({ initial, onClose, onSave }) {
       <Field label="Price per Share (₹)"><Input type="number" inputMode="numeric" value={f.priceBand} onChange={set("priceBand")} placeholder="e.g. 285" /></Field>
       <Field label="Lot Size (shares)"><Input type="number" inputMode="numeric" value={f.lotSize} onChange={set("lotSize")} placeholder="e.g. 52" /></Field>
 
-      {/* Dates come from BSE and are shown rather than typed — every one was a
-          duplicate of something the exchange already publishes. But BSE has no
+      {/* Dates come from Upstox and are shown rather than typed — every one was a
+          duplicate of something the exchange already publishes. But Upstox has no
           record of some issues, and then a wrong date can only be corrected by
           hand, so the inputs are a click away rather than gone. */}
       {!editDates ? (
@@ -2890,14 +3408,14 @@ function IpoFormSheet({ initial, onClose, onSave }) {
             : listingDateOf(f).date && <span>Lists {fmtDate(listingDateOf(f).date)} (expected)</span>}
           {!(f.openDate || f.closeDate || f.listingDate) && (
             <span style={{ fontFamily: "Inter, sans-serif" }}>
-              BSE has none for this issue. Refreshing prices fills them in when it does.
+              Upstox has none for this issue. Refreshing prices fills them in when it does.
             </span>
           )}
         </div>
       ) : (
         <>
           <div style={{ fontSize: 11.5, color: COLORS.inkSoft, marginBottom: 10 }}>
-            A refresh overwrites these whenever BSE has its own value.
+            A refresh overwrites these whenever Upstox has its own value.
           </div>
           <Field label="Opens"><Input type="date" value={f.openDate || ""} onChange={set("openDate")} /></Field>
           <Field label="Closes — last day to apply"><Input type="date" value={f.closeDate || ""} onChange={set("closeDate")} /></Field>
@@ -2905,7 +3423,7 @@ function IpoFormSheet({ initial, onClose, onSave }) {
           <Field label="Listing date"><Input type="date" value={f.listingDate || ""} onChange={set("listingDate")} /></Field>
         </>
       )}
-      <Field label={f.listingPriceSource === "bse-open" ? "Listing Price — day-one open (from BSE, ₹)" : f.listingPriceSource === "bse-close" ? "Listing Day Close (from BSE, ₹)" : "Listing Price (optional, ₹)"}>
+      <Field label={f.listingPriceSource === "bse-open" ? "Listing Price — day-one open (from Upstox, ₹)" : f.listingPriceSource === "bse-close" ? "Listing Day Close (from Upstox, ₹)" : "Listing Price (optional, ₹)"}>
         <Input
           type="number" inputMode="numeric" value={f.listingPrice}
           // Typing over it makes it yours, so it is no longer BSE's close.
@@ -2930,6 +3448,7 @@ function ApplicationFormSheet({ initial, ipo, accounts, onClose, onSave }) {
   });
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   const setBool = (k) => (e) => setF({ ...f, [k]: e.target.checked });
+  const lotSize = Number(ipo?.lotSize) || 0;
 
   /* A full allotment is the whole application: lots x lot size. Left blank it
      silently values the holding at nothing — no shares, no capital deployed, no
@@ -2937,14 +3456,26 @@ function ApplicationFormSheet({ initial, ipo, accounts, onClose, onSave }) {
      the bulk sheet does. Still editable, for the odd partial. */
   const setStatus = (e) => {
     const allotmentStatus = e.target.value;
-    const lot = Number(ipo?.lotSize) || 0;
     const next = { ...f, allotmentStatus };
-    if (allotmentStatus === "Allotted" && lot > 0) {
-      next.sharesAllotted = String(lot * (Number(f.lots) || 1));
+    if (allotmentStatus === "Allotted" && lotSize > 0) {
+      next.sharesAllotted = String(lotSize * (Number(f.lots) || 1));
     } else if (allotmentStatus === "Not Allotted" || allotmentStatus === "Pending") {
       next.sharesAllotted = "";
     }
     setF(next);
+  };
+
+  /* The user only ever tells the ledger how many lots were allotted; the
+     share count is arithmetic (lots x lot size), not something to type in
+     and get wrong. Read back from sharesAllotted so an existing record still
+     shows the right lot count even though only shares were ever stored. */
+  const lotsAllottedValue = f.sharesAllotted && lotSize
+    ? String(Math.round(Number(f.sharesAllotted) / lotSize))
+    : "";
+  const setLotsAllotted = (e) => {
+    const lots = e.target.value;
+    const shares = lotSize && lots !== "" ? String(lotSize * (Number(lots) || 0)) : "";
+    setF({ ...f, sharesAllotted: shares });
   };
 
   return (
@@ -2959,8 +3490,17 @@ function ApplicationFormSheet({ initial, ipo, accounts, onClose, onSave }) {
         <Input value={f.appliedFor} onChange={set("appliedFor")} placeholder="Leave blank if same as account holder" />
       </Field>
       <div style={{ display: "flex", gap: 10 }}>
-        <div style={{ flex: 1 }}><Field label="Lots"><Input type="number" inputMode="numeric" value={f.lots} onChange={set("lots")} /></Field></div>
-        <div style={{ flex: 1 }}><Field label="Amount Blocked (₹)"><Input type="number" inputMode="numeric" value={f.amountBlocked} onChange={set("amountBlocked")} /></Field></div>
+        <div style={{ flex: 1 }}><Field label="Lots"><Input type="number" inputMode="numeric" value={f.lots} onChange={(e) => {
+          const lots = e.target.value;
+          const next = { ...f, lots };
+          if (lotSize > 0 && Number(ipo?.priceBand) > 0) next.amountBlocked = String((Number(lots) || 0) * lotSize * Number(ipo.priceBand));
+          setF(next);
+        }} /></Field></div>
+        <div style={{ flex: 1 }}><Field label="Amount Blocked (₹)">
+          <div style={{ ...inputStyle, background: COLORS.bg, color: COLORS.inkSoft, display: "flex", alignItems: "center" }}>
+            {f.amountBlocked ? inr(f.amountBlocked) : "—"}
+          </div>
+        </Field></div>
       </div>
       <Field label="Allotment Status">
         <Select value={f.allotmentStatus} onChange={setStatus}>
@@ -2968,7 +3508,12 @@ function ApplicationFormSheet({ initial, ipo, accounts, onClose, onSave }) {
         </Select>
       </Field>
       {(f.allotmentStatus === "Allotted" || f.allotmentStatus === "Partial") && (
-        <Field label="Shares Allotted"><Input type="number" inputMode="numeric" value={f.sharesAllotted} onChange={set("sharesAllotted")} /></Field>
+        <Field label="Lots Allotted">
+          <Input
+            type="number" inputMode="numeric" min="0" value={lotsAllottedValue} onChange={setLotsAllotted}
+            placeholder={lotSize ? "" : "Set the IPO's lot size to compute shares"}
+          />
+        </Field>
       )}
       <Field label="Sold?">
         <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, minHeight: 44 }}>
@@ -3083,12 +3628,6 @@ function TransferFormSheet({ initial, accounts, ipos, onClose, onSave }) {
    SYNC & DATA
 ---------------------------------------------------------- */
 
-const TRASH_KINDS = {
-  ipo: "IPO",
-  account: "Account",
-  transfer: "Transfer",
-  application: "Application",
-};
 
 /* How old the figure on screen is, in the terms someone would ask it in. */
 function priceAge(asOf) {
@@ -3102,14 +3641,10 @@ function priceAge(asOf) {
   return hrs < 12 ? `${hrs} hr ago (${at})` : `as of ${at}`;
 }
 
-function DataSheet({ state, session, cloudOn, syncing, syncError, lastSync, onClose, onSyncNow, onReplaceAll, onRestore, onSignOut, pricing, priceInfo, onRefreshPrices }) {
-  const [importText, setImportText] = useState("");
+function DataSheet({ state, session, cloudOn, syncing, syncError, lastSync, onClose, onSyncNow, onSignOut, pricing, priceInfo, onRefreshPrices }) {
   const [notice, setNotice] = useState("");
-  const [showImport, setShowImport] = useState(false);
-  const [showTrash, setShowTrash] = useState(false);
 
-  const counts = `${state.accounts.length} accounts · ${state.ipos.length} IPOs · ${state.transfers.length} transfers`
-    + ((state.trash || []).length ? ` · ${state.trash.length} deleted` : "");
+  const counts = `${state.accounts.length} accounts · ${state.ipos.length} IPOs · ${state.transfers.length} transfers`;
 
   const copyExport = async () => {
     try {
@@ -3133,28 +3668,7 @@ function DataSheet({ state, session, cloudOn, syncing, syncError, lastSync, onCl
     setNotice("Backup downloaded.");
   };
 
-  const runImport = (mode) => {
-    let incoming;
-    try {
-      incoming = parseImport(importText);
-    } catch (e) {
-      setNotice(e.message || "That does not look like a ledger backup.");
-      return;
-    }
-    if (mode === "replace") {
-      if (!confirm("Replace everything currently in this ledger with the pasted data?")) return;
-      onReplaceAll(incoming);
-    } else {
-      onReplaceAll({
-        accounts: mergeById(state.accounts, incoming.accounts),
-        ipos: mergeIpos(state.ipos, incoming.ipos),
-        transfers: mergeById(state.transfers, incoming.transfers),
-      });
-    }
-    setImportText("");
-    setShowImport(false);
-    setNotice(mode === "replace" ? "Ledger replaced." : "Entries merged in.");
-  };
+
 
   return (
     <Sheet title="Sync & Data" onClose={onClose}>
@@ -3192,125 +3706,37 @@ function DataSheet({ state, session, cloudOn, syncing, syncError, lastSync, onCl
         </PrimaryButton>
       )}
 
-      <div style={{ height: 18 }} />
+      {/* Prices refresh on their own, but a manual pull belongs here: it says
+          how fresh the figure is and gives you a way to insist. What it must
+          not say is how the matching worked internally — the match count
+          could disagree with the price actually shown on a card, which reads
+          as a bug even when nothing is wrong. */}
+      <div style={{ marginTop: 18 }}>
       <SectionLabel>Market prices</SectionLabel>
-      <div style={{
-        background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 12,
-        padding: "12px 14px", marginBottom: 8, fontSize: 12,
-        color: priceInfo?.error ? COLORS.red : COLORS.inkSoft,
-      }}>
-        {priceInfo?.error
-          ? priceInfo.error
-          : priceInfo?.asOf
-            ? `${priceInfo.matched} of ${priceInfo.total} IPOs matched on BSE`
-              + `${priceInfo.reblocked ? ` · ${priceInfo.reblocked} blocked amounts recalculated` : ""}`
-              // Say which price it is. "Now" on a card is the last trade, which
-              // outside market hours is simply where the day closed.
-              + ` · last traded price, ${priceAge(priceInfo.asOf)}`
-            : "Not updated yet. Unrealised gains use the listing price until you do."}
-      </div>
-      <PrimaryButton ghost onClick={() => onRefreshPrices().catch(() => {})} disabled={pricing}>
-        {pricing ? "Fetching from BSE…" : "Update market prices"}
-      </PrimaryButton>
-
-      <div style={{ height: 18 }} />
-      <SectionLabel>Backup</SectionLabel>
-      <div style={{ display: "flex", gap: 10 }}>
-        <div style={{ flex: 1 }}><PrimaryButton ghost onClick={copyExport}>Copy JSON</PrimaryButton></div>
-        <div style={{ flex: 1 }}>
-          <PrimaryButton ghost onClick={downloadExport}>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-              <DownloadIcon size={14} color={COLORS.ink} /> Download
-            </span>
-          </PrimaryButton>
-        </div>
-      </div>
-
-      <div style={{ height: 12 }} />
-
-      {/* Deleted records are kept, not removed, so this is the way back. */}
-      <SectionLabel>Deleted ({(state.trash || []).length})</SectionLabel>
-      {cloudOn && trashSyncIsBlocked() && (
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
         <div style={{
-          background: COLORS.goldSoft, borderRadius: 10, padding: "9px 12px", marginBottom: 10,
-          fontSize: 12, color: COLORS.ink, display: "flex", gap: 8, alignItems: "flex-start",
+          flex: 1, minWidth: 0, fontSize: 12, color: priceInfo?.error ? COLORS.red : COLORS.inkSoft,
+          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
         }}>
-          <AlertTriangle size={14} color={COLORS.gold} style={{ flexShrink: 0, marginTop: 1 }} />
-          <span>
-            Deleted records are kept on this device but are not syncing yet — the cloud table
-            was created before they existed. Run <strong>migrate-trash.sql</strong> once in the
-            Supabase SQL editor and they will sync like everything else. The rest of the ledger
-            is syncing normally.
-          </span>
+          {priceInfo?.error
+            ? priceInfo.error
+            : pricing
+              ? "Updating market prices…"
+              : priceInfo?.asOf
+                ? `Prices updated ${priceAge(priceInfo.asOf)}`
+                : "Not updated yet"}
         </div>
-      )}
-      {(state.trash || []).length === 0 ? (
-        <div style={{ fontSize: 12, color: COLORS.inkSoft, marginBottom: 12 }}>
-          Nothing deleted. When you do delete something it is kept here, and can be put back.
-        </div>
-      ) : (
-        <>
-          <div style={{ fontSize: 12, color: COLORS.inkSoft, marginBottom: 8 }}>
-            Kept in full, and included in every backup and sync.
-          </div>
-          {!showTrash ? (
-            <PrimaryButton ghost onClick={() => setShowTrash(true)}>
-              Show {(state.trash || []).length} deleted item{(state.trash || []).length === 1 ? "" : "s"}
-            </PrimaryButton>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 12 }}>
-              {(state.trash || []).map((t) => (
-                <div key={t.id} style={{
-                  background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 10,
-                  padding: "10px 12px", display: "flex", alignItems: "center", gap: 10,
-                }}>
-                  <div style={{ minWidth: 0, flex: 1 }}>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: COLORS.ink, overflowWrap: "anywhere" }}>
-                      {t.label || "Untitled"}
-                    </div>
-                    <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: COLORS.inkSoft, marginTop: 2 }}>
-                      {TRASH_KINDS[t.kind] || t.kind}
-                      {t.deletedAt ? ` · ${fmtDate(String(t.deletedAt).slice(0, 10))}` : ""}
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => onRestore(t.id)}
-                    style={{ ...chipBase, padding: "6px 10px", flexShrink: 0 }}
-                  >Restore</button>
-                </div>
-              ))}
-            </div>
-          )}
-        </>
-      )}
+        <button
+          onClick={() => onRefreshPrices().catch(() => {})}
+          disabled={pricing}
+          style={{
+            ...chipBase, flexShrink: 0, color: COLORS.navy, fontWeight: 700,
+            opacity: pricing ? 0.6 : 1, cursor: pricing ? "default" : "pointer",
+          }}
+        >{pricing ? "Updating…" : "Refresh"}</button>
+      </div>
+      </div>
 
-      <div style={{ height: 12 }} />
-      {!showImport ? (
-        <PrimaryButton ghost onClick={() => setShowImport(true)}>Restore from a backup…</PrimaryButton>
-      ) : (
-        <>
-          <Field label="Paste backup JSON">
-            <textarea
-              value={importText}
-              onChange={(e) => setImportText(e.target.value)}
-              rows={6}
-              placeholder='{ "accounts": [...], "ipos": [...], "transfers": [...] }'
-              style={{ ...inputStyle, resize: "vertical", fontFamily: "'JetBrains Mono', monospace", fontSize: 12 }}
-            />
-          </Field>
-          <div style={{ display: "flex", gap: 10 }}>
-            <div style={{ flex: 1 }}>
-              <PrimaryButton ghost onClick={() => runImport("merge")} disabled={!importText.trim()}>Merge in</PrimaryButton>
-            </div>
-            <div style={{ flex: 1 }}>
-              <PrimaryButton danger onClick={() => runImport("replace")} disabled={!importText.trim()}>Replace all</PrimaryButton>
-            </div>
-          </div>
-          <div style={{ fontSize: 11.5, color: COLORS.inkSoft, marginTop: 8 }}>
-            Merge keeps everything already here and only adds entries it does not have.
-          </div>
-        </>
-      )}
 
       {notice && (
         <div style={{
@@ -3379,7 +3805,7 @@ function AuthScreen({ mode, setMode, notice }) {
         width: "100%", maxWidth: 420, background: COLORS.surface, borderRadius: 18,
         padding: 24, boxShadow: "0 12px 40px rgba(0,0,0,.10)", border: `1px solid ${COLORS.border}`,
       }}>
-        <div style={{ fontFamily: "'Fraunces', serif", fontSize: 26, fontWeight: 700, color: COLORS.navyDeep }}>
+        <div style={{ fontFamily: "'Fraunces', serif", fontSize: 26, fontWeight: 700, color: COLORS.heading }}>
           The Ledger
         </div>
         <div style={{
@@ -3492,7 +3918,7 @@ function BulkApplySheet({ ipo, accounts, onClose, onSave }) {
         background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 12,
         padding: "10px 12px", marginBottom: 14,
       }}>
-        <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 600, fontSize: 15, color: COLORS.navyDeep }}>{ipo.company}</div>
+        <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 600, fontSize: 15, color: COLORS.heading }}>{ipo.company}</div>
         <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11.5, color: COLORS.inkSoft, marginTop: 3 }}>
           ₹{ipo.priceBand || "—"}/sh · lot {ipo.lotSize || "—"} sh
           {lotSizeKnown ? ` · ₹${(Number(ipo.lotSize) * Number(ipo.priceBand)).toLocaleString("en-IN")} per lot` : ""}
@@ -3593,28 +4019,35 @@ function BulkApplySheet({ ipo, accounts, onClose, onSave }) {
 
 function BulkStatusSheet({ ipo, accounts, onClose, onSave }) {
   const apps = ipo.applications || [];
+  const fullLot = Number(ipo.lotSize) || 0;
+  const lotsFromShares = (shares) => (fullLot && shares ? String(Math.round(Number(shares) / fullLot)) : "");
+
   const [draft, setDraft] = useState(() => {
     const d = {};
     apps.forEach((a) => {
-      d[a.id] = { allotmentStatus: a.allotmentStatus || "Pending", sharesAllotted: a.sharesAllotted || "" };
+      const status = a.allotmentStatus || "Pending";
+      const needsLots = status === "Allotted" || status === "Partial";
+      const lots = needsLots
+        ? (lotsFromShares(a.sharesAllotted) || (status === "Allotted" ? String(a.lots || 1) : ""))
+        : "";
+      d[a.id] = { allotmentStatus: status, lotsAllotted: lots };
     });
     return d;
   });
 
   const nameOf = (id) => accounts.find((a) => a.id === id)?.name || "Unknown account";
-  const fullLot = Number(ipo.lotSize) || 0;
 
-  const sharesFor = (app, status, current) => {
-    if (status === "Allotted" && fullLot) return String(fullLot * (Number(app.lots) || 1));
+  const lotsFor = (app, status, current) => {
+    if (status === "Allotted") return String(Number(app.lots) || 1);
     if (status === "Not Allotted" || status === "Pending") return "";
-    return current;
+    return current; // Partial: keep whatever is there for the user to correct
   };
 
   const setAll = (status) => {
     setDraft((d) => {
       const next = { ...d };
       apps.forEach((a) => {
-        next[a.id] = { allotmentStatus: status, sharesAllotted: sharesFor(a, status, d[a.id].sharesAllotted) };
+        next[a.id] = { allotmentStatus: status, lotsAllotted: lotsFor(a, status, d[a.id].lotsAllotted) };
       });
       return next;
     });
@@ -3623,7 +4056,7 @@ function BulkStatusSheet({ ipo, accounts, onClose, onSave }) {
   const setOne = (app, status) => {
     setDraft((d) => ({
       ...d,
-      [app.id]: { allotmentStatus: status, sharesAllotted: sharesFor(app, status, d[app.id].sharesAllotted) },
+      [app.id]: { allotmentStatus: status, lotsAllotted: lotsFor(app, status, d[app.id].lotsAllotted) },
     }));
   };
 
@@ -3634,9 +4067,25 @@ function BulkStatusSheet({ ipo, accounts, onClose, onSave }) {
     return c;
   }, {});
 
+  /* The user only ever enters lots; the parent still expects sharesAllotted
+     on each application record, so that arithmetic happens once, here, on
+     save — never as something typed in. */
+  const save = () => {
+    const out = {};
+    Object.entries(draft).forEach(([id, v]) => {
+      const lots = Number(v.lotsAllotted) || 0;
+      const needsShares = v.allotmentStatus === "Allotted" || v.allotmentStatus === "Partial";
+      out[id] = {
+        allotmentStatus: v.allotmentStatus,
+        sharesAllotted: needsShares && fullLot && lots ? String(lots * fullLot) : "",
+      };
+    });
+    onSave(out);
+  };
+
   return (
     <Sheet title="Record allotment" onClose={onClose}>
-      <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 600, fontSize: 15, color: COLORS.navyDeep, marginBottom: 4 }}>
+      <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 600, fontSize: 15, color: COLORS.heading, marginBottom: 4 }}>
         {ipo.company}
       </div>
       <div style={{ fontSize: 12, color: COLORS.inkSoft, marginBottom: 14 }}>
@@ -3653,7 +4102,7 @@ function BulkStatusSheet({ ipo, accounts, onClose, onSave }) {
         {apps.map((app) => {
           const d = draft[app.id];
           const meta = STATUS_META[d.allotmentStatus] || STATUS_META.Pending;
-          const needsShares = d.allotmentStatus === "Allotted" || d.allotmentStatus === "Partial";
+          const needsLots = d.allotmentStatus === "Allotted" || d.allotmentStatus === "Partial";
           return (
             <div key={app.id} style={{
               background: COLORS.surface, border: `1px solid ${COLORS.border}`,
@@ -3663,7 +4112,7 @@ function BulkStatusSheet({ ipo, accounts, onClose, onSave }) {
                 <div style={{ minWidth: 0 }}>
                   <div style={{ fontWeight: 600, fontSize: 14, color: COLORS.ink }}>{nameOf(app.accountId)}</div>
                   <div style={{ fontSize: 11, color: COLORS.inkSoft, fontFamily: "'JetBrains Mono', monospace" }}>
-                    {app.lots || 0} lot(s) · {inrOrDash(app.amountBlocked)}
+                    {app.lots || 0} lot(s) applied · {inrOrDash(app.amountBlocked)}
                   </div>
                 </div>
                 <Select
@@ -3675,15 +4124,18 @@ function BulkStatusSheet({ ipo, accounts, onClose, onSave }) {
                   {ALLOTMENT_STATUSES.map((s) => <option key={s}>{s}</option>)}
                 </Select>
               </div>
-              {needsShares && (
+              {needsLots && (
                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
-                  <span style={{ fontSize: 11, color: COLORS.inkSoft }}>Shares allotted</span>
+                  <span style={{ fontSize: 11, color: COLORS.inkSoft }}>Lots allotted</span>
                   <input
-                    type="number" inputMode="numeric" value={d.sharesAllotted}
-                    onChange={(e) => setDraft((x) => ({ ...x, [app.id]: { ...x[app.id], sharesAllotted: e.target.value } }))}
-                    aria-label={`Shares for ${nameOf(app.accountId)}`}
-                    style={{ ...inputStyle, width: 100, minHeight: 38, padding: "6px 8px" }}
+                    type="number" inputMode="numeric" min="0" value={d.lotsAllotted}
+                    onChange={(e) => setDraft((x) => ({ ...x, [app.id]: { ...x[app.id], lotsAllotted: e.target.value } }))}
+                    aria-label={`Lots allotted for ${nameOf(app.accountId)}`}
+                    style={{ ...inputStyle, width: 90, minHeight: 38, padding: "6px 8px" }}
                   />
+                  {fullLot > 0 && d.lotsAllotted !== "" && (
+                    <span style={{ fontSize: 11, color: COLORS.inkSoft }}>= {Number(d.lotsAllotted) * fullLot} sh</span>
+                  )}
                 </div>
               )}
             </div>
@@ -3699,7 +4151,7 @@ function BulkStatusSheet({ ipo, accounts, onClose, onSave }) {
       </div>
 
       <StickyFooter>
-        <PrimaryButton onClick={() => onSave(draft)}>Save all {apps.length}</PrimaryButton>
+        <PrimaryButton onClick={save}>Save all {apps.length}</PrimaryButton>
       </StickyFooter>
     </Sheet>
   );
@@ -3770,7 +4222,7 @@ function LiveIposSheet({ existing, onClose, onImport }) {
         let note = "";
         if (mode === "current") {
           rows = (data.ipos || []).map((r) => ({ ...r, listedOn: "" }));
-          note = "Issues and subscription from NSE; lot size and the retail book from BSE.";
+          note = "Open and forthcoming issues, from Upstox.";
         } else {
           /* Only the chosen year, since the feed is cumulative from it. Judged
              on the listing date, or the close date for an issue that has closed
@@ -3954,7 +4406,7 @@ function LiveIposSheet({ existing, onClose, onImport }) {
     })));
   };
 
-  const years = [thisYear, thisYear - 1, thisYear - 2];
+  const years = [thisYear];
 
   return (
     <Sheet title={mode === "current" ? "Open & upcoming IPOs" : `IPOs of ${year}`} onClose={onClose}>
@@ -4062,7 +4514,7 @@ function LiveIposSheet({ existing, onClose, onImport }) {
                     <div style={{ minWidth: 0, flex: 1 }}>
                       <div style={{ display: "flex", justifyContent: "space-between", gap: 6, alignItems: "flex-start" }}>
                         <span style={{ fontWeight: 600, fontSize: 14, color: COLORS.ink }}>{r.company}</span>
-                        {r.category && <Badge color={COLORS.navy} bg="#EAEFF5">{r.category}</Badge>}
+                        {r.category && <Badge color={COLORS.navy} bg={COLORS.chip}>{r.category}</Badge>}
                       </div>
 
                       <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: COLORS.inkSoft, marginTop: 4 }}>
@@ -4094,11 +4546,11 @@ function LiveIposSheet({ existing, onClose, onImport }) {
                             color={r.subscription >= 1 ? COLORS.green : COLORS.gold}
                             bg={r.subscription >= 1 ? COLORS.greenSoft : COLORS.goldSoft}
                           >
-                            {r.subscription.toFixed(2)}× subscribed
+                            {r.subscription.toFixed(2)}× sub
                           </Badge>
                         )}
                         {r.categories && r.categories.retail != null && (
-                          <Badge color={COLORS.navy} bg="#EAEFF5">retail {r.categories.retail.toFixed(1)}×</Badge>
+                          <Badge color={COLORS.navy} bg={COLORS.chip}>{r.categories.retail.toFixed(1)}× retail</Badge>
                         )}
                         {already && <span style={{ fontSize: 11, color: COLORS.gold }}>already in your ledger</span>}
                       </div>
