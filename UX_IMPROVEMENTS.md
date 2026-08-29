@@ -4,7 +4,7 @@ Branch: `feat/upstox-migration`
 
 ## Scope
 
-This document tracks the agreed UX/UI improvements for the current IPO Tracker. Work is intentionally incremental: **one fix at a time, one commit per fix**. Nothing is pushed to remote until the current phase is complete and reviewed.
+This document tracks the agreed UX/UI improvements and implementation history for the current IPO Tracker. Changes must be implemented in the application's actual React source wherever the behavior/UI already belongs there. Do not use post-render DOM manipulation as a substitute for fixing the React JSX/state logic.
 
 ## Explicitly excluded / declined
 
@@ -14,22 +14,73 @@ This document tracks the agreed UX/UI improvements for the current IPO Tracker. 
 - **Do not introduce unnecessary visual redesign.** Preserve the current ledger aesthetic and compact card layout.
 - Deleted records remain in the database silently for sync/data integrity, but there must be **no user-facing deleted-record/recovery flow**.
 
+## Implementation architecture rule — IMPORTANT
+
+### Fix the source, not the rendered DOM
+
+If a UI element, label, layout, form field, button, state, or interaction is rendered by `App.jsx`/React, fix it directly in the JSX and React state/handlers.
+
+**Do NOT create or use a separate JavaScript post-render enhancement layer to modify the same UI.** In particular:
+
+- Do not use `querySelector`, `TreeWalker`, MutationObserver, or text replacement to rename/remove React controls.
+- Do not use a separate `uxEnhancements.js` file to patch UI that can be correctly implemented in `App.jsx`.
+- Do not make React render one thing and then mutate it into something else after render.
+- Swipe gestures that belong to a React sheet should be implemented by the sheet component itself.
+- Form state and disabled/enabled states must come from React state, not DOM inspection.
+- Labels, grids, badges, fields, and actions should be changed at their actual JSX source.
+- If reconnect/sync behavior belongs in React effects, keep it in the React application rather than programmatically clicking rendered buttons from another script.
+
+`uxEnhancements.js` was introduced as a workaround during an unsuccessful implementation attempt. It is **not the intended architecture** and should be removed if it is not independently required after the real JSX implementation is completed.
+
+## Iteration / Git / deployment rule — IMPORTANT
+
+The user explicitly requires:
+
+**One iteration = all requested changes completed → inspect/test → one commit → one push.**
+
+Do not push individual fixes during an iteration. Do not create a commit for every tiny change. This is specifically to avoid unnecessary Vercel builds and build-limit bottlenecks.
+
+Before the single commit/push:
+- inspect all affected source files;
+- verify all requested items together;
+- remove obsolete workaround code;
+- check for regressions;
+- ensure the build is syntactically valid where possible.
+
+Never report an item as fixed merely because a workaround or CSS override was added. Confirm that the actual rendered React implementation contains the requested behavior.
+
+## Previous implementation/reporting failure — recorded for continuity
+
+The previous iteration was incorrectly reported as complete even though most requested changes were not actually reflected in the UI.
+
+Specific failures:
+
+- A DOM-level `uxEnhancements.js` workaround was used instead of changing the source JSX.
+- The workaround itself was not reliably connected to the React implementation.
+- Several changes were reported as fixed when the actual JSX still contained the old labels/controls.
+- `Add one` and `Apply in bulk` remained in the source/UI.
+- The date layout remained incorrect rather than becoming the requested 2×2 matrix.
+- Record Allotment continued to use shares instead of making lots the user input.
+- Edit Application did not correctly implement the requested editable/immutable-field behavior.
+- Market-price status changes were not reliably reflected in the actual source UI.
+- Multiple intermediate commits/pushes were made, contrary to the user's one-push-per-iteration requirement, causing unnecessary deployment/build activity.
+
+These reports must **not** be treated as completed work. The stable reference supplied by the user is:
+
+`e31bff6 — feat: polish detail sheet and reconnect UX`
+
+When recovering/reworking this iteration, use that stable point as the reference rather than assuming the previously reported fixes were correct.
+
 ## Phase 1 — Immediate UX / data-state improvements
 
 ### 1. Market-price status UX
 **Goal:** make the market-price area communicate useful status without exposing implementation details.
 
-Current problem:
-- All/most prices can be arriving successfully while the status can still say that an IPO was not matched on Upstox.
-- The user should not have to understand the distinction between identity matching, instrument lookup, and LTP retrieval.
-
 Target behavior:
-- Replace implementation-oriented wording such as `matched on Upstox` with a user-facing availability/status message.
-- Count an IPO as price-available only when a valid positive LTP is actually present.
-- If a price is unavailable, say so clearly rather than implying that the company failed to match when the real issue is data availability.
-- Keep the Upstox source indication where useful, but do not expose internal matching mechanics.
-- During refresh, show progress/working state without blocking the rest of the app.
-- On completion, show a concise freshness state.
+- Remove misleading implementation-oriented wording such as `X of Y IPOs matched on Upstox`.
+- Completion should show a concise freshness state such as `Prices updated 2 min ago`.
+- During refresh use `Updating market prices…`.
+- Keep the status and refresh action compact; they should not unnecessarily consume the full available row width.
 
 ### 2. Automatic online recovery / refresh
 **Goal:** when the app opens offline, local cached data is immediately usable; when connectivity returns, the app automatically refreshes/syncs without requiring a manual reload.
@@ -62,7 +113,72 @@ Required change:
 - Preserve existing behavior and confirmation/safety where appropriate.
 - Do not add new card height or new card controls.
 
-### 5. General mobile UX polish
+### 5. Detail-panel actions and notes
+
+Required behavior:
+- Remove **Add one** completely.
+- Rename **Apply in bulk** to **Apply IPO**.
+- Keep the explanatory note text under the Note field removed.
+- **Save Note** is disabled until the note is actually changed.
+- Save Note should be positioned naturally at the right of the note controls.
+- After saving, Save Note becomes disabled again until the note changes.
+
+### 6. Detail-panel dates
+
+The four dates must be a real fixed **2×2 matrix**, not a flexible four-item row:
+
+```text
+Open       | Close
+Allotment  | Listing
+```
+
+The labels and values should have consistent alignment across both columns.
+
+### 7. Detail-panel swipe dismissal
+
+Required behavior:
+- At the top of the detail panel, swipe down dismisses the panel.
+- If the panel is scrolled down, normal scrolling takes priority.
+- Touches beginning on inputs, textareas, selects, buttons, or links must not accidentally dismiss the panel.
+- Short panels without an internal scrollbar must also support swipe-down dismissal.
+- Implement this in the actual React sheet component, not with a DOM post-processing script.
+
+### 8. Application cards
+
+- Reduce application-card height slightly while preserving readability.
+- Do not introduce unnecessary typography variation.
+
+### 9. Edit Application form
+
+The form must allow editing of the fields that are intended to be mutable. IPO metadata/immutable fields must remain protected.
+
+Specific requirement from the user:
+- **Only allotted lots should be mutable for the allotment quantity.**
+- Do not expose raw share quantity as the user input for allotment.
+- Form typography should match the rest of the application form/UI.
+
+### 10. Record Allotment
+
+The user input must be:
+
+**Lots allotted**
+
+not:
+
+**Shares allotted / Quantity**
+
+The underlying share quantity may continue to be derived from:
+
+`lots allotted × IPO lot size`
+
+The user should never have to calculate or enter the share quantity manually.
+
+### 11. Light-theme allotment badges
+
+The **Allotted** and **Not Allotted** badges in the detail panel must visually match the stronger green/red treatment used by the allotment progress bar. The dark theme already looks acceptable and should not be unnecessarily changed.
+
+### 12. General mobile UX polish
+
 Apply only low-risk improvements that preserve the current visual language:
 - Clear pressed/loading states for interactive controls.
 - Minimum comfortable mobile tap targets.
@@ -100,15 +216,29 @@ Potential improvements to consider after Phase 1:
 
 ## Progress
 
+### Stable reference
+- [x] `e31bff6` identified by user as the recent stable commit.
+- [x] Subsequent incorrect implementation attempts identified and should not be treated as completed fixes.
+
 ### Phase 0 — Documentation
 - [x] Create this plan and progress tracker.
-- [ ] Commit documentation.
+- [x] Record implementation architecture rule: fix React JSX/state directly; do not use a JS DOM-enhancement layer.
+- [x] Record previous false completion reports and the one-push-per-iteration requirement.
 
 ### Phase 1
 - [ ] Market-price status UX
 - [ ] Automatic online recovery / refresh
 - [ ] Listing-day badge wording
 - [ ] Move card edit/delete actions to panel
+- [ ] Remove Add one
+- [ ] Rename Apply in bulk → Apply IPO
+- [ ] Note save dirty-state and positioning
+- [ ] Real 2×2 date matrix
+- [ ] Short-sheet swipe dismissal
+- [ ] Application-card height reduction
+- [ ] Edit Application mutable/immutable fields
+- [ ] Record Allotment lots input
+- [x] Light-theme Allotted / Not Allotted badge treatment (this is the only item previously observed to visibly change)
 - [ ] General low-risk mobile UX polish
 
 ### Phase 2
@@ -122,6 +252,10 @@ Potential improvements to consider after Phase 1:
 
 ## Working rule
 
-**One change → test/inspect → one commit → next change.**
+**Do not report an item as complete until it is verified in the actual React source and rendered behavior.**
 
-Do not push the phase until all approved items in that phase are complete and reviewed.
+**Do not create a separate JS DOM-enhancement file for functionality that belongs in the JSX/component implementation.**
+
+**Complete the entire requested iteration first, then make exactly ONE commit and ONE push.**
+
+This avoids unnecessary Vercel builds and preserves the user's deployment/build limit.
