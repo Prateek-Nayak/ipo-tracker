@@ -26,10 +26,16 @@ jobs:
               global t
               t,n=re.subn(pattern,repl,t,count=1,flags=re.S)
               if n!=1: raise SystemExit(f'{label}: {n}')
+          def exact(old,new,label):
+              global t
+              n=t.count(old)
+              if n!=1: raise SystemExit(f'{label}: {n}')
+              t=t.replace(old,new,1)
+
           sub(r'function IpoCard\(\{ ipo, accounts, onClick, onEdit, onDelete, showActions \}\) \{','function IpoCard({ ipo, accounts, onClick }) {','card signature')
           sub(r'\n      \{showActions && \(.*?\n      \)\}\n    </div>\n  \);\n\}','\n    </div>\n  );\n}','card actions')
           sub(r'function IpoList\(\{ ipos, accounts, onOpen, onEdit, onDelete \}\) \{','function IpoList({ ipos, accounts, onOpen }) {','list signature')
-          sub(r'\s+onEdit=\{\(ipo\) => onEdit\(ipo\)\}\s+onDelete=\{\(\) => onDelete\(ipo\.id\)\}\s+showActions />',' />','list card actions')
+          exact('''              onEdit={() => onEdit(ipo)} onDelete={() => onDelete(ipo.id)} showActions />''','''              />''','list card actions')
           sub(r'function IpoDetailSheet\(\{ ipo, accounts, onClose, onEditIpo, onAddApplication, onBulkApply, onBulkStatus, onEditApplication, onDeleteApplication \}\) \{','function IpoDetailSheet({ ipo, accounts, onClose, onDeleteIpo, onSaveNote, onAddApplication, onBulkApply, onBulkStatus, onEditApplication, onDeleteApplication }) {','detail signature')
           dm=re.search(r'function IpoDetailSheet\(\{.*?\nfunction ApplicationRow',t,re.S)
           d=dm.group(0) if dm else None
