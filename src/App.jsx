@@ -760,15 +760,19 @@ function mergeIpos(current, incoming) {
    hairline, on a background barely off the card — a filled block of colour on
    every row is what made a list of IPOs read as a colour chart. */
 function Badge({ children, color, bg, strong }) {
-  /* The Allotted / Not Allotted badges need to read as clearly as the
-     progress bar. In light mode the border goes heavier and the font
-     bolder so the colour carries; dark mode already reads fine as-is. */
+  /* Strong badges (Allotted / Not Allotted) use the same green/red as the
+     allotment progress bar. At 8px font on a transparent background, those
+     colours look washed — so give them a light tinted fill, exactly as the
+     bar itself is a solid block of colour. */
   const emphasis = strong && !isDark();
+  const badgeBg = emphasis
+    ? (color === COLORS.green ? COLORS.greenSoft : color === COLORS.red ? COLORS.redSoft : "transparent")
+    : "transparent";
   return (
     <span
       style={{
-        color, background: "transparent",
-        border: `${emphasis ? 1.5 : 1}px solid ${color}`,
+        color, background: badgeBg,
+        border: `1px solid ${color}`,
         fontFamily: "'JetBrains Mono', monospace",
         fontSize: 8, fontWeight: emphasis ? 700 : 600, letterSpacing: 0.3,
         padding: "2px 7px", borderRadius: 5, whiteSpace: "nowrap",
@@ -827,16 +831,22 @@ function Sheet({ title, onClose, children }) {
     if (!body || body.scrollTop > 0) return;
     if (e.target.closest("input, textarea, select, button, a")) return;
     const y = e.touches[0].clientY;
-    touch.current = { active: true, startY: y, lastY: y };
+    touch.current = { active: true, startY: y, lastY: y, committed: false };
   };
   const onTouchMove = (e) => {
     const t = touch.current;
+    if (!t.active) return;
     const body = bodyRef.current;
-    if (!t.active || !body || body.scrollTop > 0) return;
+    // If the body has scrolled since the touch started, abandon the gesture.
+    if (body && body.scrollTop > 0) { t.active = false; setDragging(false); setDragY(0); return; }
     const y = e.touches[0].clientY;
     t.lastY = y;
     const delta = y - t.startY;
-    if (delta <= 0) return; // upward/no movement is ordinary scrolling
+    if (delta <= 0) { setDragging(false); setDragY(0); return; }
+    // Only commit to a drag after a meaningful threshold, so small scrolls
+    // don't accidentally start the dismiss gesture.
+    if (!t.committed && delta < 12) return;
+    t.committed = true;
     setDragging(true);
     setDragY(Math.min(delta, 240));
     if (e.cancelable) e.preventDefault();
@@ -848,7 +858,15 @@ function Sheet({ title, onClose, children }) {
     touch.current.active = false;
     setDragging(false);
     setDragY(0);
-    if (delta > 80 && bodyRef.current && bodyRef.current.scrollTop === 0) onClose();
+    // Higher threshold (120px) and must have committed to the gesture.
+    if (t.committed && delta > 120 && bodyRef.current && bodyRef.current.scrollTop === 0) {
+      // Delay close slightly so the touch event finishes and doesn't bleed
+      // through to the page behind, causing it to scroll.
+      requestAnimationFrame(() => {
+        window.scrollTo(0, window.scrollY); // freeze current scroll position
+        onClose();
+      });
+    }
   };
 
   return (
