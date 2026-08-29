@@ -193,7 +193,7 @@ Examples:
 ## Phase 2 — IPO detail/actions
 
 ### 10. Immutable IPO metadata
-Status: **Pending**
+Status: **Completed in this group**
 
 Remove the user-facing IPO edit flow for existing IPOs.
 
@@ -212,7 +212,7 @@ Exchange/Upstox-provided metadata should not be manually overridden:
 Existing application records remain user-managed.
 
 ### 11. Replace IPO edit with Notes
-Status: **Pending**
+Status: **Completed in this group**
 
 Add a `Note` field in the IPO detail screen.
 
@@ -226,7 +226,7 @@ It should:
 - be easy to edit from the detail screen.
 
 ### 12. Move card actions to logical detail/panel location
-Status: **Pending**
+Status: **Completed in this group**
 
 Remove pencil and delete icons from IPO cards.
 
@@ -309,3 +309,14 @@ Do not change the existing dark palette without explicit review.
 | — | Phase 1 | Pending | — |
 | — | Phase 2 | Pending | — |
 | — | Phase 3 | Pending | — |
+
+
+## Latest completed group
+
+### IPO detail/actions — completed
+
+- IPO cards no longer show edit/delete controls.
+- Existing IPO metadata is no longer user-editable from the UI.
+- IPO detail now provides a personal Note field backed by the existing `remarks` storage field for compatibility.
+- IPO deletion is available from the IPO detail action area.
+- Application edit/delete controls remain unchanged.

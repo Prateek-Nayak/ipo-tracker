@@ -1559,13 +1559,6 @@ export default function App() {
           <IpoList
             ipos={ipos} accounts={accounts}
             onOpen={(id) => setIpoDetail(id)}
-            onEdit={(ipo) => setIpoSheet({ ipo })}
-            onDelete={(id) => {
-              const gone = ipos.find((x) => x.id === id);
-              if (!gone) return;
-              discard("ipo", gone, gone.company || "Untitled IPO");
-              persistIpos(ipos.filter((x) => x.id !== id));
-            }}
           />
         )}
         {tab === "accounts" && (
@@ -1603,7 +1596,8 @@ export default function App() {
           ipo={ipos.find((i) => i.id === ipoDetail)}
           accounts={accounts}
           onClose={() => setIpoDetail(null)}
-          onEditIpo={(ipo) => { setIpoDetail(null); setIpoSheet({ ipo }); }}
+          onDeleteIpo={(id) => { const gone=ipos.find((x)=>x.id===id); if(!gone)return; discard("ipo",gone,gone.company||"Untitled IPO"); persistIpos(ipos.filter((x)=>x.id!==id)); setIpoDetail(null); }}
+          onSaveNote={(id,noteValue)=>{ persistIpos(ipos.map((i)=>i.id===id?{...i,remarks:noteValue}:i)); }}
           onAddApplication={(ipoId) => setAppSheet({ ipoId, application: null })}
           onBulkApply={(ipoId) => { setIpoDetail(null); setBulkApplyFor(ipoId); }}
           onBulkStatus={(ipoId) => { setIpoDetail(null); setBulkStatusFor(ipoId); }}
@@ -2337,7 +2331,7 @@ function ListControls({ search, setSearch, placeholder, filters, filter, setFilt
   );
 }
 
-function IpoList({ ipos, accounts, onOpen, onEdit, onDelete }) {
+function IpoList({ ipos, accounts, onOpen }) {
   const [search, setSearch] = useState("");
   /* No filters chosen means everything, so there is no "All" to select — an
      empty selection is what All meant. Several may be on at once. */
@@ -2440,7 +2434,7 @@ function IpoList({ ipos, accounts, onOpen, onEdit, onDelete }) {
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {shown.map((ipo) => (
             <IpoCard key={ipo.id} ipo={ipo} accounts={accounts} onClick={() => onOpen(ipo.id)}
-              onEdit={() => onEdit(ipo)} onDelete={() => onDelete(ipo.id)} showActions />
+              />
           ))}
         </div>
       )}
@@ -2562,7 +2556,7 @@ function AllotmentCounts({ tally }) {
   );
 }
 
-function IpoCard({ ipo, accounts, onClick, onEdit, onDelete, showActions }) {
+function IpoCard({ ipo, accounts, onClick }) {
   const tally = allotmentTally(ipo);
   const apps = ipo.applications || [];
   const totalLots = apps.reduce((s, a) => s + (Number(a.lots) || 0), 0);
@@ -2638,20 +2632,6 @@ function IpoCard({ ipo, accounts, onClick, onEdit, onDelete, showActions }) {
           <AllotmentBar tally={tally} tone={spine} />
         </div>
       </div>
-      {showActions && (
-        <div style={{ display: "flex", flexDirection: "column", borderLeft: `1px solid ${COLORS.border}` }}>
-          <button onClick={(e) => { e.stopPropagation(); onEdit(); }} aria-label="Edit IPO" style={iconBtnStyle}><Pencil size={14} color={COLORS.inkSoft} /></button>
-          <button onClick={(e) => {
-            e.stopPropagation();
-            // An IPO owns its applications, so deleting it deletes them too.
-            const n = apps.length;
-            const msg = n
-              ? `Delete ${ipo.company || "this IPO"} and its ${n} application${n === 1 ? "" : "s"}?`
-              : `Delete ${ipo.company || "this IPO entry"}?`;
-            if (confirm(msg)) onDelete();
-          }} aria-label="Delete IPO" style={{ ...iconBtnStyle, borderTop: `1px solid ${COLORS.border}` }}><Trash2 size={14} color={COLORS.red} /></button>
-        </div>
-      )}
     </div>
   );
 }
@@ -2661,11 +2641,15 @@ function IpoCard({ ipo, accounts, onClick, onEdit, onDelete, showActions }) {
    rather than fit inside it. */
 
 
-function IpoDetailSheet({ ipo, accounts, onClose, onEditIpo, onAddApplication, onBulkApply, onBulkStatus, onEditApplication, onDeleteApplication }) {
+function IpoDetailSheet({ ipo, accounts, onClose, onDeleteIpo, onSaveNote, onAddApplication, onBulkApply, onBulkStatus, onEditApplication, onDeleteApplication }) {
   if (!ipo) return null;
   const apps = ipo.applications || [];
   const tally = allotmentTally(ipo);
   const conflicts = panConflicts(ipo, accounts);
+  const [note, setNote] = useState(() => ipo.remarks || "");
+  const [noteSaved, setNoteSaved] = useState(false);
+  useEffect(() => { setNote(ipo.remarks || ""); setNoteSaved(false); }, [ipo.id, ipo.remarks]);
+  const saveNote = () => { onSaveNote(ipo.id, note); setNoteSaved(true); };
   return (
     <Sheet title={ipo.company} onClose={onClose}>
       <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
@@ -2702,16 +2686,14 @@ function IpoDetailSheet({ ipo, accounts, onClose, onEditIpo, onAddApplication, o
           ? <span>{hasListed(ipo) ? "Listed" : "Lists"} {fmtDate(ipo.listingDate)}</span>
           : listingDateOf(ipo).date && <span>Lists {fmtDate(listingDateOf(ipo).date)} (expected)</span>}
       </div>
-      {ipo.remarks && (
-        <div style={{ fontSize: 13, color: COLORS.ink, background: COLORS.goldSoft, borderRadius: 8, padding: "8px 10px", marginBottom: 10 }}>
-          {ipo.remarks}
+      <div style={{ marginBottom: 16 }}>
+        <SectionLabel>Note</SectionLabel>
+        <textarea value={note} onChange={(e) => { setNote(e.target.value); setNoteSaved(false); }} rows={3} placeholder="Add a personal note about this IPO" aria-label="IPO note" style={{ ...inputStyle, resize: "vertical", marginTop: 6 }} />
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginTop: 6 }}>
+          <span style={{ fontSize: 11, color: COLORS.inkSoft }}>Only this note is editable here.</span>
+          <button onClick={saveNote} style={{ ...chipBase, padding: "6px 10px", color: COLORS.navy, fontWeight: 700 }}>{noteSaved ? "Saved" : "Save note"}</button>
         </div>
-      )}
-
-      <button onClick={() => onEditIpo(ipo)} style={{
-        fontSize: 12.5, color: COLORS.navy, background: "none", border: "none", padding: 0,
-        marginBottom: 16, cursor: "pointer", fontWeight: 600, textDecoration: "underline",
-      }}>Edit IPO details</button>
+      </div>
 
       {conflicts.length > 0 && (
         <div style={{
@@ -2775,6 +2757,10 @@ function IpoDetailSheet({ ipo, accounts, onClose, onEditIpo, onAddApplication, o
           ))}
         </div>
       )}
+      <div style={{ marginTop: 20, paddingTop: 14, borderTop: `1px solid ${COLORS.border}` }}>
+        <SectionLabel>IPO actions</SectionLabel>
+        <button onClick={() => { const n=apps.length; const msg=n ? `Delete ${ipo.company || "this IPO"} and its ${n} application${n===1?"":"s"}?` : `Delete ${ipo.company || "this IPO entry"}?`; if(confirm(msg)) onDeleteIpo(ipo.id); }} style={{ width: "100%", marginTop: 6, minHeight: 44, borderRadius: 10, border: `1px solid ${COLORS.red}`, background: COLORS.redSoft, color: COLORS.red, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>Delete IPO</button>
+      </div>
     </Sheet>
   );
 }
