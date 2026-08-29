@@ -6,29 +6,20 @@ import { registerSW } from "./register-sw.jsx";
 import { inject } from "@vercel/analytics";
 import { bootstrapUpstoxMigration } from "./upstoxMigration.js";
 
-async function bootstrap() {
-  /* A one-time data migration must not be able to stop the app from starting:
-     whatever it fails at, there is still a ledger to show. */
-  try {
-    await bootstrapUpstoxMigration();
-  } catch (error) {
-    console.error("Migration step failed; continuing", error);
-  }
+/*
+ * Mount React first. The Upstox migration can involve network requests and
+ * must never block the first paint. Previously bootstrapUpstoxMigration() was
+ * awaited before createRoot(), leaving #root empty and producing a black
+ * screen for several seconds on a cold/reload start. App already has its own
+ * lazy/loading UI, so let that render immediately and do migration work in
+ * the background.
+ */
+const root = createRoot(document.getElementById("root"));
+root.render(<React.StrictMode><App /></React.StrictMode>);
 
-  createRoot(document.getElementById("root")).render(
-    <React.StrictMode><App /></React.StrictMode>
-  );
+registerSW();
+inject();
 
-  registerSW();
-  inject();
-
-}
-
-bootstrap().catch((error) => {
-  console.error("Application bootstrap failed", error);
-  createRoot(document.getElementById("root")).render(
-    <React.StrictMode><App /></React.StrictMode>
-  );
-  registerSW();
-  inject();
+void bootstrapUpstoxMigration().catch((error) => {
+  console.error("Background migration step failed; continuing", error);
 });
