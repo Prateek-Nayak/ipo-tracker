@@ -10,9 +10,9 @@ import { createPortal } from "react-dom";
 const COLORS_LIGHT = {
   bg: "#F7F5F0",
   surface: "#FFFFFF",
-  border: "#E4DFD3",
+  border: "#D4CFC3",
   ink: "#1C2333",
-  inkSoft: "#6B7280",
+  inkSoft: "#4B5563",
   navy: "#1F3A5F",
   navyDeep: "#152A44",
   gold: "#B08D57",
@@ -22,7 +22,7 @@ const COLORS_LIGHT = {
   red: "#A13D3D",
   redSoft: "#F5E4E2",
   /* Headings are the deep navy on paper, but that same colour is the header's
-     background — so it needs a name of its own, or a dark theme has to choose
+     background - so it needs a name of its own, or a dark theme has to choose
      between an invisible heading and a washed-out header. */
   heading: "#152A44",
   // What a button you press is made of, and the text that sits on it.
@@ -36,14 +36,14 @@ const COLORS_LIGHT = {
 
 /* The same ledger after dark, not a different app: warm paper becomes warm
    ink, and the brass, forest and brick keep their jobs. The greys are tinted
-   towards the navy rather than neutral — a flat #121212 under warm accents is
+   towards the navy rather than neutral - a flat #121212 under warm accents is
    what makes a dark theme look like a bug report. Surfaces lift as they come
    forward (bg < surface < border) so a card still reads as a card, and the
    accents are lightened to hold contrast against them rather than reused from
    the light palette, where they were chosen to sit on white. */
 const COLORS_DARK = {
   /* Near-neutral, very slightly warm. An earlier pass tinted these towards the
-     navy and the whole app read as blue-grey — the accents carry the colour,
+     navy and the whole app read as blue-grey - the accents carry the colour,
      the surfaces should not compete with them. */
   bg: "#000000",
   surface: "#0d0d0d",
@@ -217,9 +217,20 @@ const inr = (n) => "₹" + (Number(n) || 0).toLocaleString("en-IN", { maximumFra
 /* Not every field can be filled in. NSE never publishes lot size and omits the
    price band for some SME issues, so imported IPOs arrive incomplete. Treating
    a blank as zero turns "we don't know" into a confident ₹0, which is worse
-   than saying nothing — so unknown values render as an em dash instead. */
+   than saying nothing - so unknown values render as an em dash instead. */
 const isBlank = (v) => v === "" || v == null || !Number.isFinite(Number(v));
-const inrOrDash = (v) => (isBlank(v) ? "—" : inr(v));
+const inrOrDash = (v) => (isBlank(v) ? "--" : inr(v));
+const trimFields = (obj) => { const out = { ...obj }; for (const k in out) { if (typeof out[k] === "string") out[k] = out[k].trimEnd(); } return out; };
+
+function isNonTradingDay(iso) {
+  if (!iso) return false;
+  const d = new Date(iso + "T00:00:00");
+  const day = d.getDay();
+  if (day === 0 || day === 6) return "Weekend";
+  if (tradingHolidays.has(iso)) return "Trading holiday";
+  if (clearingHolidays.has(iso)) return "Clearing holiday";
+  return false;
+}
 
 /* The same normalisation the price API uses, so a company matches across
    sources: "Lumino Industries Limited" here, "LUMINO INDUSTRIES LTD" there. */
@@ -244,8 +255,8 @@ function valuationPrice(ipo) {
 }
 const isMarkedToMarket = (ipo) => Number(ipo?.currentPrice) > 0;
 
-/* Today's date on the Indian market calendar. Every date in this app — bidding
-   windows, listing days — is an IST date, while toISOString() gives the UTC one.
+/* Today's date on the Indian market calendar. Every date in this app - bidding
+   windows, listing days - is an IST date, while toISOString() gives the UTC one.
    Those disagree from 18:30 IST until midnight, which is exactly when someone
    checks the day's listings, and made an issue listing today read as tomorrow.
    Pinned to Asia/Kolkata rather than the device clock so it stays right abroad. */
@@ -275,7 +286,7 @@ const TABS = ["dashboard", "ipos", "transfers", "accounts"];
    needs them. Both are required, and which one applies depends on the event:
    allotment is settled by the clearing corporation, listing happens on the
    exchange floor, and the two calendars differ. In 2026 they differ on four
-   days — 26 August most instructively, a clearing holiday that was an ordinary
+   days - 26 August most instructively, a clearing holiday that was an ordinary
    trading day. Gaja Alternative closed on the 21st and listed on it; Augmont
    closed on the 25th and had its allotment pushed from the 26th to the 27th,
    and its listing out to the 31st. */
@@ -324,7 +335,7 @@ function addDays(iso, n, holidays) {
 const addTradingDays = (iso, n) => addDays(iso, n, tradingHolidays);
 const addClearingDays = (iso, n) => addDays(iso, n, clearingHolidays);
 
-/* The day the basis of allotment is settled — the day there is something to
+/* The day the basis of allotment is settled - the day there is something to
    record. No exchange feed publishes it, so unless it has been entered by hand
    it is worked out from SEBI's T+3 timetable: bidding closes on T, allotment
    follows on the next working day. That step belongs to the clearing calendar,
@@ -337,7 +348,7 @@ function allotmentDateOf(ipo) {
   return { date: "", exact: false };
 }
 
-/* Shares reach the demat account the working day after allotment — a clearing
+/* Shares reach the demat account the working day after allotment - a clearing
    step, like the allotment itself. */
 function creditDateOf(ipo) {
   const allot = allotmentDateOf(ipo);
@@ -345,7 +356,7 @@ function creditDateOf(ipo) {
   return { date: addClearingDays(allot.date, 1), exact: allot.exact && !!ipo?.allotmentDate };
 }
 
-/* Listing is one trading day after the credit — the first step that happens on
+/* Listing is one trading day after the credit - the first step that happens on
    the exchange floor rather than in the clearing house.
 
    Counting the whole timetable on a single calendar cannot fit the record.
@@ -353,7 +364,7 @@ function creditDateOf(ipo) {
    25th, but the 26th was closed for clearing, so the credit slipped to the 27th
    and the listing to the 28th. Purely on the trading calendar that comes out a
    day early; purely on the clearing calendar Gaja comes out a day late. Walking
-   the real chain — clearing, clearing, trading — reproduces all 22 issues with
+   the real chain - clearing, clearing, trading - reproduces all 22 issues with
    both dates on record. It stays an inference until the exchange confirms it. */
 function listingDateOf(ipo) {
   if (ipo?.listingDate) return { date: ipo.listingDate, exact: true };
@@ -363,7 +374,7 @@ function listingDateOf(ipo) {
 }
 
 /* An expected date has done its job once every application carries a recorded
-   result — there is nothing left to wait for, so the ledger stops predicting. */
+   result - there is nothing left to wait for, so the ledger stops predicting. */
 function allotmentSettled(ipo) {
   const apps = ipo?.applications || [];
   return apps.length > 0 && apps.every((a) => (a.allotmentStatus || "Pending") !== "Pending");
@@ -398,7 +409,7 @@ function issueStage(x) {
   }
 
   /* Allotment day sits between the close and the listing, and on the day itself
-     it is the nearer event — so it outranks a listing still days away. */
+     it is the nearer event - so it outranks a listing still days away. */
   const allot = allotmentDateOf(x);
   if (allot.date && allot.date === today) {
     return {
@@ -410,7 +421,7 @@ function issueStage(x) {
   if (listed && listed > today) return { label: "LISTS " + fmtDate(listed).toUpperCase().slice(0, 6), color: COLORS.navy, bg: "#EAEFF5" };
 
   /* With no listing date on record, T+3 from the close says when to expect one.
-     Never treated as proof it has listed — only as what is coming. */
+     Never treated as proof it has listed - only as what is coming. */
   const expected = listingDateOf(x);
   // Strictly past: on the closing day itself the close is the immediate event,
   // and saying when it might list instead would bury the deadline.
@@ -430,7 +441,7 @@ function issueStage(x) {
   return null;
 }
 const fmtDate = (d) => {
-  if (!d) return "—";
+  if (!d) return "--";
   const dt = new Date(d + "T00:00:00");
   return isNaN(dt) ? d : dt.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
 };
@@ -680,7 +691,7 @@ async function cloudLoad() {
 /* The cloud table was created before deleted records were kept, and its `kind`
    column only accepts the original three. Widening it is one statement
    (migrate-trash.sql), but until that is run the whole sync would fail on the
-   fourth — taking the ledger down with it over the one table that matters
+   fourth - taking the ledger down with it over the one table that matters
    least. So a rejection on `kind` falls back to the three, and says so. */
 let trashSyncBlocked = false;
 const isKindRejection = (e) => /user_data_kind_check|violates check constraint/i.test(e?.message || "");
@@ -757,12 +768,12 @@ function mergeIpos(current, incoming) {
    SMALL UI PRIMITIVES
 ---------------------------------------------------------- */
 /* A badge is a label, not a highlight. It carries its colour in the text and a
-   hairline, on a background barely off the card — a filled block of colour on
+   hairline, on a background barely off the card - a filled block of colour on
    every row is what made a list of IPOs read as a colour chart. */
 function Badge({ children, color, bg, strong }) {
   /* Strong badges (Allotted / Not Allotted) use the same green/red as the
      allotment progress bar. At 8px font on a transparent background, those
-     colours look washed — so give them a light tinted fill, exactly as the
+     colours look washed - so give them a light tinted fill, exactly as the
      bar itself is a solid block of colour. */
   const emphasis = strong && !isDark();
   const badgeBg = emphasis
@@ -784,16 +795,17 @@ function Badge({ children, color, bg, strong }) {
   );
 }
 
-function Field({ label, children }) {
+function Field({ label, children, error }) {
   return (
-    <label style={{ display: "block", marginBottom: 14 }}>
-      <span style={{
-        display: "block", fontSize: 11, fontWeight: 600, color: COLORS.inkSoft,
+    <div style={{ display: "block", marginBottom: 14 }}>
+      <div style={{
+        display: "block", fontSize: 11, fontWeight: 600, color: error ? COLORS.red : COLORS.inkSoft,
         textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 6,
         fontFamily: "Inter, sans-serif",
-      }}>{label}</span>
+      }}>{label}</div>
       {children}
-    </label>
+      {error && <span style={{ display: "block", fontSize: 11, color: COLORS.red, marginTop: 4, fontFamily: "Inter, sans-serif" }}>{error}</span>}
+    </div>
   );
 }
 
@@ -805,28 +817,96 @@ function Select(props) {
   return <select {...props} style={{ ...inputStyle, ...(props.style || {}) }} />;
 }
 
+/* ---------------------------------------------------------
+   CONFIRM MODAL
+   Replaces browser confirm() and alert() with a styled modal.
+   Usage: const confirm = useConfirm();
+          const ok = await confirm("Delete this?", { danger: true });
+---------------------------------------------------------- */
+const ConfirmContext = React.createContext(null);
+
+function ConfirmModal({ state, onResolve }) {
+  if (!state) return null;
+  const { message, danger, confirmLabel, cancelLabel } = state;
+  return (
+    <div style={{
+      position: "fixed", inset: 0, background: "rgba(24, 27, 32, 0.55)", zIndex: 100,
+      display: "flex", alignItems: "center", justifyContent: "center", padding: 20,
+      animation: "sheetFadeIn 150ms ease-out",
+    }} onClick={() => onResolve(false)}>
+      <div onClick={(e) => e.stopPropagation()} style={{
+        background: COLORS.bg, borderRadius: 14, padding: "20px 18px", width: "100%", maxWidth: 320,
+        boxShadow: "0 12px 40px rgba(0,0,0,0.3)", fontFamily: "Inter, sans-serif",
+      }}>
+        <div style={{ fontSize: 14, color: COLORS.ink, lineHeight: 1.5, marginBottom: 18 }}>
+          {message}
+        </div>
+        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+          <button onClick={() => onResolve(false)} style={{
+            padding: "9px 16px", borderRadius: 8, border: `1px solid ${COLORS.border}`,
+            background: COLORS.surface, color: COLORS.ink, fontSize: 13, fontWeight: 600,
+            cursor: "pointer", fontFamily: "Inter, sans-serif",
+          }}>{cancelLabel || "Cancel"}</button>
+          <button onClick={() => onResolve(true)} style={{
+            padding: "9px 16px", borderRadius: 8, border: "none",
+            background: danger ? COLORS.red : COLORS.action, color: "#fff",
+            fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "Inter, sans-serif",
+          }}>{confirmLabel || (danger ? "Delete" : "OK")}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Module-level ref for dismissing confirm modal from back button handler
+const confirmDismissRef = { current: null };
+
+function ConfirmProvider({ children }) {
+  const [state, setState] = useState(null);
+  const resolveRef = useRef(null);
+  const dismissRef = useRef(null);
+  const show = useCallback((message, opts = {}) => {
+    return new Promise((resolve) => {
+      resolveRef.current = resolve;
+      setState({ message, ...opts });
+    });
+  }, []);
+  const onResolve = useCallback((result) => {
+    setState(null);
+    if (resolveRef.current) { resolveRef.current(result); resolveRef.current = null; }
+  }, []);
+  // Expose dismiss for back button handling
+  dismissRef.current = state ? () => onResolve(false) : null;
+  confirmDismissRef.current = dismissRef.current;
+  return (
+    <ConfirmContext.Provider value={show}>
+      {children}
+      <ConfirmModal state={state} onResolve={onResolve} />
+    </ConfirmContext.Provider>
+  );
+}
+
+function useConfirm() { return useContext(ConfirmContext); }
+
 /* Lets a sheet's confirming action live outside the scrolling list. */
 const SheetFooterSlot = React.createContext(null);
 
 function Sheet({ title, onClose, children }) {
-  /* The panel is a column: a title that stays put, a body that scrolls, and a
-     footer slot below both. The footer used to sit inside the scroll area,
-     stuck to its bottom edge, which left rows sliding underneath it. */
   const [footerEl, setFooterEl] = useState(null);
   const bodyRef = useRef(null);
   const touch = useRef({ active: false, startY: 0, lastY: 0 });
   const [dragY, setDragY] = useState(0);
   const [dragging, setDragging] = useState(false);
+  const [closing, setClosing] = useState(false);
 
-  /* Swipe-down-to-dismiss lives here, on the sheet itself, so every sheet in
-     the app gets it for free rather than each one needing its own gesture
-     code. It only arms when the body is scrolled to the very top — anywhere
-     else the gesture is just scrolling — and never on a touch that starts on
-     something interactive, so editing a field can never be mistaken for a
-     dismiss swipe. Because it is driven by React state (dragY) rather than a
-     CSS variable poked from outside, a short sheet with nothing to scroll
-     still gets the same treatment as a long one. */
+  const animateClose = useCallback(() => {
+    if (closing) return;
+    setClosing(true);
+    setTimeout(() => { window.scrollTo(0, window.scrollY); onClose(); }, 180);
+  }, [closing, onClose]);
+
   const onTouchStart = (e) => {
+    if (closing) return;
     const body = bodyRef.current;
     if (!body || body.scrollTop > 0) return;
     const y = e.touches[0].clientY;
@@ -834,7 +914,7 @@ function Sheet({ title, onClose, children }) {
   };
   const onTouchMove = (e) => {
     const t = touch.current;
-    if (!t.active) return;
+    if (!t.active || closing) return;
     const body = bodyRef.current;
     if (body && body.scrollTop > 0) { t.active = false; setDragging(false); setDragY(0); return; }
     const y = e.touches[0].clientY;
@@ -844,7 +924,7 @@ function Sheet({ title, onClose, children }) {
     if (!t.committed && delta < 8) return;
     t.committed = true;
     setDragging(true);
-    setDragY(Math.min(delta, 240));
+    setDragY(Math.min(delta, 400));
     if (e.cancelable) e.preventDefault();
   };
   const onTouchEnd = () => {
@@ -852,10 +932,12 @@ function Sheet({ title, onClose, children }) {
     if (!t.active) return;
     const delta = t.lastY - t.startY;
     touch.current.active = false;
-    setDragging(false);
-    setDragY(0);
     if (t.committed && delta > 80 && bodyRef.current && bodyRef.current.scrollTop === 0) {
-      requestAnimationFrame(() => { window.scrollTo(0, window.scrollY); onClose(); });
+      setDragging(false);
+      animateClose();
+    } else {
+      setDragging(false);
+      setDragY(0);
     }
   };
 
@@ -863,8 +945,8 @@ function Sheet({ title, onClose, children }) {
     <div style={{
       position: "fixed", inset: 0, background: "rgba(24, 27, 32, 0.45)", zIndex: 50,
       display: "flex", alignItems: "flex-end", justifyContent: "center",
-      animation: "sheetFadeIn 200ms ease-out",
-    }} onClick={onClose}>
+      animation: closing ? "sheetFadeOut 180ms ease-in forwards" : "none",
+    }} onClick={animateClose}>
       <div
         onClick={(e) => e.stopPropagation()}
         onTouchStart={onTouchStart}
@@ -876,9 +958,9 @@ function Sheet({ title, onClose, children }) {
           maxHeight: "92vh", borderRadius: "18px 18px 0 0",
           display: "flex", flexDirection: "column", minHeight: 0,
           boxShadow: "0 -8px 30px rgba(0,0,0,0.2)",
-          transform: dragY ? `translateY(${dragY}px)` : undefined,
-          transition: dragging ? "none" : "transform 280ms ease-out",
-          animation: "sheetSlideUp 280ms ease-out",
+          transform: closing ? "translateY(100%)" : dragY ? `translateY(${dragY}px)` : undefined,
+          transition: dragging ? "none" : "transform 200ms ease-out",
+          animation: closing ? "none" : "sheetSlideUp 280ms ease-out",
         }}
       >
         <div style={{
@@ -903,10 +985,10 @@ function Sheet({ title, onClose, children }) {
               {isDark() ? <Sun size={16} color={COLORS.gold} /> : <Moon size={16} color={COLORS.navy} />}
               {/* {isDark() ? "Light" : "Dark"} */}
             </button>  
-          <button onClick={onClose} aria-label="Close" style={{
+          <button onClick={animateClose} aria-label="Close" style={{
             background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 20,
             width: 36, height: 36, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer",
-          }}><X size={16} color={COLORS.inkSoft} /></button></div> : <button onClick={onClose} aria-label="Close" style={{
+          }}><X size={16} color={COLORS.inkSoft} /></button></div> : <button onClick={animateClose} aria-label="Close" style={{
             background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 20,
             width: 36, height: 36, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer",
           }}><X size={16} color={COLORS.inkSoft} /></button>}
@@ -970,14 +1052,23 @@ function PrimaryButton({ children, onClick, danger, ghost, disabled, type = "but
    APP
 ---------------------------------------------------------- */
 export default function App() {
+  return (
+    <ConfirmProvider>
+      <AppInner />
+    </ConfirmProvider>
+  );
+}
+
+function AppInner() {
+  const confirm = useConfirm();
   const [session, setSessionState] = useState(currentSession);
   const [authMode, setAuthMode] = useState("login");
   const [linkBusy, setLinkBusy] = useState(() => cloudEnabled() && !!readAuthHash());
   const [linkNotice, setLinkNotice] = useState("");
 
   /* Which tab you were on survives a reload. The app is a single screen with no
-     routing, so without this every refresh — and every return from the home
-     screen on a phone, where the PWA is reloaded rather than resumed — dropped
+     routing, so without this every refresh - and every return from the home
+     screen on a phone, where the PWA is reloaded rather than resumed - dropped
      you back on Overview with the list you were reading two taps away. */
   const [tab, setTab] = useState(() => {
     try {
@@ -994,7 +1085,7 @@ export default function App() {
 
   /* The four screens share one scroll position, because they are one document.
      Reading to the bottom of the IPOs and then tapping Transfers landed you at
-     the bottom of the transfers — a list you had never scrolled. Each screen
+     the bottom of the transfers - a list you had never scrolled. Each screen
      now starts where a screen should. */
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -1008,7 +1099,7 @@ export default function App() {
   /* Drawn and settled are different moments now. The ledger is drawn from the
      copy on this device straight away; it is settled once the cloud has been
      heard from. Anything that writes to the ledger has to wait for settled, or
-     it races the reconcile and loses — a price refresh that finished first had
+     it races the reconcile and loses - a price refresh that finished first had
      its results overwritten by the cloud copy landing after it. */
   const [reconciled, setReconciled] = useState(false);
 
@@ -1026,6 +1117,7 @@ export default function App() {
   const [acctSheet, setAcctSheet] = useState(null);         // { account }
   const [transferSheet, setTransferSheet] = useState(null); // { transfer }
   const [ipoDetail, setIpoDetail] = useState(null);         // ipo id
+  const [acctDetail, setAcctDetail] = useState(null);       // account id
   const [dataSheetOpen, setDataSheetOpen] = useState(false);
   const [bulkApplyFor, setBulkApplyFor] = useState(null);   // ipo id
   const [bulkStatusFor, setBulkStatusFor] = useState(null); // ipo id
@@ -1153,8 +1245,8 @@ export default function App() {
 
       /* Show the ledger the moment there is one worth showing. The copy on this
          device is the same ledger the cloud holds, so waiting for the round trip
-         before drawing anything meant staring at "Loading ledger…" for as long
-         as Supabase took — several seconds — with the answer already in hand.
+         before drawing anything meant staring at "Loading ledger..." for as long
+         as Supabase took - several seconds - with the answer already in hand.
 
          Only when this device holds nothing, or holds somebody else's, is there
          genuinely nothing to draw, and only then is the wait real. */
@@ -1211,14 +1303,14 @@ export default function App() {
 
   /* Android's back gesture closed the whole app from anywhere, because a single
      screen with no routing has no history to go back through. Back now peels
-     off one layer at a time — the sheet on top, then any sheet under it, then
-     back to Overview — and only leaves once there is nothing left to close.
+     off one layer at a time - the sheet on top, then any sheet under it, then
+     back to Overview - and only leaves once there is nothing left to close.
 
      The handler reads through a ref so the listener can be registered once and
      still see current state; re-registering on every state change would drop
      the buffered history entry. */
   const backLayers = { appSheet, bulkApplyFor, bulkStatusFor, ipoSheet, acctSheet,
-    transferSheet, liveOpen, dataSheetOpen, ipoDetail, tab };
+    transferSheet, liveOpen, dataSheetOpen, ipoDetail, acctDetail, tab };
 
   /* A sheet covers the screen but the page behind it still scrolls, so dragging
      anywhere outside the panel moved the list underneath and you came back to
@@ -1236,14 +1328,15 @@ export default function App() {
 
   const closeTopLayer = useCallback(() => {
     const v = backRef.current;
-    // Innermost first: a bulk sheet sits on top of the IPO detail behind it.
+    // Innermost first: child sheets close before the parent beneath them.
+    // Dismiss confirm modal if open
+    if (confirmDismissRef.current) { confirmDismissRef.current(); return true; }
     if (v.appSheet) { setAppSheet(null); return true; }
-    // These replace the IPO's detail rather than sitting over it, so closing
-    // one puts that detail back — the same as saving from it does.
-    if (v.bulkApplyFor) { setBulkApplyFor(null); setIpoDetail(v.bulkApplyFor); return true; }
-    if (v.bulkStatusFor) { setBulkStatusFor(null); setIpoDetail(v.bulkStatusFor); return true; }
+    if (v.bulkApplyFor) { setBulkApplyFor(null); return true; }
+    if (v.bulkStatusFor) { setBulkStatusFor(null); return true; }
     if (v.ipoSheet) { setIpoSheet(null); return true; }
     if (v.acctSheet) { setAcctSheet(null); return true; }
+    if (v.acctDetail) { setAcctDetail(null); return true; }
     if (v.transferSheet) { setTransferSheet(null); return true; }
     if (v.liveOpen) { setLiveOpen(false); return true; }
     if (v.dataSheetOpen) { setDataSheetOpen(false); return true; }
@@ -1254,16 +1347,13 @@ export default function App() {
 
   useEffect(() => {
     if (typeof window === "undefined" || !window.history) return;
-    // One buffered entry to absorb the first back press.
     window.history.replaceState({ ledger: "root" }, "");
     window.history.pushState({ ledger: "layer" }, "");
 
-    const onPop = () => {
+    const onPop = (e) => {
       if (closeTopLayer()) {
-        // Something closed, so put the buffer back for the next press.
         window.history.pushState({ ledger: "layer" }, "");
       } else {
-        // Nothing left: let the press do what it would have done anyway.
         window.history.back();
       }
     };
@@ -1280,7 +1370,7 @@ export default function App() {
 
   /* Deleting puts the whole record here, not in the bin. Restoring it later has
      to work without anything else on the device, so the entry carries its own
-     copy — and, for an application, the IPO it belonged to. */
+     copy - and, for an application, the IPO it belonged to. */
   const discard = useCallback((kind, payload, label, parentId) => {
     persistTrash([
       { id: uid(), kind, label, parentId: parentId || "", deletedAt: new Date().toISOString(), payload },
@@ -1294,12 +1384,11 @@ export default function App() {
     try {
       const state = { accounts, ipos, transfers, trash };
       // Never let a device that has nothing wipe a cloud that has something.
-      // Without this, opening the app somewhere new and hitting Sync now would
-      // overwrite the real ledger with three empty arrays.
-      if (isEmptyState(state)) {
+      // But if trash has entries, the user intentionally deleted everything.
+      if (isEmptyState(state) && !(trash || []).length) {
         const remote = await cloudLoad();
         if (!isEmptyState(remote)) {
-          setSyncError("This device is empty but your cloud ledger is not. Nothing was overwritten — reload to pull it down.");
+          setSyncError("This device is empty but your cloud ledger is not. Nothing was overwritten - reload to pull it down.");
           return;
         }
       }
@@ -1342,7 +1431,7 @@ export default function App() {
       const from = years.length ? Math.min(...years) : new Date().getFullYear() - 1;
 
       /* Naming a company asks the server to go and fetch its lot size and its
-         day-one opening price — a request each, and neither ever changes once
+         day-one opening price - a request each, and neither ever changes once
          known. Prices come back for every listing regardless of who is named,
          so the only names worth sending are those still missing something: a
          settled ledger names none, and the whole refresh is one request.
@@ -1366,7 +1455,7 @@ export default function App() {
          single fetch, and a reload after that is genuinely current.
 
          Sending no key at all was the mistake. The response is edge-cached, and
-         it carries the time it was taken — so a reload was answered from the
+         it carries the time it was taken - so a reload was answered from the
          cache, showed a price minutes old, and stamped it with the minutes-old
          timestamp, which reads exactly like a refresh that never happened. */
       const bust = opts.silent
@@ -1396,8 +1485,8 @@ export default function App() {
         const patch = { priceAsOf: asOf };
         if (hit.currentPrice != null) patch.currentPrice = String(hit.currentPrice);
         /* The listing price is the opening print on debut day. The close can be
-           far from it — Innovision opened at 466 and closed at 372.8 the same
-           day — so the close is only a fallback when the open is unavailable. */
+           far from it - Innovision opened at 466 and closed at 372.8 the same
+           day - so the close is only a fallback when the open is unavailable. */
         /* There is no closing price until the day has closed. On listing day
            BSE simply has not filled it in, and treating that as a figure priced
            the share at nothing on the one day everyone is watching it. Until
@@ -1423,7 +1512,7 @@ export default function App() {
         if (listingClose != null) patch.listingClosePrice = String(listingClose);
         else if (listingToday) patch.listingClosePrice = "";
         /* An issue BSE knows about but has no listing row for has not listed
-           yet, and that absence is itself information — otherwise a wrong
+           yet, and that absence is itself information - otherwise a wrong
            listing date entered long ago can never be cleared, because there is
            nothing to overwrite it with. Only trusted when the listings dataset
            actually loaded; a failed fetch must not wipe every listing date. */
@@ -1446,11 +1535,12 @@ export default function App() {
         if (hit.openDate) patch.openDate = hit.openDate;
         if (hit.closeDate) {
           patch.closeDate = hit.closeDate;
-          // The last day to bid is the day an application had to be in by.
           patch.applicationDate = hit.closeDate;
         }
+        if (hit.allotmentDate) patch.allotmentDate = hit.allotmentDate;
         // The top of the band: what a cut-off application is priced at.
         if (hit.priceMax != null) patch.priceBand = String(hit.priceMax);
+        if (hit.priceMin != null) patch.priceBandLow = String(hit.priceMin);
         if (hit.lotSize != null) patch.lotSize = String(hit.lotSize);
 
         const merged = { ...ipo, ...patch };
@@ -1485,7 +1575,7 @@ export default function App() {
          a dozen requests, so the server only does a handful per call. Go round
          again while that is still making progress, rather than making you press
          refresh once per batch. Bounded, and it stops the moment a pass fills
-         nothing in — which is also what happens when BSE simply has no more. */
+         nothing in - which is also what happens when BSE simply has no more. */
       const before = incomplete(list).length;
       const after = incomplete(next).length;
       if (after > 0 && after < before && (opts.round || 0) < 4) {
@@ -1532,7 +1622,7 @@ export default function App() {
 
   /* The figure on the cards is the last traded price, so it goes stale simply
      by being looked at later. Coming back to the app is the moment that shows,
-     and it is also the only moment worth spending a request on — a tab sitting
+     and it is also the only moment worth spending a request on - a tab sitting
      in the background needs nothing. */
   const priceAsOfRef = useRef("");
   priceAsOfRef.current = priceInfo.asOf;
@@ -1557,7 +1647,7 @@ export default function App() {
   }, [reconciled]);
 
   /* Sync now sends what is here and then takes what is there, so a change made
-     on another device arrives without waiting for a reload — which is what the
+     on another device arrives without waiting for a reload - which is what the
      old handler achieved by reloading the page out from under you. */
   const syncNow = useCallback(async () => {
     await pushToCloud();
@@ -1578,7 +1668,7 @@ export default function App() {
   syncNowRef.current = syncNow;
 
   /* When the browser regains connectivity, reconcile and refresh in the
-     background — no reload, and no need to notice the app looks stale and
+     background - no reload, and no need to notice the app looks stale and
      do it yourself. The cached ledger stays on screen throughout; this only
      ever adds fresher data on top of it, and a failed request here leaves
      what is already showing untouched. */
@@ -1593,7 +1683,7 @@ export default function App() {
       reconnectBusyRef.current = true;
       clearTimeout(settleTimer);
       // The event fires the instant an interface reappears, not once it can
-      // actually reach anything — give it a beat before spending a request.
+      // actually reach anything - give it a beat before spending a request.
       settleTimer = setTimeout(async () => {
         try {
           if (cloudEnabled() && userId) await syncNowRef.current();
@@ -1630,7 +1720,7 @@ export default function App() {
 
   /* ---------- derived numbers ---------- */
   const stats = useMemo(() => {
-    let invested = 0, realized = 0, unrealized = 0, pendingCount = 0, activeCount = 0;
+    let invested = 0, realized = 0, unrealized = 0, pendingCount = 0, activeCount = 0, missingLtp = 0;
     ipos.forEach((ipo) => {
       (ipo.applications || []).forEach((app) => {
         if (app.allotmentStatus === "Pending") pendingCount++;
@@ -1644,11 +1734,12 @@ export default function App() {
           } else {
             const mark = valuationPrice(ipo);
             if (mark) unrealized += shares * (mark - price);
+            else if (hasListed(ipo) && shares > 0) missingLtp++;
           }
         }
       });
     });
-    return { invested, realized, unrealized, pendingCount, activeCount };
+    return { invested, realized, unrealized, pendingCount, activeCount, missingLtp };
   }, [ipos]);
 
   /* ---------- gates ---------- */
@@ -1689,7 +1780,7 @@ export default function App() {
           fontFamily: "Inter, sans-serif",
         }}>
           <CloudOff size={13} color={COLORS.gold} />
-          <span>You're offline — showing cached data</span>
+          <span>You're offline - showing cached data</span>
         </div>
       )}
 
@@ -1707,13 +1798,7 @@ export default function App() {
           <AccountList
             transfers={transfers}
             accounts={accounts} ipos={ipos}
-            onEdit={(account) => setAcctSheet({ account })}
-            onDelete={(id) => {
-              const gone = accounts.find((x) => x.id === id);
-              if (!gone) return;
-              discard("account", gone, gone.name || "Unnamed account");
-              persistAccounts(accounts.filter((x) => x.id !== id));
-            }}
+            onOpen={(id) => setAcctDetail(id)}
           />
         )}
         {tab === "transfers" && (
@@ -1739,9 +1824,10 @@ export default function App() {
           accounts={accounts}
           onClose={() => setIpoDetail(null)}
           onDeleteIpo={(id) => { const gone=ipos.find((x)=>x.id===id); if(!gone)return; discard("ipo",gone,gone.company||"Untitled IPO"); persistIpos(ipos.filter((x)=>x.id!==id)); setIpoDetail(null); }}
-          onSaveNote={(id,noteValue)=>{ persistIpos(ipos.map((i)=>i.id===id?{...i,remarks:noteValue}:i)); }}
-          onBulkApply={(ipoId) => { setIpoDetail(null); setBulkApplyFor(ipoId); }}
-          onBulkStatus={(ipoId) => { setIpoDetail(null); setBulkStatusFor(ipoId); }}
+          onEditIpo={() => { setIpoSheet({ ipo: ipos.find((i) => i.id === ipoDetail) }); }}
+          onSaveNote={(id,noteValue)=>{ persistIpos(ipos.map((i)=>i.id===id?{...i,remarks:(noteValue||"").trimEnd()}:i)); }}
+          onBulkApply={(ipoId) => { setBulkApplyFor(ipoId); }}
+          onBulkStatus={(ipoId) => { setBulkStatusFor(ipoId); }}
           onEditApplication={(ipoId, application) => setAppSheet({ ipoId, application })}
           onDeleteApplication={(ipoId, appId) => {
             const owner = ipos.find((i) => i.id === ipoId);
@@ -1760,16 +1846,15 @@ export default function App() {
         <IpoFormSheet
           initial={ipoSheet.ipo}
           onClose={() => setIpoSheet(null)}
-          onSave={(data) => {
+          onSave={async (data) => {
             if (ipoSheet.ipo) {
               const merged = { ...ipoSheet.ipo, ...data };
-              // Applications added before the price and lot size were known were
-              // saved with a blank amount. Now that we can work it out, offer to.
               const fillable = fillableApplications(merged);
-              const applications = fillable.length && confirm(
-                `Work out the blocked amount for ${fillable.length} application` +
-                `${fillable.length === 1 ? "" : "s"} that had none, from this price and lot size?`
-              )
+              const shouldFill = fillable.length && await confirm(
+                `Work out the blocked amount for ${fillable.length} application${fillable.length === 1 ? "" : "s"} from this price and lot size?`,
+                { confirmLabel: "Yes, fill in" }
+              );
+              const applications = shouldFill
                 ? (merged.applications || []).map((a) =>
                     isBlank(a.amountBlocked) && blockedFor(merged, a.lots) > 0
                       ? { ...a, amountBlocked: String(blockedFor(merged, a.lots)) }
@@ -1808,13 +1893,12 @@ export default function App() {
         <BulkApplySheet
           ipo={ipos.find((i) => i.id === bulkApplyFor)}
           accounts={accounts}
-          onClose={() => { setBulkApplyFor(null); setIpoDetail(bulkApplyFor); }}
+          onClose={() => { setBulkApplyFor(null); }}
           onSave={(newApps) => {
             persistIpos(ipos.map((i) => (i.id === bulkApplyFor
               ? { ...i, applications: [...(i.applications || []), ...newApps] }
               : i)));
             setBulkApplyFor(null);
-            setIpoDetail(bulkApplyFor);
           }}
         />
       )}
@@ -1823,7 +1907,7 @@ export default function App() {
         <BulkStatusSheet
           ipo={ipos.find((i) => i.id === bulkStatusFor)}
           accounts={accounts}
-          onClose={() => { setBulkStatusFor(null); setIpoDetail(bulkStatusFor); }}
+          onClose={() => { setBulkStatusFor(null); }}
           onSave={(draft) => {
             persistIpos(ipos.map((i) => (i.id === bulkStatusFor
               ? {
@@ -1833,7 +1917,6 @@ export default function App() {
                 }
               : i)));
             setBulkStatusFor(null);
-            setIpoDetail(bulkStatusFor);
           }}
         />
       )}
@@ -1846,6 +1929,24 @@ export default function App() {
             persistIpos([...rows, ...ipos]);
             setLiveOpen(false);
             setTab("ipos");
+          }}
+        />
+      )}
+
+      {acctDetail && (
+        <AccountDetailSheet
+          account={accounts.find((a) => a.id === acctDetail)}
+          ipos={ipos}
+          transfers={transfers}
+          accounts={accounts}
+          onClose={() => setAcctDetail(null)}
+          onEdit={() => { setAcctSheet({ account: accounts.find((a) => a.id === acctDetail) }); }}
+          onDelete={(id) => {
+            const gone = accounts.find((x) => x.id === id);
+            if (!gone) return;
+            discard("account", gone, gone.name || "Unnamed account");
+            persistAccounts(accounts.filter((x) => x.id !== id));
+            setAcctDetail(null);
           }}
         />
       )}
@@ -1872,6 +1973,13 @@ export default function App() {
           accounts={accounts}
           ipos={ipos}
           onClose={() => setTransferSheet(null)}
+          onDelete={(id) => {
+            const gone = transfers.find((x) => x.id === id);
+            if (!gone) return;
+            const who = (aid) => accounts.find((a) => a.id === aid)?.name || "Unknown";
+            discard("transfer", gone, `${inr(gone.amount)} · ${who(gone.fromAccountId)} to ${who(gone.toAccountId)}`);
+            persistTransfers(transfers.filter((x) => x.id !== id));
+          }}
           onSave={(data) => {
             if (transferSheet.transfer) {
               persistTransfers(transfers.map((t) => (t.id === data.id ? data : t)));
@@ -1896,7 +2004,16 @@ export default function App() {
           pricing={pricing}
           priceInfo={priceInfo}
           onRefreshPrices={refreshPrices}
-          onSignOut={async () => { setDataSheetOpen(false); await cloudSignOut(); }}
+          onSignOut={async () => {
+            setDataSheetOpen(false);
+            // Clear ALL local data and React state to prevent leaking to next account
+            TABLES.forEach((k) => saveTable(k, []));
+            setAccounts([]); setIpos([]); setTransfers([]); setTrash([]);
+            setLocalOwner(null);
+            // Also clear session so migration script doesn't use stale credentials
+            try { localStorage.removeItem(STORAGE_PREFIX + "session"); } catch {}
+            await cloudSignOut();
+          }}
         />
       )}
     </div>
@@ -1919,7 +2036,7 @@ function Bone({ w = "100%", h = 12, r = 6, style = {} }) {
 /* The first load on a new device has nothing cached to draw, and a blank page
    for the length of a network round trip reads as a broken app. This is the
    same furniture the ledger has, in the shape of the screen you are about to
-   land on — so what arrives fills a layout that was already there instead of
+   land on - so what arrives fills a layout that was already there instead of
    replacing a white one. */
 function LedgerSkeleton({ text, tab = "dashboard" }) {
   const titles = {
@@ -2068,7 +2185,7 @@ function Header({ tab, onAdd, onOpenData, onFetchLive, syncing, syncError, cloud
         <button
           onClick={onOpenData}
           aria-label="Sync and data"
-          title={!cloudOn ? "Cloud sync is off" : syncError ? "Sync problem" : syncing ? "Syncing…" : "Synced"}
+          title={!cloudOn ? "Cloud sync is off" : syncError ? "Sync problem" : syncing ? "Syncing..." : "Synced"}
           style={{
             width: 36, height: 36, borderRadius: 18, border: `1px solid ${statusColor}`,
             background: "transparent", display: "flex", alignItems: "center", justifyContent: "center",
@@ -2125,9 +2242,11 @@ function BottomNav({ tab, setTab }) {
    SCREENS
 ---------------------------------------------------------- */
 function Dashboard({ stats, ipos, accounts, onOpenIpo }) {
-  const recent = [...ipos]
-    .sort((a, b) => (b.applicationDate || b.openDate || "").localeCompare(a.applicationDate || a.openDate || ""))
-    .slice(0, 4);
+  const holding = ipos.filter((ipo) =>
+    (ipo.applications || []).some((a) =>
+      (a.allotmentStatus === "Allotted" || a.allotmentStatus === "Partial") && !a.sold
+    )
+  ).sort((a, b) => (b.listingDate || b.closeDate || b.applicationDate || "").localeCompare(a.listingDate || a.closeDate || a.applicationDate || ""));
   // Figures below are derived from price and lot size; say so when some are absent
   // rather than quietly reporting a total that leaves money out.
   const incomplete = ipos.filter((i) => (i.applications || []).length && missingIpoFields(i).length);
@@ -2135,7 +2254,7 @@ function Dashboard({ stats, ipos, accounts, onOpenIpo }) {
 
   /* The ledger already works out when each thing happens; this is simply the
      part of it that concerns today. Without it the dates are only ever found by
-     opening an IPO, which is the wrong way round — the point of knowing the
+     opening an IPO, which is the wrong way round - the point of knowing the
      allotment date is to be told on the day. */
   const today = todayISO();
   const todo = useMemo(() => {
@@ -2176,7 +2295,7 @@ function Dashboard({ stats, ipos, accounts, onOpenIpo }) {
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
         <StatCard label="Capital Deployed" value={inr(stats.invested)} icon={Landmark} tone="navy" />
         <StatCard label="Realized Gain" value={inr(stats.realized)} icon={stats.realized >= 0 ? TrendingUp : TrendingDown} tone={stats.realized >= 0 ? "green" : "red"} />
-        <StatCard label={marked ? "Unrealized (at today's price)" : "Unrealized (at listing)"} value={inr(stats.unrealized)} icon={stats.unrealized >= 0 ? TrendingUp : TrendingDown} tone={stats.unrealized >= 0 ? "green" : "red"} />
+        <StatCard label={marked ? "Unrealized (at today's price)" : "Unrealized (at listing)"} value={inr(stats.unrealized)} icon={stats.unrealized >= 0 ? TrendingUp : TrendingDown} tone={stats.unrealized >= 0 ? "green" : "red"} warning={stats.missingLtp > 0 ? `${stats.missingLtp} listed holding${stats.missingLtp === 1 ? "" : "s"} without a current price -- refresh to update` : ""} />
         <StatCard label="Pending Allotment" value={stats.pendingCount} icon={Clock} tone="gold" />
       </div>
 
@@ -2190,7 +2309,7 @@ function Dashboard({ stats, ipos, accounts, onOpenIpo }) {
             {incomplete.length} IPO{incomplete.length === 1 ? "" : "s"} with applications
             {incomplete.length === 1 ? " is" : " are"} missing a price or lot size, so the figures
             above leave {incomplete.length === 1 ? "it" : "them"} out. The IPOs tab has a
-            “Needs details” filter.
+            "Needs details" filter.
           </span>
         </div>
       )}
@@ -2232,21 +2351,63 @@ function Dashboard({ stats, ipos, accounts, onOpenIpo }) {
         </div>
       )}
 
-      <SectionLabel>Recent Entries</SectionLabel>
-      {ipos.length === 0 ? (
-        <EmptyState text="No IPOs logged yet. Tap the IPOs tab to add your first application." icon={Receipt} subtitle="Your family IPO register starts here." />
+      <SectionLabel>Currently Holding</SectionLabel>
+      {holding.length === 0 ? (
+        <EmptyState text={ipos.length === 0 ? "No IPOs logged yet. Tap the IPOs tab to add your first application." : "No active holdings."} icon={Receipt} subtitle={ipos.length === 0 ? "Your family IPO register starts here." : ""} />
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {recent.map((ipo) => (
-            <IpoCard key={ipo.id} ipo={ipo} accounts={accounts} onClick={() => onOpenIpo(ipo.id)} />
-          ))}
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {holding.map((ipo) => {
+            const entryPrice = Number(ipo.priceBand) || 0;
+            const currentPrice = Number(ipo.currentPrice) || Number(ipo.listingPrice) || 0;
+            const lotSize = Number(ipo.lotSize) || 1;
+            const totalLots = (ipo.applications || []).reduce((s, a) =>
+              (a.allotmentStatus === "Allotted" || a.allotmentStatus === "Partial") && !a.sold
+                ? s + (Math.round((Number(a.sharesAllotted) || 0) / lotSize) || 1) : s, 0);
+            const totalShares = (ipo.applications || []).reduce((s, a) =>
+              (a.allotmentStatus === "Allotted" || a.allotmentStatus === "Partial") && !a.sold
+                ? s + (Number(a.sharesAllotted) || 0) : s, 0);
+            const investedValue = totalShares * entryPrice;
+            const currentValue = currentPrice > 0 ? totalShares * currentPrice : 0;
+            const pnl = currentPrice > 0 ? currentValue - investedValue : 0;
+            const pnlPct = investedValue > 0 && currentPrice > 0 ? ((currentPrice - entryPrice) / entryPrice) * 100 : null;
+            const isUp = pnl >= 0;
+            return (
+              <div key={ipo.id} onClick={() => onOpenIpo(ipo.id)} style={{
+                background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 10,
+                padding: "10px 12px", cursor: "pointer",
+              }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                  <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 600, fontSize: 14, color: COLORS.heading, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {ipo.company}
+                  </div>
+                  {currentPrice > 0 ? (
+                    <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 13, fontWeight: 700, color: isUp ? COLORS.green : COLORS.red, flexShrink: 0 }}>
+                      {isUp ? "+" : ""}{inr(pnl)}
+                    </span>
+                  ) : (
+                    <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: COLORS.inkSoft, flexShrink: 0 }}>
+                      {inr(investedValue)}
+                    </span>
+                  )}
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 4, fontFamily: "'JetBrains Mono', monospace", fontSize: 11.5, color: COLORS.inkSoft }}>
+                  <span>₹{entryPrice} {currentPrice > 0 ? `→ ₹${currentPrice}` : ""} · {totalLots} lot{totalLots === 1 ? "" : "s"}</span>
+                  {pnlPct !== null && (
+                    <span style={{ color: isUp ? COLORS.green : COLORS.red, fontWeight: 600 }}>
+                      {isUp ? "+" : ""}{pnlPct.toFixed(1)}%
+                    </span>
+                  )}
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
   );
 }
 
-function StatCard({ label, value, icon: Icon, tone }) {
+function StatCard({ label, value, icon: Icon, tone, warning }) {
   const toneColor = { navy: COLORS.navy, green: COLORS.green, red: COLORS.red, gold: COLORS.gold }[tone];
   return (
     <div style={{
@@ -2255,7 +2416,10 @@ function StatCard({ label, value, icon: Icon, tone }) {
     }}>
       <div style={{ position: "absolute", top: 0, left: 0, width: 4, height: "100%", background: toneColor }} />
       <Icon size={16} color={toneColor} style={{ marginBottom: 8 }} />
-      <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 18, fontWeight: 700, color: COLORS.ink }}>{value}</div>
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 18, fontWeight: 700, color: COLORS.ink }}>{value}</span>
+        {warning && <span title={warning} style={{ cursor: "help", fontSize: 14 }}>&#9888;</span>}
+      </div>
       <div style={{ fontSize: 11, color: COLORS.inkSoft, marginTop: 2 }}>{label}</div>
     </div>
   );
@@ -2292,7 +2456,7 @@ function EmptyState({ text, icon: Icon, subtitle }) {
   );
 }
 
-/* One cell in the 2×2 date grid on the IPO detail sheet. Label and value are
+/* One cell in the 2x2 date grid on the IPO detail sheet. Label and value are
    always in the same place, so the eye doesn't have to re-find each date
    depending on which ones exist. */
 function DateCell({ label, value }) {
@@ -2314,7 +2478,7 @@ function DateCell({ label, value }) {
 
 
 
-/* Boards are not mutually exclusive — you may want one, or both. Turning the
+/* Boards are not mutually exclusive - you may want one, or both. Turning the
    last one off would ask for nothing at all, so the last one on cannot be
    turned off; it is the only state the control refuses. */
 function BoardToggles({ options, selected, onToggle }) {
@@ -2359,7 +2523,7 @@ function boardIsWorthAsking(boards) {
    would make "pending, mainboard only" unaskable. */
 /* Filtering and sorting live behind one control beside the search rather than
    two selects taking a row of their own. A list is mostly read, not filtered,
-   so the row that is always there is the one you always use — and the panel
+   so the row that is always there is the one you always use - and the panel
    has room to let you pick several filters at once, which a select never did. */
 function ListControls({ search, setSearch, placeholder, filters, filter, setFilter, sorts, sort, setSort, boards, board, toggleBoard }) {
   const [open, setOpen] = useState(false);
@@ -2386,8 +2550,10 @@ function ListControls({ search, setSearch, placeholder, filters, filter, setFilt
   const sortLabel = (sorts.find((x) => x.id === sort) || {}).label || "";
   // "All" is the absence of a filter, so it is not something narrowing you to.
   const narrowed = chosen.length;
+  const hasFilters = Array.isArray(filters) && filters.length > 0;
 
   const toggleFilter = (id) => {
+    if (!setFilter) return;
     setFilter(chosen.includes(id) ? chosen.filter((f) => f !== id) : [...chosen, id]);
   };
 
@@ -2402,8 +2568,14 @@ function ListControls({ search, setSearch, placeholder, filters, filter, setFilt
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder={placeholder}
-            style={{ paddingLeft: 34 }}
+            style={{ paddingLeft: 34, paddingRight: search ? 34 : 12 }}
           />
+          {search && (
+            <button onClick={() => setSearch("")} aria-label="Clear search" style={{
+              position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)",
+              background: "none", border: "none", padding: 4, cursor: "pointer", display: "flex",
+            }}><X size={14} color={COLORS.inkSoft} /></button>
+          )}
         </div>
 
         <button
@@ -2445,6 +2617,7 @@ function ListControls({ search, setSearch, placeholder, filters, filter, setFilt
             boxShadow: "0 10px 30px rgba(0,0,0,0.28)", padding: 12,
           }}
         >
+          {hasFilters && (<>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
             <SectionLabel>Show</SectionLabel>
             {narrowed > 0 && (
@@ -2454,7 +2627,6 @@ function ListControls({ search, setSearch, placeholder, filters, filter, setFilt
               >Clear</button>
             )}
           </div>
-          {/* Several at once: an issue can be pending and need details both. */}
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 14 }}>
             {filters.map((f) => {
               const on = chosen.includes(f.id);
@@ -2470,6 +2642,7 @@ function ListControls({ search, setSearch, placeholder, filters, filter, setFilt
               );
             })}
           </div>
+          </>)}
 
           <SectionLabel>Order</SectionLabel>
           <div style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: 6 }}>
@@ -2501,7 +2674,7 @@ function ListControls({ search, setSearch, placeholder, filters, filter, setFilt
 
 function IpoList({ ipos, accounts, onOpen }) {
   const [search, setSearch] = useState("");
-  /* No filters chosen means everything, so there is no "All" to select — an
+  /* No filters chosen means everything, so there is no "All" to select - an
      empty selection is what All meant. Several may be on at once. */
   const [filter, setFilter] = useState([]);
   /* Which boards are showing. Mainboard is what this ledger is mostly made of,
@@ -2607,7 +2780,7 @@ function IpoList({ ipos, accounts, onOpen }) {
         sorts={[
           { id: "recent", label: "Newest" },
           { id: "oldest", label: "Oldest" },
-          { id: "company", label: "A–Z" },
+          { id: "company", label: "A-Z" },
           { id: "allotted", label: "Most allotted" },
           { id: "pending", label: "Most pending" },
         ]}
@@ -2660,7 +2833,7 @@ function fillableApplications(ipo) {
 
 /* Which board an issue is on. BSE labels the small-company platforms in several
    ways, and the ledger has only ever offered two choices, so anything that is
-   not recognisably SME is treated as mainboard — the same assumption the rest
+   not recognisably SME is treated as mainboard - the same assumption the rest
    of the app makes when the field is blank. */
 function boardOf(ipo) {
   return /\bsme\b|emerge|\bbse\s*ss?me\b/i.test(String(ipo?.category || "")) ? "SME" : "Mainboard";
@@ -2677,7 +2850,7 @@ function ipoBucket(ipo) {
 
 const panOf = (account) => (account?.pan || "").trim().toUpperCase();
 
-/* One PAN may submit only one application per IPO — a duplicate gets every
+/* One PAN may submit only one application per IPO - a duplicate gets every
    application under that PAN rejected, not just the extra one. Worth catching. */
 function panConflicts(ipo, accounts) {
   const byPan = new Map();
@@ -2733,7 +2906,7 @@ function AllotmentCounts({ tally }) {
         {tally.won}/{tally.total} allotted
       </span>
       {/* Rejections are not spelled out: with the tally and what is still
-          pending, they are simply the rest, and "0/8 allotted · 8 rejected"
+          pending, they are simply the rest, and "0/8 allotted * 8 rejected"
           says one thing twice. The bar above still shows them in red. */}
       {tally.pending > 0 && <span style={{ color: COLORS.gold }}>{tally.pending} pending</span>}
     </div>
@@ -2770,12 +2943,12 @@ function IpoCard({ ipo, accounts, onClick }) {
             </div>
             {/* Held to one line: it is a summary, and a summary that wraps has
                 stopped being one. Trimmed to earn the room rather than shrunk
-                until it fits — "applic." said nothing "apps" does not. */}
+                until it fits - "applic." said nothing "apps" does not. */}
             <div style={{
               fontSize: 11, color: COLORS.inkSoft, marginTop: 2, fontFamily: "'JetBrains Mono', monospace",
               whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
             }}>
-              {ipo.category || "Mainboard"} · ₹{ipo.priceBand || "—"}/sh · {totalLots} lot{totalLots === 1 ? "" : "s"} · {apps.length} app{apps.length === 1 ? "" : "s"}
+              {ipo.category || "Mainboard"} · {ipo.priceBandLow ? `₹${ipo.priceBandLow}-₹${ipo.priceBand}` : `₹${ipo.priceBand || "--"}`} · {totalLots} lot{totalLots === 1 ? "" : "s"} · {apps.length} app{apps.length === 1 ? "" : "s"}
             </div>
             <div style={{ marginTop: 5, display: "flex", gap: 6, flexWrap: "wrap" }}>
               {stage && <Badge color={stage.color} bg={stage.bg}>{stage.label}</Badge>}
@@ -2825,14 +2998,15 @@ function IpoCard({ ipo, accounts, onClick }) {
    rather than fit inside it. */
 
 
-function IpoDetailSheet({ ipo, accounts, onClose, onDeleteIpo, onSaveNote, onAddApplication, onBulkApply, onBulkStatus, onEditApplication, onDeleteApplication }) {
+function IpoDetailSheet({ ipo, accounts, onClose, onDeleteIpo, onEditIpo, onSaveNote, onAddApplication, onBulkApply, onBulkStatus, onEditApplication, onDeleteApplication }) {
+  const confirm = useConfirm();
   if (!ipo) return null;
   const apps = ipo.applications || [];
   const tally = allotmentTally(ipo);
   const conflicts = panConflicts(ipo, accounts);
   const [note, setNote] = useState(() => ipo.remarks || "");
   // The baseline is the last-saved value, so "changed" always means changed
-  // from what is actually on record — not just "touched since the sheet
+  // from what is actually on record - not just "touched since the sheet
   // opened", which used to leave Save enabled even when nothing was edited.
   const [savedNote, setSavedNote] = useState(() => ipo.remarks || "");
   useEffect(() => { setNote(ipo.remarks || ""); setSavedNote(ipo.remarks || ""); }, [ipo.id, ipo.remarks]);
@@ -2842,21 +3016,22 @@ function IpoDetailSheet({ ipo, accounts, onClose, onDeleteIpo, onSaveNote, onAdd
   const allot = allotmentDateOf(ipo);
   const allotValue = (!hasListed(ipo) && !allotmentSettled(ipo) && allot.date)
     ? `${fmtDate(allot.date)}${allot.exact ? "" : " (expected)"}`
-    : "—";
+    : "--";
   const listExpected = listingDateOf(ipo);
   const listValue = ipo.listingDate
     ? fmtDate(ipo.listingDate)
-    : (listExpected.date ? `${fmtDate(listExpected.date)} (expected)` : "—");
+    : (listExpected.date ? `${fmtDate(listExpected.date)} (expected)` : "--");
   const closeValue = ipo.closeDate
     ? fmtDate(ipo.closeDate)
-    : (ipo.applicationDate ? `${fmtDate(ipo.applicationDate)} (applied)` : "—");
+    : (ipo.applicationDate ? `${fmtDate(ipo.applicationDate)} (applied)` : "--");
 
   return (
     <Sheet title={ipo.company} onClose={onClose}>
-      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
-        <Badge color={COLORS.navy} bg={COLORS.chip}>{ipo.category || "Mainboard"}</Badge>
-        <Badge color={COLORS.inkSoft} bg="#EFEDE7">Price ₹{ipo.priceBand || "—"}</Badge>
-        <Badge color={COLORS.inkSoft} bg="#EFEDE7">Lot {ipo.lotSize || "—"} sh</Badge>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", flex: 1 }}>
+          <Badge color={COLORS.navy} bg={COLORS.chip}>{ipo.category || "Mainboard"}</Badge>
+          <Badge color={COLORS.inkSoft} bg="#EFEDE7">{ipo.priceBandLow ? `₹${ipo.priceBandLow}-₹${ipo.priceBand}` : `Price ₹${ipo.priceBand || "--"}`}</Badge>
+          <Badge color={COLORS.inkSoft} bg="#EFEDE7">Lot {ipo.lotSize || "--"}</Badge>
         {Number(ipo.listingPrice) > 0 && hasListed(ipo) && (
           <Badge color={COLORS.inkSoft} bg="#EFEDE7">{ipo.listingPriceSource === "bse-close" ? "Listing close" : "Listed"} ₹{ipo.listingPrice}</Badge>
         )}
@@ -2870,6 +3045,10 @@ function IpoDetailSheet({ ipo, accounts, onClose, onDeleteIpo, onSaveNote, onAdd
             Now ₹{ipo.currentPrice}
           </Badge>
         )}
+        </div>
+        <button onClick={onEditIpo} aria-label="Edit IPO" style={{ ...roundIconBtn, display: (ipo.fromExchange || ipo.upstoxId || ipo.isin || ipo.symbol) ? "none" : "flex" }}>
+          <Pencil size={14} color={COLORS.inkSoft} />
+        </button>
       </div>
 
       {/* A fixed 2x2 matrix rather than a row that wraps: Open/Close and
@@ -2878,7 +3057,7 @@ function IpoDetailSheet({ ipo, accounts, onClose, onDeleteIpo, onSaveNote, onAdd
       <div style={{
         display: "grid", gridTemplateColumns: "1fr 1fr", columnGap: 14, rowGap: 8, marginBottom: 16,
       }}>
-        <DateCell label="Open" value={ipo.openDate ? fmtDate(ipo.openDate) : "—"} />
+        <DateCell label="Open" value={ipo.openDate ? fmtDate(ipo.openDate) : "--"} />
         <DateCell label="Close" value={closeValue} />
         <DateCell label="Allotment" value={allotValue} />
         <DateCell label="Listing" value={listValue} />
@@ -2908,7 +3087,7 @@ function IpoDetailSheet({ ipo, accounts, onClose, onDeleteIpo, onSaveNote, onAdd
             <strong>Duplicate PAN on this IPO.</strong>
             {conflicts.map(([pan, names]) => (
               <div key={pan} style={{ marginTop: 3, fontFamily: "'JetBrains Mono', monospace", fontSize: 11.5 }}>
-                {pan} — {names.join(", ")}
+                {pan} - {names.join(", ")}
               </div>
             ))}
             <div style={{ marginTop: 4 }}>
@@ -2946,19 +3125,19 @@ function IpoDetailSheet({ ipo, accounts, onClose, onDeleteIpo, onSaveNote, onAdd
       </div>
 
       {apps.length === 0 ? (
-        <EmptyState text="No applications yet for this IPO. Use “Apply IPO” to add one or more at once." />
+        <EmptyState text="No applications yet for this IPO. Use 'Apply IPO' to add one or more at once." />
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {apps.map((app) => (
             <ApplicationRow key={app.id} app={app} ipo={ipo} accounts={accounts}
               onEdit={() => onEditApplication(ipo.id, app)}
-              onDelete={() => { if (confirm("Delete this application?")) onDeleteApplication(ipo.id, app.id); }} />
+              onDelete={async () => { if (await confirm(`Delete ${accounts.find((a) => a.id === app.accountId)?.name || "this"}'s application?`, { danger: true })) onDeleteApplication(ipo.id, app.id); }} />
           ))}
         </div>
       )}
       <div style={{ marginTop: 20, paddingTop: 14, borderTop: `1px solid ${COLORS.border}` }}>
         <SectionLabel>IPO actions</SectionLabel>
-        <button onClick={() => { const n=apps.length; const msg=n ? `Delete ${ipo.company || "this IPO"} and its ${n} application${n===1?"":"s"}?` : `Delete ${ipo.company || "this IPO entry"}?`; if(confirm(msg)) onDeleteIpo(ipo.id); }} style={{ width: "100%", marginTop: 6, minHeight: 44, borderRadius: 10, border: `1px solid ${COLORS.red}`, background: COLORS.redSoft, color: COLORS.red, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>Delete IPO</button>
+        <button onClick={async () => { const n=apps.length; const msg=n ? `Delete ${ipo.company || "this IPO"} and its ${n} application${n===1?"":"s"}? This cannot be undone.` : `Delete ${ipo.company || "this IPO entry"}? This cannot be undone.`; if(await confirm(msg, { danger: true })) onDeleteIpo(ipo.id); }} style={{ width: "100%", marginTop: 6, minHeight: 44, borderRadius: 10, border: `1px solid ${COLORS.red}`, background: COLORS.redSoft, color: COLORS.red, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>Delete IPO</button>
       </div>
     </Sheet>
   );
@@ -2996,7 +3175,7 @@ function ApplicationRow({ app, ipo, accounts, onEdit, onDelete }) {
         </div>
       </div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 5, fontFamily: "'JetBrains Mono', monospace", fontSize: 12 }}>
-        <span style={{ color: COLORS.inkSoft }}>{app.lots || 0} lot(s) {inrOrDash(app.amountBlocked) !== "—" ? `· ${inrOrDash(app.amountBlocked)} blocked` : ""}</span>
+        <span style={{ color: COLORS.inkSoft }}>{app.lots || 0} lot(s) {inrOrDash(app.amountBlocked) !== "--" ? `* ${inrOrDash(app.amountBlocked)} blocked` : ""}</span>
         {pnl !== null && (
           <span style={{ fontWeight: 700, color: pnl >= 0 ? COLORS.green : COLORS.red }}>
             {app.sold ? "P&L " : "Unreal. "}{inr(pnl)}
@@ -3008,7 +3187,7 @@ function ApplicationRow({ app, ipo, accounts, onEdit, onDelete }) {
   );
 }
 
-function AccountList({ accounts, ipos, transfers = [], onEdit, onDelete }) {
+function AccountList({ accounts, ipos, transfers = [], onOpen }) {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState([]);
   const [sort, setSort] = useState("name");
@@ -3042,7 +3221,7 @@ function AccountList({ accounts, ipos, transfers = [], onEdit, onDelete }) {
 
   /* Deleting an account does not delete what it applied for. Those applications
      stay on their IPOs, still counted in every total, but with nobody's name
-     against them — so say so first rather than let the ledger quietly acquire
+     against them - so say so first rather than let the ledger quietly acquire
      rows belonging to "Unknown account". */
   const confirmAccountDelete = (acc) => {
     const apps = ipos.reduce(
@@ -3108,9 +3287,9 @@ function AccountList({ accounts, ipos, transfers = [], onEdit, onDelete }) {
             const pan = panOf(acc);
             const isDup = pan && dupPans.has(pan);
             return (
-              <div key={acc.id} style={{
+              <div key={acc.id} onClick={() => onOpen(acc.id)} style={{
                 background: COLORS.surface, border: `1px solid ${isDup ? COLORS.red : COLORS.border}`,
-                borderRadius: 12, padding: "12px 14px",
+                borderRadius: 12, padding: "12px 14px", cursor: "pointer",
                 display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10,
               }}>
                 <div style={{ minWidth: 0 }}>
@@ -3130,16 +3309,155 @@ function AccountList({ accounts, ipos, transfers = [], onEdit, onDelete }) {
                   </div>
                   {acc.notes && <div style={{ fontSize: 11.5, color: COLORS.inkSoft, marginTop: 4, fontStyle: "italic" }}>{acc.notes}</div>}
                 </div>
-                <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
-                  <button onClick={() => onEdit(acc)} aria-label="Edit account" style={roundIconBtn}><Pencil size={14} color={COLORS.inkSoft} /></button>
-                  <button onClick={() => { if (confirmAccountDelete(acc)) onDelete(acc.id); }} aria-label="Delete account" style={roundIconBtn}><Trash2 size={14} color={COLORS.red} /></button>
-                </div>
+                <ChevronRight size={14} color={COLORS.inkSoft} style={{ flexShrink: 0 }} />
               </div>
             );
           })}
         </div>
       )}
     </div>
+  );
+}
+
+function AccountDetailSheet({ account, ipos, transfers, accounts, onClose, onEdit, onDelete }) {
+  const confirm = useConfirm();
+  if (!account) return null;
+  const apps = useMemo(() => {
+    const list = [];
+    ipos.forEach((ipo) => {
+      (ipo.applications || []).forEach((app) => {
+        if (app.accountId === account.id) list.push({ ...app, ipo });
+      });
+    });
+    return list.sort((a, b) => (b.ipo.applicationDate || b.ipo.openDate || "").localeCompare(a.ipo.applicationDate || a.ipo.openDate || ""));
+  }, [account.id, ipos]);
+
+  const totals = useMemo(() => {
+    let applied = 0, allotted = 0, invested = 0, realized = 0, unrealized = 0;
+    apps.forEach((app) => {
+      applied++;
+      const price = Number(app.ipo.priceBand) || 0;
+      const shares = Number(app.sharesAllotted) || 0;
+      if (app.allotmentStatus === "Allotted" || app.allotmentStatus === "Partial") {
+        allotted++;
+        invested += shares * price;
+        if (app.sold) {
+          realized += shares * ((Number(app.sellPrice) || 0) - price);
+        } else {
+          const mark = valuationPrice(app.ipo);
+          if (mark) unrealized += shares * (mark - price);
+        }
+      }
+    });
+    return { applied, allotted, invested, realized, unrealized };
+  }, [apps]);
+
+  const acctTransfers = useMemo(() =>
+    transfers.filter((t) => t.fromAccountId === account.id || t.toAccountId === account.id)
+      .sort((a, b) => (b.date || "").localeCompare(a.date || "")),
+    [account.id, transfers]
+  );
+
+  const pan = panOf(account);
+
+  return (
+    <Sheet title={account.name} onClose={onClose}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <Badge color={COLORS.navy} bg={COLORS.chip}>{account.relation || "Self"}</Badge>
+          {account.bank && <Badge color={COLORS.inkSoft} bg="#EFEDE7">{account.bank}</Badge>}
+          {pan ? <Badge color={COLORS.inkSoft} bg="#EFEDE7">{pan}</Badge> : <Badge color={COLORS.gold} bg={COLORS.goldSoft}>No PAN</Badge>}
+        </div>
+        <button onClick={onEdit} aria-label="Edit account" style={roundIconBtn}>
+          <Pencil size={14} color={COLORS.inkSoft} />
+        </button>
+      </div>
+      {account.notes && (
+        <div style={{ fontSize: 12.5, color: COLORS.inkSoft, fontFamily: "Inter, sans-serif", fontStyle: "italic", marginBottom: 14 }}>
+          "{account.notes}"
+        </div>
+      )}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
+        <div style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: "10px 12px" }}>
+          <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 16, fontWeight: 700, color: COLORS.ink }}>{totals.applied}</div>
+          <div style={{ fontSize: 11, color: COLORS.inkSoft, fontFamily: "Inter, sans-serif" }}>Applied</div>
+        </div>
+        <div style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: "10px 12px" }}>
+          <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 16, fontWeight: 700, color: totals.allotted ? COLORS.green : COLORS.ink }}>{totals.allotted}</div>
+          <div style={{ fontSize: 11, color: COLORS.inkSoft, fontFamily: "Inter, sans-serif" }}>Allotted</div>
+        </div>
+        <div style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: "10px 12px" }}>
+          <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 16, fontWeight: 700, color: COLORS.ink }}>{inr(totals.invested)}</div>
+          <div style={{ fontSize: 11, color: COLORS.inkSoft, fontFamily: "Inter, sans-serif" }}>Invested</div>
+        </div>
+        <div style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: "10px 12px" }}>
+          <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 16, fontWeight: 700, color: (totals.realized + totals.unrealized) >= 0 ? COLORS.green : COLORS.red }}>{inr(totals.realized + totals.unrealized)}</div>
+          <div style={{ fontSize: 11, color: COLORS.inkSoft, fontFamily: "Inter, sans-serif" }}>Total P&L</div>
+        </div>
+      </div>
+      <SectionLabel>IPO Applications ({apps.length})</SectionLabel>
+      {apps.length === 0 ? (
+        <EmptyState text="No applications from this account yet." />
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
+          {apps.map((app) => {
+            const meta = STATUS_META[app.allotmentStatus] || STATUS_META.Pending;
+            const strongStatus = app.allotmentStatus === "Allotted" || app.allotmentStatus === "Not Allotted";
+            const price = Number(app.ipo.priceBand) || 0;
+            const shares = Number(app.sharesAllotted) || 0;
+            let pnl = null;
+            if (app.sold) pnl = shares * ((Number(app.sellPrice) || 0) - price);
+            else if ((app.allotmentStatus === "Allotted" || app.allotmentStatus === "Partial") && shares) {
+              const mark = valuationPrice(app.ipo);
+              if (mark) pnl = shares * (mark - price);
+            }
+            return (
+              <div key={app.id} style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: "9px 10px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                  <div style={{ fontFamily: "Inter, sans-serif", fontWeight: 600, fontSize: 13.5, color: COLORS.ink, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {app.ipo.company || "Untitled IPO"}
+                  </div>
+                  <Badge color={meta.color} bg={meta.bg} strong={strongStatus}>{app.allotmentStatus}</Badge>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 4, fontFamily: "'JetBrains Mono', monospace", fontSize: 11.5 }}>
+                  <span style={{ color: COLORS.inkSoft }}>{app.lots || 0} lot(s){app.sold ? " · Sold" : ""}</span>
+                  {pnl !== null && (
+                    <span style={{ fontWeight: 700, color: pnl >= 0 ? COLORS.green : COLORS.red }}>
+                      {app.sold ? "P&L " : "Unreal. "}{inr(pnl)}
+                    </span>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {acctTransfers.length > 0 && (
+        <>
+          <SectionLabel>Fund Transfers ({acctTransfers.length})</SectionLabel>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
+            {acctTransfers.map((t) => {
+              const from = accounts.find((a) => a.id === t.fromAccountId)?.name || "Unknown";
+              const to = accounts.find((a) => a.id === t.toAccountId)?.name || "Unknown";
+              const isOutgoing = t.fromAccountId === account.id;
+              return (
+                <div key={t.id} style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: "8px 10px", fontFamily: "Inter, sans-serif", fontSize: 12.5 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span style={{ color: COLORS.ink, fontWeight: 600 }}>{isOutgoing ? `To ${to}` : `From ${from}`}</span>
+                    <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, color: isOutgoing ? COLORS.red : COLORS.green }}>{isOutgoing ? "-" : "+"}{inrOrDash(t.amount)}</span>
+                  </div>
+                  <div style={{ fontSize: 11, color: COLORS.inkSoft, marginTop: 2 }}>{fmtDate(t.date)}{t.remarks ? ` · ${t.remarks}` : ""}</div>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+      <div style={{ marginTop: 20, paddingTop: 14, borderTop: `1px solid ${COLORS.border}` }}>
+        <SectionLabel>Account actions</SectionLabel>
+        <button onClick={async () => { const n = apps.length; const msg = n ? `Delete ${account.name || "this account"}? This cannot be undone.` : `Delete ${account.name || "this account"}? This cannot be undone.`; if (await confirm(msg, { danger: true })) onDelete(account.id); }} style={{ width: "100%", marginTop: 6, minHeight: 44, borderRadius: 10, border: `1px solid ${COLORS.red}`, background: COLORS.redSoft, color: COLORS.red, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "Inter, sans-serif" }}>Delete Account</button>
+      </div>
+    </Sheet>
   );
 }
 
@@ -3209,7 +3527,7 @@ function ReconciliationView({ transfers, accounts }) {
     <div>
       <SectionLabel>Net Position</SectionLabel>
       {allSettled ? (
-        <EmptyState text="Everything is settled — no outstanding balances between accounts." />
+        <EmptyState text="Everything is settled - no outstanding balances between accounts." />
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 20 }}>
           {perAccount.map((p) => (
@@ -3260,7 +3578,6 @@ function ReconciliationView({ transfers, accounts }) {
 
 function TransferList({ transfers, accounts, ipos = [], onEdit, onDelete }) {
   const [search, setSearch] = useState("");
-  const [filter, setFilter] = useState([]);
   const [sort, setSort] = useState("recent");
 
   const name = (id) => accounts.find((a) => a.id === id)?.name || "Unknown";
@@ -3278,37 +3595,20 @@ function TransferList({ transfers, accounts, ipos = [], onEdit, onDelete }) {
     return transfers
       .filter((t) => {
         if (q) {
-          const hay = `${name(t.fromAccountId)} ${name(t.toAccountId)} ${t.remarks || ""} ${ipoName(t.relatedIpoId)}`.toLowerCase();
+          const hay = `${name(t.fromAccountId)} ${name(t.toAccountId)} ${t.remarks || ""} ${ipoName(t.relatedIpoId)} ${(t.relatedIpoIds || []).map(ipoName).join(" ")}`.toLowerCase();
           if (!hay.includes(q)) return false;
         }
-        if (!filter.length) return true;
-        return filter.some((f) => {
-          if (f === "linked") return !!t.relatedIpoId;
-          if (f === "unlinked") return !t.relatedIpoId;
-          if (f.startsWith("acct:")) {
-            const id = f.slice(5);
-            return t.fromAccountId === id || t.toAccountId === id;
-          }
-          return true;
-        });
+        return true;
       })
       .sort(cmp);
-  }, [transfers, accounts, ipos, search, filter, sort]);
+  }, [transfers, accounts, ipos, search, sort]);
 
   if (transfers.length === 0) return <EmptyState text="No fund transfers logged yet. Tap + to record one." icon={ArrowRightLeft} subtitle="Track money moved between accounts for IPO applications." />;
-
-  const linked = transfers.filter((t) => t.relatedIpoId).length;
 
   return (
     <div>
       <ListControls
         search={search} setSearch={setSearch} placeholder="Search account, IPO or remark"
-        filter={filter} setFilter={setFilter}
-        filters={[
-          { id: "linked", label: "For an IPO", count: linked },
-          { id: "unlinked", label: "Unlinked", count: transfers.length - linked },
-          ...accounts.slice(0, 6).map((a) => ({ id: `acct:${a.id}`, label: a.name })),
-        ]}
         sort={sort} setSort={setSort}
         sorts={[
           { id: "recent", label: "Newest" },
@@ -3323,15 +3623,15 @@ function TransferList({ transfers, accounts, ipos = [], onEdit, onDelete }) {
         /* Two rows, not four: the buttons had a line to themselves and the note
            another, so a transfer stood four rows tall for one fact anyone
            scans for. The amount sits beside the names, the buttons beside the
-           date, and the note keeps to a single line — cut where it runs out,
+           date, and the note keeps to a single line - cut where it runs out,
            since the whole of it is in the edit sheet and a card is for finding
            the transfer rather than reading it. */
-        <div key={t.id} style={{
+        <div key={t.id} onClick={() => onEdit(t)} style={{
           background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 12,
-          padding: "10px 12px",
+          padding: "10px 12px", cursor: "pointer",
         }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14, fontWeight: 600, color: COLORS.ink, minWidth: 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14, fontWeight: 600, color: COLORS.heading, fontFamily: "'Fraunces', serif", minWidth: 0 }}>
               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name(t.fromAccountId)}</span>
               <ArrowRightLeft size={13} color={COLORS.gold} style={{ flexShrink: 0 }} />
               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name(t.toAccountId)}</span>
@@ -3347,11 +3647,7 @@ function TransferList({ transfers, accounts, ipos = [], onEdit, onDelete }) {
               }}
             >
               {fmtDate(t.date)}
-              {t.remarks ? <span style={{ fontStyle: "italic" }}> · “{t.remarks}”</span> : null}
-            </div>
-            <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
-              <button onClick={() => onEdit(t)} aria-label="Edit transfer" style={smallIconBtn}><Pencil size={13} color={COLORS.inkSoft} /></button>
-              <button onClick={() => { if (confirm("Delete this transfer?")) onDelete(t.id); }} aria-label="Delete transfer" style={smallIconBtn}><Trash2 size={13} color={COLORS.red} /></button>
+              {t.remarks ? <span style={{ fontStyle: "italic" }}> · "{t.remarks}"</span> : null}
             </div>
           </div>
         </div>
@@ -3368,73 +3664,64 @@ function TransferList({ transfers, accounts, ipos = [], onEdit, onDelete }) {
 function IpoFormSheet({ initial, onClose, onSave }) {
   const [f, setF] = useState(initial || {
     id: undefined, company: "", category: "Mainboard", applicationDate: "", priceBand: "",
-    lotSize: "", listingDate: "", listingPrice: "", remarks: "",
+    priceBandLow: "", lotSize: "", listingDate: "", listingPrice: "", remarks: "",
   });
-  const [editDates, setEditDates] = useState(false);
-  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  const [errors, setErrors] = useState({});
+  const set = (k) => (e) => { setF({ ...f, [k]: e.target.value }); if (errors[k]) setErrors((e) => ({ ...e, [k]: "" })); };
   return (
     <Sheet title={initial ? "Edit IPO" : "New IPO"} onClose={onClose}>
-      <Field label="Company Name"><Input value={f.company} onChange={set("company")} placeholder="e.g. Vishal Mega Mart" /></Field>
+      {!initial && (
+        <div style={{
+          background: COLORS.goldSoft, display: "flex", alignItems: "flex-start",
+          gap: 8, padding: "10px 12px", borderRadius: 10, marginBottom: 14,
+          fontSize: 12, color: COLORS.ink, fontFamily: "Inter, sans-serif",
+        }}>
+          <AlertTriangle size={14} color={COLORS.gold} style={{ flexShrink: 0, marginTop: 1 }} />
+          <span>Market prices can only sync for IPOs added from the exchange. Use <strong>Add from exchange</strong> in the IPO list header when possible.</span>
+        </div>
+      )}
+      <Field label="Company Name" error={errors.company}><Input value={f.company} onChange={set("company")} placeholder="e.g. Vishal Mega Mart" /></Field>
       <Field label="Category">
         <Select value={f.category} onChange={set("category")}>
           <option>Mainboard</option><option>SME</option>
         </Select>
       </Field>
-      <Field label="Price per Share (₹)"><Input type="number" inputMode="numeric" value={f.priceBand} onChange={set("priceBand")} placeholder="e.g. 285" /></Field>
-      <Field label="Lot Size (shares)"><Input type="number" inputMode="numeric" value={f.lotSize} onChange={set("lotSize")} placeholder="e.g. 52" /></Field>
+      <div style={{ display: "flex", gap: 10 }}>
+        <div style={{ flex: 1 }}><Field label="Price Band Low (₹)"><Input type="number" inputMode="numeric" value={f.priceBandLow || ""} onChange={set("priceBandLow")} placeholder="e.g. 270" /></Field></div>
+        <div style={{ flex: 1 }}><Field label="Cutoff Price (₹)" error={errors.priceBand}><Input type="number" inputMode="numeric" value={f.priceBand} onChange={set("priceBand")} placeholder="e.g. 285" /></Field></div>
+      </div>
+      <Field label="Lot Size (shares)" error={errors.lotSize}><Input type="number" inputMode="numeric" value={f.lotSize} onChange={set("lotSize")} placeholder="e.g. 52" /></Field>
 
-      {/* Dates come from Upstox and are shown rather than typed — every one was a
-          duplicate of something the exchange already publishes. But Upstox has no
-          record of some issues, and then a wrong date can only be corrected by
-          hand, so the inputs are a click away rather than gone. */}
-      {!editDates ? (
-        <div style={{
-          background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 10,
-          padding: "10px 12px", marginBottom: 14, fontSize: 12, color: COLORS.inkSoft,
-          fontFamily: "'JetBrains Mono', monospace", display: "flex", flexDirection: "column", gap: 3,
-        }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-            <span style={{ fontFamily: "Inter, sans-serif", fontWeight: 600, color: COLORS.ink, fontSize: 11 }}>
-              {f.openDate || f.closeDate || f.listingDate ? "DATES" : "NO DATES YET"}
-            </span>
-            <button
-              type="button"
-              onClick={() => setEditDates(true)}
-              style={{ background: "none", border: 0, padding: 0, color: COLORS.navy, fontWeight: 600, fontSize: 11.5, cursor: "pointer", fontFamily: "Inter, sans-serif" }}
-            >Edit</button>
-          </div>
-          {f.openDate && <span>Opens {fmtDate(f.openDate)}</span>}
-          {f.closeDate && <span>Closes {fmtDate(f.closeDate)} — last day to apply</span>}
-          {!hasListed(f) && !allotmentSettled(f) && allotmentDateOf(f).date && (
-            <span>
-              Allotment {fmtDate(allotmentDateOf(f).date)}
-              {allotmentDateOf(f).exact ? "" : " (expected)"}
-            </span>
-          )}
-          {f.listingDate
-            ? <span>{hasListed(f) ? "Listed" : "Lists"} {fmtDate(f.listingDate)}</span>
-            : listingDateOf(f).date && <span>Lists {fmtDate(listingDateOf(f).date)} (expected)</span>}
-          {!(f.openDate || f.closeDate || f.listingDate) && (
-            <span style={{ fontFamily: "Inter, sans-serif" }}>
-              Upstox has none for this issue. Refreshing prices fills them in when it does.
-            </span>
-          )}
-        </div>
-      ) : (
-        <>
-          <div style={{ fontSize: 11.5, color: COLORS.inkSoft, marginBottom: 10 }}>
-            A refresh overwrites these whenever Upstox has its own value.
-          </div>
-          <Field label="Opens"><Input type="date" value={f.openDate || ""} onChange={set("openDate")} /></Field>
-          <Field label="Closes — last day to apply"><Input type="date" value={f.closeDate || ""} onChange={set("closeDate")} /></Field>
-          <Field label="Allotment date"><Input type="date" value={f.allotmentDate || ""} onChange={set("allotmentDate")} /></Field>
-          <Field label="Listing date"><Input type="date" value={f.listingDate || ""} onChange={set("listingDate")} /></Field>
-        </>
-      )}
-      <Field label={f.listingPriceSource === "bse-open" ? "Listing Price — day-one open (from Upstox, ₹)" : f.listingPriceSource === "bse-close" ? "Listing Day Close (from Upstox, ₹)" : "Listing Price (optional, ₹)"}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }}>
+        <Field label="Open Date" error={errors.openDate}><Input type="date" value={f.openDate || ""} onChange={(e) => {
+          const v = e.target.value;
+          const bad = v ? isNonTradingDay(v) : false;
+          if (bad) { setErrors((prev) => ({ ...prev, openDate: bad })); setF({ ...f, openDate: v }); return; }
+          setF({ ...f, openDate: v });
+          if (errors.openDate) setErrors((prev) => ({ ...prev, openDate: "" }));
+        }} /></Field>
+        <Field label="Close Date" error={errors.closeDate}><Input type="date" value={f.closeDate || ""} onChange={(e) => {
+          const close = e.target.value;
+          const bad = close ? isNonTradingDay(close) : false;
+          if (bad) { setErrors((prev) => ({ ...prev, closeDate: bad })); setF({ ...f, closeDate: close }); return; }
+          const next = { ...f, closeDate: close, applicationDate: close };
+          if (close) {
+            next.allotmentDate = addClearingDays(close, 1);
+            const credit = addClearingDays(next.allotmentDate, 1);
+            next.listingDate = addTradingDays(credit, 1);
+          } else {
+            next.allotmentDate = "";
+            next.listingDate = "";
+          }
+          setF(next);
+          if (errors.closeDate) setErrors((prev) => ({ ...prev, closeDate: "" }));
+        }} /></Field>
+        <Field label="Allotment (auto)"><Input type="date" value={f.closeDate ? addClearingDays(f.closeDate, 1) : ""} disabled style={{ background: COLORS.bg, color: COLORS.inkSoft }} /></Field>
+        <Field label="Listing (auto)"><Input type="date" value={f.closeDate ? addTradingDays(addClearingDays(addClearingDays(f.closeDate, 1), 1), 1) : ""} disabled style={{ background: COLORS.bg, color: COLORS.inkSoft }} /></Field>
+      </div>
+      <Field label={f.listingPriceSource === "bse-open" ? "Listing Price - day-one open (from exchange, ₹)" : f.listingPriceSource === "bse-close" ? "Listing Day Close (from exchange, ₹)" : "Listing Price (optional, ₹)"}>
         <Input
           type="number" inputMode="numeric" value={f.listingPrice}
-          // Typing over it makes it yours, so it is no longer BSE's close.
           onChange={(e) => setF({ ...f, listingPrice: e.target.value, listingPriceSource: "" })}
           placeholder="e.g. 340"
         />
@@ -3442,7 +3729,18 @@ function IpoFormSheet({ initial, onClose, onSave }) {
       <Field label="Remarks">
         <textarea value={f.remarks} onChange={set("remarks")} rows={3} style={{ ...inputStyle, resize: "vertical" }} placeholder="Any notes about this IPO" />
       </Field>
-      <PrimaryButton onClick={() => { if (!f.company) return alert("Company name is required"); onSave({ ...f, id: f.id || uid() }); }}>
+      <PrimaryButton onClick={() => {
+        const e = {};
+        if (!f.company) e.company = "Required";
+        if (!f.priceBand) e.priceBand = "Required";
+        if (!f.lotSize) e.lotSize = "Required";
+        if (!f.openDate) e.openDate = "Required";
+        else { const bad = isNonTradingDay(f.openDate); if (bad) e.openDate = bad; }
+        if (!f.closeDate) e.closeDate = "Required";
+        else { const bad = isNonTradingDay(f.closeDate); if (bad) e.closeDate = bad; }
+        if (Object.keys(e).length) return setErrors(e);
+        onSave(trimFields({ ...f, id: f.id || uid() }));
+      }}>
         {initial ? "Save Changes" : "Add IPO"}
       </PrimaryButton>
     </Sheet>
@@ -3454,13 +3752,14 @@ function ApplicationFormSheet({ initial, ipo, accounts, onClose, onSave }) {
     id: undefined, accountId: accounts[0]?.id || "", appliedFor: "", lots: "1", amountBlocked: "",
     allotmentStatus: "Pending", sharesAllotted: "", sold: false, sellPrice: "", sellDate: "", remarks: "",
   });
-  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  const [errors, setErrors] = useState({});
+  const set = (k) => (e) => { setF({ ...f, [k]: e.target.value }); if (errors[k]) setErrors((prev) => ({ ...prev, [k]: "" })); };
   const setBool = (k) => (e) => setF({ ...f, [k]: e.target.checked });
   const lotSize = Number(ipo?.lotSize) || 0;
 
   /* A full allotment is the whole application: lots x lot size. Left blank it
-     silently values the holding at nothing — no shares, no capital deployed, no
-     gain — so it is filled in the moment the status says allotted, exactly as
+     silently values the holding at nothing - no shares, no capital deployed, no
+     gain - so it is filled in the moment the status says allotted, exactly as
      the bulk sheet does. Still editable, for the odd partial. */
   const setStatus = (e) => {
     const allotmentStatus = e.target.value;
@@ -3488,7 +3787,7 @@ function ApplicationFormSheet({ initial, ipo, accounts, onClose, onSave }) {
 
   return (
     <Sheet title={initial ? "Edit Application" : "New Application"} onClose={onClose}>
-      <Field label="Applied From Account">
+      <Field label="Applied From Account" error={errors.accountId}>
         <Select value={f.accountId} onChange={set("accountId")}>
           {accounts.length === 0 && <option value="">Add an account first</option>}
           {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
@@ -3506,7 +3805,7 @@ function ApplicationFormSheet({ initial, ipo, accounts, onClose, onSave }) {
         }} /></Field></div>
         <div style={{ flex: 1 }}><Field label="Amount Blocked (₹)">
           <div style={{ ...inputStyle, background: COLORS.bg, color: COLORS.inkSoft, display: "flex", alignItems: "center" }}>
-            {f.amountBlocked ? inr(f.amountBlocked) : "—"}
+            {f.amountBlocked ? inr(f.amountBlocked) : "--"}
           </div>
         </Field></div>
       </div>
@@ -3537,7 +3836,7 @@ function ApplicationFormSheet({ initial, ipo, accounts, onClose, onSave }) {
       <Field label="Remarks">
         <textarea value={f.remarks} onChange={set("remarks")} rows={2} style={{ ...inputStyle, resize: "vertical" }} placeholder="e.g. Funds sent by dad, to be returned after listing" />
       </Field>
-      <PrimaryButton onClick={() => { if (!f.accountId) return alert("Select an account"); onSave({ ...f, id: f.id || uid() }); }}>
+      <PrimaryButton onClick={() => { if (!f.accountId) return setErrors({ accountId: "Select an account" }); onSave(trimFields({ ...f, id: f.id || uid() })); }}>
         {initial ? "Save Changes" : "Add Application"}
       </PrimaryButton>
     </Sheet>
@@ -3548,7 +3847,8 @@ const PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 
 function AccountFormSheet({ initial, accounts = [], onClose, onSave }) {
   const [f, setF] = useState(initial || { id: undefined, name: "", relation: "", bank: "", pan: "", notes: "" });
-  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  const [errors, setErrors] = useState({});
+  const set = (k) => (e) => { setF({ ...f, [k]: e.target.value }); if (errors[k]) setErrors((prev) => ({ ...prev, [k]: "" })); };
 
   const pan = (f.pan || "").trim().toUpperCase();
   const panShapeBad = pan.length > 0 && !PAN_RE.test(pan);
@@ -3558,7 +3858,7 @@ function AccountFormSheet({ initial, accounts = [], onClose, onSave }) {
 
   return (
     <Sheet title={initial ? "Edit Account" : "New Account"} onClose={onClose}>
-      <Field label="Name"><Input value={f.name} onChange={set("name")} placeholder="e.g. Mom, Dad, Priya Aunty" /></Field>
+      <Field label="Name" error={errors.name}><Input value={f.name} onChange={set("name")} placeholder="e.g. Mom, Dad, Priya Aunty" /></Field>
       <Field label="Relation"><Input value={f.relation} onChange={set("relation")} placeholder="e.g. Mother, Self, Brother-in-law" /></Field>
       <Field label="Bank / Broker (optional)"><Input value={f.bank} onChange={set("bank")} placeholder="e.g. HDFC / Zerodha" /></Field>
       <Field label="PAN">
@@ -3575,7 +3875,7 @@ function AccountFormSheet({ initial, accounts = [], onClose, onSave }) {
       </Field>
       {panShapeBad && (
         <div style={{ background: COLORS.goldSoft, color: COLORS.ink, borderRadius: 8, padding: "8px 10px", marginTop: -6, marginBottom: 12, fontSize: 12 }}>
-          That does not look like a PAN (five letters, four digits, one letter). Saving anyway is fine — it is only used to catch duplicate applications.
+          That does not look like a PAN (five letters, four digits, one letter). Saving anyway is fine - it is only used to catch duplicate applications.
         </div>
       )}
       {panTakenBy && (
@@ -3585,8 +3885,8 @@ function AccountFormSheet({ initial, accounts = [], onClose, onSave }) {
       )}
       <Field label="Notes"><textarea value={f.notes} onChange={set("notes")} rows={2} style={{ ...inputStyle, resize: "vertical" }} /></Field>
       <PrimaryButton onClick={() => {
-        if (!f.name) return alert("Name is required");
-        onSave({ ...f, pan, id: f.id || uid() });
+        if (!f.name) return setErrors({ name: "Name is required" });
+        onSave(trimFields({ ...f, pan, id: f.id || uid() }));
       }}>
         {initial ? "Save Changes" : "Add Account"}
       </PrimaryButton>
@@ -3594,12 +3894,43 @@ function AccountFormSheet({ initial, accounts = [], onClose, onSave }) {
   );
 }
 
-function TransferFormSheet({ initial, accounts, ipos, onClose, onSave }) {
-  const [f, setF] = useState(initial || {
-    id: undefined, fromAccountId: accounts[0]?.id || "", toAccountId: accounts[1]?.id || accounts[0]?.id || "",
-    amount: "", date: todayISO(), relatedIpoId: "", remarks: "",
+function TransferFormSheet({ initial, accounts, ipos, onClose, onSave, onDelete }) {
+  const confirm = useConfirm();
+  // Backward compat: relatedIpoId (string) → relatedIpoIds (array)
+  const initIds = initial?.relatedIpoIds
+    ? initial.relatedIpoIds
+    : initial?.relatedIpoId ? [initial.relatedIpoId] : [];
+  const [f, setF] = useState({
+    ...(initial || {
+      id: undefined, fromAccountId: accounts[0]?.id || "", toAccountId: accounts[1]?.id || accounts[0]?.id || "",
+      amount: "", date: todayISO(), remarks: "",
+    }),
+    relatedIpoIds: initIds,
   });
-  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  const set = (k) => (e) => { setF({ ...f, [k]: e.target.value }); if (errors[k]) setErrors((prev) => ({ ...prev, [k]: "" })); };
+  const [errors, setErrors] = useState({});
+  const [ipoSearch, setIpoSearch] = useState("");
+
+  const ipoMatches = useMemo(() => {
+    const q = ipoSearch.trim().toLowerCase();
+    const selected = new Set(f.relatedIpoIds);
+    const pool = ipos.filter((i) => !selected.has(i.id));
+    if (!q) {
+      // Show only currently open IPOs by default
+      const today = todayISO();
+      return pool.filter((i) => {
+        const open = i.openDate || "";
+        const close = i.closeDate || "";
+        return open && open <= today && close && close >= today;
+      }).slice(0, 6);
+    }
+    return pool.filter((i) => (i.company || "").toLowerCase().includes(q)).slice(0, 6);
+  }, [ipoSearch, ipos, f.relatedIpoIds]);
+
+  const addIpo = (id) => { setF((prev) => ({ ...prev, relatedIpoIds: [...prev.relatedIpoIds, id] })); setIpoSearch(""); };
+  const removeIpo = (id) => { setF((prev) => ({ ...prev, relatedIpoIds: prev.relatedIpoIds.filter((x) => x !== id) })); };
+  const ipoNameOf = (id) => ipos.find((i) => i.id === id)?.company || "Unknown IPO";
+
   return (
     <Sheet title={initial ? "Edit Transfer" : "New Transfer"} onClose={onClose}>
       <Field label="From Account">
@@ -3613,21 +3944,76 @@ function TransferFormSheet({ initial, accounts, ipos, onClose, onSave }) {
         </Select>
       </Field>
       <div style={{ display: "flex", gap: 10 }}>
-        <div style={{ flex: 1 }}><Field label="Amount (₹)"><Input type="number" inputMode="numeric" value={f.amount} onChange={set("amount")} /></Field></div>
-        <div style={{ flex: 1 }}><Field label="Date"><Input type="date" value={f.date} onChange={set("date")} /></Field></div>
+        <div style={{ flex: 1 }}><Field label="Amount (₹)" error={errors.amount}><Input type="number" inputMode="numeric" value={f.amount} onChange={set("amount")} /></Field></div>
+        <div style={{ flex: 1 }}><Field label="Date" error={errors.date}><Input type="date" value={f.date} onChange={set("date")} /></Field></div>
       </div>
-      <Field label="Related IPO (optional)">
-        <Select value={f.relatedIpoId} onChange={set("relatedIpoId")}>
-          <option value="">— None —</option>
-          {ipos.map((i) => <option key={i.id} value={i.id}>{i.company}</option>)}
-        </Select>
+      <Field label="Related IPOs (optional)">
+        {f.relatedIpoIds.length > 0 && (
+          <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginBottom: 6 }}>
+            {f.relatedIpoIds.map((id) => (
+              <span key={id} onClick={() => removeIpo(id)} style={{
+                background: COLORS.chip, color: COLORS.navy, border: `1px solid ${COLORS.border}`,
+                borderRadius: 999, padding: "3px 8px", fontSize: 11, fontWeight: 600,
+                fontFamily: "Inter, sans-serif", cursor: "pointer", display: "inline-flex",
+                alignItems: "center", gap: 4, whiteSpace: "nowrap",
+              }}>{ipoNameOf(id)} <X size={10} color={COLORS.inkSoft} /></span>
+            ))}
+          </div>
+        )}
+        <div style={{ position: "relative" }}>
+          <Input
+            value={ipoSearch}
+            onChange={(e) => setIpoSearch(e.target.value)}
+            placeholder="Search IPO to link..."
+            style={{ paddingRight: ipoSearch ? 34 : 12 }}
+          />
+          {ipoSearch && (
+            <button onClick={() => setIpoSearch("")} aria-label="Clear" style={{
+              position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)",
+              background: "none", border: "none", padding: 4, cursor: "pointer", display: "flex",
+            }}><X size={14} color={COLORS.inkSoft} /></button>
+          )}
+        </div>
+        {ipoMatches.length > 0 && (
+          <div style={{
+            border: `1px solid ${COLORS.border}`, borderRadius: 8, marginTop: 4,
+            background: COLORS.surface, maxHeight: 160, overflowY: "auto",
+          }}>
+            {ipoMatches.map((i) => (
+                <button key={i.id} onClick={() => addIpo(i.id)} style={{
+                  display: "block", width: "100%", textAlign: "left", padding: "8px 12px",
+                  background: "transparent", border: "none", borderBottom: `1px solid ${COLORS.border}`,
+                  fontSize: 13, color: COLORS.ink, fontFamily: "Inter, sans-serif", cursor: "pointer",
+                }}>{i.company}</button>
+              ))}
+          </div>
+        )}
+        {ipoSearch && ipoMatches.length === 0 && (
+          <div style={{ padding: "10px 12px", fontSize: 12, color: COLORS.inkSoft, fontFamily: "Inter, sans-serif" }}>No matching IPOs</div>
+        )}
       </Field>
       <Field label="Remarks">
         <textarea value={f.remarks} onChange={set("remarks")} rows={2} style={{ ...inputStyle, resize: "vertical" }} placeholder="e.g. Sent for application, to be returned" />
       </Field>
-      <PrimaryButton onClick={() => { if (!f.fromAccountId || !f.toAccountId) return alert("Select both accounts"); onSave({ ...f, id: f.id || uid() }); }}>
+      <PrimaryButton onClick={() => {
+        const e = {};
+        if (!f.fromAccountId || !f.toAccountId) e.fromAccountId = "Select both accounts";
+        if (!f.amount) e.amount = "Required";
+        if (!f.date) e.date = "Required";
+        if (Object.keys(e).length) return setErrors(e);
+        onSave(trimFields({ ...f, relatedIpoId: f.relatedIpoIds[0] || "", id: f.id || uid() }));
+      }}>
         {initial ? "Save Changes" : "Add Transfer"}
       </PrimaryButton>
+      {initial && onDelete && (
+        <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px solid ${COLORS.border}` }}>
+          <button onClick={async () => { if (await confirm("Delete this transfer? This cannot be undone.", { danger: true })) { onDelete(f.id); onClose(); } }} style={{
+            width: "100%", minHeight: 44, borderRadius: 10, border: `1px solid ${COLORS.red}`,
+            background: COLORS.redSoft, color: COLORS.red, fontSize: 13, fontWeight: 700,
+            cursor: "pointer", fontFamily: "Inter, sans-serif",
+          }}>Delete Transfer</button>
+        </div>
+      )}
     </Sheet>
   );
 }
@@ -3659,7 +4045,7 @@ function DataSheet({ state, session, cloudOn, syncing, syncError, lastSync, onCl
       await navigator.clipboard.writeText(buildExport(state));
       setNotice("Copied to clipboard.");
     } catch {
-      setNotice("Clipboard blocked — use Download instead.");
+      setNotice("Clipboard blocked - use Download instead.");
     }
   };
 
@@ -3691,7 +4077,7 @@ function DataSheet({ state, session, cloudOn, syncing, syncError, lastSync, onCl
               {syncError
                 ? syncError
                 : syncing
-                  ? "Syncing…"
+                  ? "Syncing..."
                   : lastSync
                     ? `Synced at ${fmtTime(lastSync)}`
                     : "Waiting for first sync"}
@@ -3710,13 +4096,13 @@ function DataSheet({ state, session, cloudOn, syncing, syncError, lastSync, onCl
 
       {cloudOn && (
         <PrimaryButton onClick={onSyncNow} disabled={syncing}>
-          {syncing ? "Syncing…" : "Sync now"}
+          {syncing ? "Syncing..." : "Sync now"}
         </PrimaryButton>
       )}
 
       {/* Prices refresh on their own, but a manual pull belongs here: it says
           how fresh the figure is and gives you a way to insist. What it must
-          not say is how the matching worked internally — the match count
+          not say is how the matching worked internally - the match count
           could disagree with the price actually shown on a card, which reads
           as a bug even when nothing is wrong. */}
       <div style={{ marginTop: 18 }}>
@@ -3729,7 +4115,7 @@ function DataSheet({ state, session, cloudOn, syncing, syncError, lastSync, onCl
           {priceInfo?.error
             ? priceInfo.error
             : pricing
-              ? "Updating market prices…"
+              ? "Updating market prices..."
               : priceInfo?.asOf
                 ? `Prices updated ${priceAge(priceInfo.asOf)}`
                 : "Not updated yet"}
@@ -3741,7 +4127,7 @@ function DataSheet({ state, session, cloudOn, syncing, syncError, lastSync, onCl
             ...chipBase, flexShrink: 0, color: COLORS.navy, fontWeight: 700,
             opacity: pricing ? 0.6 : 1, cursor: pricing ? "default" : "pointer",
           }}
-        >{pricing ? "Updating…" : "Refresh"}</button>
+        >{pricing ? "Updating..." : "Refresh"}</button>
       </div>
       </div>
 
@@ -3843,7 +4229,7 @@ function AuthScreen({ mode, setMode, notice }) {
         )}
 
         <PrimaryButton onClick={submit} disabled={busy}>
-          {busy ? "Please wait…" : mode === "signup" ? "Create Account" : "Sign In"}
+          {busy ? "Please wait..." : mode === "signup" ? "Create Account" : "Sign In"}
         </PrimaryButton>
         <button
           onClick={() => { setMode(mode === "signup" ? "login" : "signup"); setError(""); setInfo(""); }}
@@ -3866,6 +4252,7 @@ function AuthScreen({ mode, setMode, notice }) {
    are painful one form at a time.
 ---------------------------------------------------------- */
 function BulkApplySheet({ ipo, accounts, onClose, onSave }) {
+  const confirm = useConfirm();
   const alreadyApplied = useMemo(
     () => new Set((ipo.applications || []).map((a) => a.accountId)),
     [ipo]
@@ -3899,12 +4286,12 @@ function BulkApplySheet({ ipo, accounts, onClose, onSave }) {
     setPicked(next);
   };
 
-  const submit = () => {
+  const submit = async () => {
     if (!chosen.length) return;
-    if (clashes.length && !confirm(
-      clashes.length + " of the selected accounts share a PAN with another application on this IPO. " +
-      "Duplicate PANs normally get every application rejected. Add them anyway?"
-    )) return;
+    if (clashes.length && !(await confirm(
+      clashes.length + " of the selected accounts share a PAN with another application on this IPO. Duplicate PANs normally get every application rejected. Add them anyway?",
+      { confirmLabel: "Add anyway", danger: false }
+    ))) return;
     onSave(chosen.map((a) => ({
       id: uid(),
       accountId: a.id,
@@ -3928,7 +4315,7 @@ function BulkApplySheet({ ipo, accounts, onClose, onSave }) {
       }}>
         <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 600, fontSize: 15, color: COLORS.heading }}>{ipo.company}</div>
         <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11.5, color: COLORS.inkSoft, marginTop: 3 }}>
-          ₹{ipo.priceBand || "—"}/sh · lot {ipo.lotSize || "—"} sh
+          {ipo.priceBandLow ? `₹${ipo.priceBandLow}-₹${ipo.priceBand}` : `₹${ipo.priceBand || "--"}`} · lot {ipo.lotSize || "--"} sh
           {lotSizeKnown ? ` · ₹${(Number(ipo.lotSize) * Number(ipo.priceBand)).toLocaleString("en-IN")} per lot` : ""}
         </div>
       </div>
@@ -3988,7 +4375,7 @@ function BulkApplySheet({ ipo, accounts, onClose, onSave }) {
                         style={{ ...inputStyle, width: 62, minHeight: 38, padding: "6px 8px", textAlign: "center" }}
                       />
                       <span style={{ fontSize: 10.5, color: COLORS.inkSoft, width: 58, textAlign: "right", fontFamily: "'JetBrains Mono', monospace" }}>
-                        {blockedFor(ipo, lotsFor(a.id)) ? inr(blockedFor(ipo, lotsFor(a.id))) : "—"}
+                        {blockedFor(ipo, lotsFor(a.id)) ? inr(blockedFor(ipo, lotsFor(a.id))) : "--"}
                       </span>
                     </div>
                   )}
@@ -4000,7 +4387,7 @@ function BulkApplySheet({ ipo, accounts, onClose, onSave }) {
           {clashes.length > 0 && (
             <div style={{ background: COLORS.redSoft, color: COLORS.red, borderRadius: 10, padding: "10px 12px", marginBottom: 12, fontSize: 12.5 }}>
               <strong>{clashes.length} duplicate PAN{clashes.length === 1 ? "" : "s"}.</strong> One PAN may submit only
-              one application per IPO — a duplicate normally gets every application under it rejected, not just the extra one.
+              one application per IPO - a duplicate normally gets every application under it rejected, not just the extra one.
             </div>
           )}
 
@@ -4077,7 +4464,7 @@ function BulkStatusSheet({ ipo, accounts, onClose, onSave }) {
 
   /* The user only ever enters lots; the parent still expects sharesAllotted
      on each application record, so that arithmetic happens once, here, on
-     save — never as something typed in. */
+     save - never as something typed in. */
   const save = () => {
     const out = {};
     Object.entries(draft).forEach(([id, v]) => {
@@ -4101,8 +4488,8 @@ function BulkStatusSheet({ ipo, accounts, onClose, onSave }) {
       </div>
 
       <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" }}>
-        {ALLOTMENT_STATUSES.map((s) => (
-          <button key={s} onClick={() => setAll(s)} style={{ ...chipBase }}>All → {s}</button>
+        {["Pending", "Allotted", "Not Allotted"].map((s) => (
+          <button key={s} onClick={() => setAll(s)} style={{ ...chipBase }}>All: {s}</button>
         ))}
       </div>
 
@@ -4178,7 +4565,7 @@ const normaliseName = (s) =>
    have to be typed out by hand, an IPO at a time. */
 function LiveIposSheet({ existing, onClose, onImport }) {
   const thisYear = new Date().getFullYear();
-  const [mode, setMode] = useState("current");           // "current" | "year"
+  const [mode, setMode] = useState("current");           // "current" · "year"
   const [year, setYear] = useState(thisYear);
   const [state, setState] = useState({ status: "loading", rows: [], error: "", fetchedAt: "", note: "" });
   const [picked, setPicked] = useState({});
@@ -4207,7 +4594,7 @@ function LiveIposSheet({ existing, onClose, onImport }) {
   useEffect(() => {
     let cancelled = false;
     /* Rows are dropped, not kept: they belong to the view being left, and
-       anything reading them meanwhile — the board counts, for one — would be
+       anything reading them meanwhile - the board counts, for one - would be
        judging the new list by the old one's contents. */
     setState((s) => ({ ...s, status: "loading", error: "", rows: [] }));
     setPicked({});
@@ -4230,11 +4617,11 @@ function LiveIposSheet({ existing, onClose, onImport }) {
         let note = "";
         if (mode === "current") {
           rows = (data.ipos || []).map((r) => ({ ...r, listedOn: "" }));
-          note = "Open and forthcoming issues, from Upstox.";
+          note = "Open and forthcoming issues from the exchange.";
         } else {
           /* Only the chosen year, since the feed is cumulative from it. Judged
              on the listing date, or the close date for an issue that has closed
-             but not yet listed — those belong to neither the open-and-upcoming
+             but not yet listed - those belong to neither the open-and-upcoming
              view nor a list of what has listed, and would be invisible. */
           rows = (data.listings || [])
             .filter((r) => (r.listedOn || r.closeDate || "").slice(0, 4) === String(year))
@@ -4246,7 +4633,7 @@ function LiveIposSheet({ existing, onClose, onImport }) {
               priceMin: r.priceMin != null ? r.priceMin : null,
               /* The issue price for something that has listed; for one that has
                  only closed there is no issue price yet, so the top of the band
-                 stands in — otherwise the price arrives empty. */
+                 stands in - otherwise the price arrives empty. */
               priceMax: r.issuePrice != null ? r.issuePrice : r.priceMax,
               openDate: r.openDate || "",
               closeDate: r.closeDate || "",
@@ -4260,12 +4647,12 @@ function LiveIposSheet({ existing, onClose, onImport }) {
             }));
           note = data.categoryKnown === false
             ? "Listed in " + year + ", from BSE. Mainboard/SME could not be determined this time."
-            : "Everything from " + year + ", from BSE — listed, and closed awaiting listing. Lot size and listing price are fetched for what you select.";
+            : "Everything from " + year + ", from BSE - listed, and closed awaiting listing. Lot size and listing price are fetched for what you select.";
         }
 
         if (mode === "current") {
           /* What is open comes first, then what is coming, then anything that
-             has already closed — the order you would work down if you were
+             has already closed - the order you would work down if you were
              deciding what to apply for. Within each, the nearest deadline
              leads: the issue closing soonest, then the one opening soonest. */
           const today = todayISO();
@@ -4288,7 +4675,7 @@ function LiveIposSheet({ existing, onClose, onImport }) {
         }
         setState({ status: "done", rows, error: "", fetchedAt: data.fetchedAt || "", note });
 
-        // Pre-tick only what is genuinely new, and only for the current view —
+        // Pre-tick only what is genuinely new, and only for the current view --
         // ticking a whole year by default would be a trap.
         if (mode === "current") {
           const pre = {};
@@ -4314,8 +4701,8 @@ function LiveIposSheet({ existing, onClose, onImport }) {
     return c;
   }, [state.rows]);
 
-  /* The list opens on Mainboard, but a year BSE left unlabelled — or a week of
-     nothing but SME issues — would then open on an empty screen. */
+  /* The list opens on Mainboard, but a year BSE left unlabelled - or a week of
+     nothing but SME issues - would then open on an empty screen. */
   useEffect(() => {
     // Only once the list has actually arrived; a half-loaded view is not
     // evidence that a board is empty.
@@ -4338,7 +4725,7 @@ function LiveIposSheet({ existing, onClose, onImport }) {
   const allNewPicked = newVisible.length > 0 && newVisible.every((r) => picked[r.company]);
 
   /* Selecting covers what is on screen and not already in the ledger; clearing
-     covers everything, including rows a search has since filtered away — which
+     covers everything, including rows a search has since filtered away - which
      is the point of it, since those are the ones easiest to forget. */
   const selectAllNew = () => {
     setPicked((p) => {
@@ -4351,7 +4738,7 @@ function LiveIposSheet({ existing, onClose, onImport }) {
   const clearAll = () => setPicked({});
 
   /* Lot size and the day-one open are fetched per company, so the year listing
-     comes back without them. Ask for just the selected ones before importing —
+     comes back without them. Ask for just the selected ones before importing --
      otherwise every import from a year arrives with no lot size, and a blocked
      amount cannot be worked out. */
   const enrichChosen = async (rows) => {
@@ -4387,11 +4774,13 @@ function LiveIposSheet({ existing, onClose, onImport }) {
     }
     onImport(rows.map((r) => ({
       id: uid(),
+      fromExchange: true,
       symbol: r.symbol || "",
       company: r.company,
       category: r.category || "Mainboard",
       applicationDate: r.closeDate || "",
       priceBand: r.priceMax != null ? String(r.priceMax) : "",
+      priceBandLow: r.priceMin != null ? String(r.priceMin) : "",
       lotSize: r.lotSize != null ? String(r.lotSize) : "",
       openDate: r.openDate || "",
       closeDate: r.closeDate || "",
@@ -4437,7 +4826,7 @@ function LiveIposSheet({ existing, onClose, onImport }) {
         <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "30px 0", gap: 10 }}>
           <Loader2 size={26} color={COLORS.navy} className="spin" />
           <div style={{ color: COLORS.inkSoft, fontSize: 13 }}>
-            {mode === "current" ? "Asking the exchanges…" : `Fetching ${year} listings…`}
+            {mode === "current" ? "Asking the exchanges..." : `Fetching ${year} listings...`}
           </div>
         </div>
       )}
@@ -4515,8 +4904,8 @@ function LiveIposSheet({ existing, onClose, onImport }) {
                     opacity: already ? 0.55 : 1,
                   }}>
                     <input
-                      type="checkbox" checked={on}
-                      onChange={() => setPicked((p) => ({ ...p, [r.company]: !p[r.company] }))}
+                      type="checkbox" checked={on} disabled={already}
+                      onChange={() => { if (already) return; setPicked((p) => ({ ...p, [r.company]: !p[r.company] })); }}
                       style={{ marginTop: 3, width: 18, height: 18, flexShrink: 0 }}
                     />
                     <div style={{ minWidth: 0, flex: 1 }}>
@@ -4527,12 +4916,12 @@ function LiveIposSheet({ existing, onClose, onImport }) {
 
                       <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: COLORS.inkSoft, marginTop: 4 }}>
                         {r.priceMin != null && r.priceMax != null
-                          ? `₹${r.priceMin}–${r.priceMax}`
+                          ? `₹${r.priceMin}-${r.priceMax}`
                           : r.priceMax != null ? `₹${r.priceMax}` : "price not published"}
                         {r.lotSize ? ` · lot ${r.lotSize}` : ""}
                         {r.listedOn
                           ? ` · listed ${fmtDate(r.listedOn)}`
-                          : r.closeDate ? ` · ${r.openDate || "—"} → ${r.closeDate}` : ""}
+                          : r.closeDate ? ` · ${r.openDate || "--"} -> ${r.closeDate}` : ""}
                       </div>
 
                       {(r.listingOpen != null || r.currentPrice != null) && (
@@ -4554,11 +4943,11 @@ function LiveIposSheet({ existing, onClose, onImport }) {
                             color={r.subscription >= 1 ? COLORS.green : COLORS.gold}
                             bg={r.subscription >= 1 ? COLORS.greenSoft : COLORS.goldSoft}
                           >
-                            {r.subscription.toFixed(2)}× sub
+                            {r.subscription.toFixed(2)}x sub
                           </Badge>
                         )}
                         {r.categories && r.categories.retail != null && (
-                          <Badge color={COLORS.navy} bg={COLORS.chip}>{r.categories.retail.toFixed(1)}× retail</Badge>
+                          <Badge color={COLORS.navy} bg={COLORS.chip}>{r.categories.retail.toFixed(1)}x retail</Badge>
                         )}
                         {already && <span style={{ fontSize: 11, color: COLORS.gold }}>already in your ledger</span>}
                       </div>
@@ -4572,7 +4961,7 @@ function LiveIposSheet({ existing, onClose, onImport }) {
           <StickyFooter>
             <PrimaryButton onClick={doImport} disabled={!chosen.length || importing}>
               {importing
-                ? "Fetching lot sizes…"
+                ? "Fetching lot sizes..."
                 : chosen.length
                   ? `Import ${chosen.length} IPO${chosen.length === 1 ? "" : "s"}`
                   : "Select IPOs to import"}
