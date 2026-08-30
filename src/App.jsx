@@ -784,15 +784,16 @@ function Badge({ children, color, bg, strong }) {
   );
 }
 
-function Field({ label, children }) {
+function Field({ label, children, error }) {
   return (
     <label style={{ display: "block", marginBottom: 14 }}>
       <span style={{
-        display: "block", fontSize: 11, fontWeight: 600, color: COLORS.inkSoft,
+        display: "block", fontSize: 11, fontWeight: 600, color: error ? COLORS.red : COLORS.inkSoft,
         textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 6,
         fontFamily: "Inter, sans-serif",
       }}>{label}</span>
       {children}
+      {error && <span style={{ display: "block", fontSize: 11, color: COLORS.red, marginTop: 4, fontFamily: "Inter, sans-serif" }}>{error}</span>}
     </label>
   );
 }
@@ -1237,12 +1238,10 @@ export default function App() {
 
   const closeTopLayer = useCallback(() => {
     const v = backRef.current;
-    // Innermost first: a bulk sheet sits on top of the IPO detail behind it.
+    // Innermost first: child sheets close before the parent beneath them.
     if (v.appSheet) { setAppSheet(null); return true; }
-    // These replace the IPO's detail rather than sitting over it, so closing
-    // one puts that detail back - the same as saving from it does.
-    if (v.bulkApplyFor) { setBulkApplyFor(null); setIpoDetail(v.bulkApplyFor); return true; }
-    if (v.bulkStatusFor) { setBulkStatusFor(null); setIpoDetail(v.bulkStatusFor); return true; }
+    if (v.bulkApplyFor) { setBulkApplyFor(null); return true; }
+    if (v.bulkStatusFor) { setBulkStatusFor(null); return true; }
     if (v.ipoSheet) { setIpoSheet(null); return true; }
     if (v.acctSheet) { setAcctSheet(null); return true; }
     if (v.acctDetail) { setAcctDetail(null); return true; }
@@ -1453,6 +1452,7 @@ export default function App() {
         }
         // The top of the band: what a cut-off application is priced at.
         if (hit.priceMax != null) patch.priceBand = String(hit.priceMax);
+        if (hit.priceMin != null) patch.priceBandLow = String(hit.priceMin);
         if (hit.lotSize != null) patch.lotSize = String(hit.lotSize);
 
         const merged = { ...ipo, ...patch };
@@ -1736,8 +1736,8 @@ export default function App() {
           onClose={() => setIpoDetail(null)}
           onDeleteIpo={(id) => { const gone=ipos.find((x)=>x.id===id); if(!gone)return; discard("ipo",gone,gone.company||"Untitled IPO"); persistIpos(ipos.filter((x)=>x.id!==id)); setIpoDetail(null); }}
           onSaveNote={(id,noteValue)=>{ persistIpos(ipos.map((i)=>i.id===id?{...i,remarks:noteValue}:i)); }}
-          onBulkApply={(ipoId) => { setIpoDetail(null); setBulkApplyFor(ipoId); }}
-          onBulkStatus={(ipoId) => { setIpoDetail(null); setBulkStatusFor(ipoId); }}
+          onBulkApply={(ipoId) => { setBulkApplyFor(ipoId); }}
+          onBulkStatus={(ipoId) => { setBulkStatusFor(ipoId); }}
           onEditApplication={(ipoId, application) => setAppSheet({ ipoId, application })}
           onDeleteApplication={(ipoId, appId) => {
             const owner = ipos.find((i) => i.id === ipoId);
@@ -1804,13 +1804,12 @@ export default function App() {
         <BulkApplySheet
           ipo={ipos.find((i) => i.id === bulkApplyFor)}
           accounts={accounts}
-          onClose={() => { setBulkApplyFor(null); setIpoDetail(bulkApplyFor); }}
+          onClose={() => { setBulkApplyFor(null); }}
           onSave={(newApps) => {
             persistIpos(ipos.map((i) => (i.id === bulkApplyFor
               ? { ...i, applications: [...(i.applications || []), ...newApps] }
               : i)));
             setBulkApplyFor(null);
-            setIpoDetail(bulkApplyFor);
           }}
         />
       )}
@@ -1819,7 +1818,7 @@ export default function App() {
         <BulkStatusSheet
           ipo={ipos.find((i) => i.id === bulkStatusFor)}
           accounts={accounts}
-          onClose={() => { setBulkStatusFor(null); setIpoDetail(bulkStatusFor); }}
+          onClose={() => { setBulkStatusFor(null); }}
           onSave={(draft) => {
             persistIpos(ipos.map((i) => (i.id === bulkStatusFor
               ? {
@@ -1829,7 +1828,6 @@ export default function App() {
                 }
               : i)));
             setBulkStatusFor(null);
-            setIpoDetail(bulkStatusFor);
           }}
         />
       )}
@@ -2407,8 +2405,10 @@ function ListControls({ search, setSearch, placeholder, filters, filter, setFilt
   const sortLabel = (sorts.find((x) => x.id === sort) || {}).label || "";
   // "All" is the absence of a filter, so it is not something narrowing you to.
   const narrowed = chosen.length;
+  const hasFilters = Array.isArray(filters) && filters.length > 0;
 
   const toggleFilter = (id) => {
+    if (!setFilter) return;
     setFilter(chosen.includes(id) ? chosen.filter((f) => f !== id) : [...chosen, id]);
   };
 
@@ -2423,8 +2423,14 @@ function ListControls({ search, setSearch, placeholder, filters, filter, setFilt
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder={placeholder}
-            style={{ paddingLeft: 34 }}
+            style={{ paddingLeft: 34, paddingRight: search ? 34 : 12 }}
           />
+          {search && (
+            <button onClick={() => setSearch("")} aria-label="Clear search" style={{
+              position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)",
+              background: "none", border: "none", padding: 4, cursor: "pointer", display: "flex",
+            }}><X size={14} color={COLORS.inkSoft} /></button>
+          )}
         </div>
 
         <button
@@ -2466,6 +2472,7 @@ function ListControls({ search, setSearch, placeholder, filters, filter, setFilt
             boxShadow: "0 10px 30px rgba(0,0,0,0.28)", padding: 12,
           }}
         >
+          {hasFilters && (<>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
             <SectionLabel>Show</SectionLabel>
             {narrowed > 0 && (
@@ -2475,7 +2482,6 @@ function ListControls({ search, setSearch, placeholder, filters, filter, setFilt
               >Clear</button>
             )}
           </div>
-          {/* Several at once: an issue can be pending and need details both. */}
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 14 }}>
             {filters.map((f) => {
               const on = chosen.includes(f.id);
@@ -2491,6 +2497,7 @@ function ListControls({ search, setSearch, placeholder, filters, filter, setFilt
               );
             })}
           </div>
+          </>)}
 
           <SectionLabel>Order</SectionLabel>
           <div style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: 6 }}>
@@ -3194,7 +3201,8 @@ function AccountDetailSheet({ account, ipos, transfers, accounts, onClose, onEdi
   }, [apps]);
 
   const acctTransfers = useMemo(() =>
-    transfers.filter((t) => t.fromAccountId === account.id || t.toAccountId === account.id),
+    transfers.filter((t) => t.fromAccountId === account.id || t.toAccountId === account.id)
+      .sort((a, b) => (b.date || "").localeCompare(a.date || "")),
     [account.id, transfers]
   );
 
@@ -3418,7 +3426,6 @@ function ReconciliationView({ transfers, accounts }) {
 
 function TransferList({ transfers, accounts, ipos = [], onEdit, onDelete }) {
   const [search, setSearch] = useState("");
-  const [filter, setFilter] = useState([]);
   const [sort, setSort] = useState("recent");
 
   const name = (id) => accounts.find((a) => a.id === id)?.name || "Unknown";
@@ -3439,34 +3446,17 @@ function TransferList({ transfers, accounts, ipos = [], onEdit, onDelete }) {
           const hay = `${name(t.fromAccountId)} ${name(t.toAccountId)} ${t.remarks || ""} ${ipoName(t.relatedIpoId)}`.toLowerCase();
           if (!hay.includes(q)) return false;
         }
-        if (!filter.length) return true;
-        return filter.some((f) => {
-          if (f === "linked") return !!t.relatedIpoId;
-          if (f === "unlinked") return !t.relatedIpoId;
-          if (f.startsWith("acct:")) {
-            const id = f.slice(5);
-            return t.fromAccountId === id || t.toAccountId === id;
-          }
-          return true;
-        });
+        return true;
       })
       .sort(cmp);
-  }, [transfers, accounts, ipos, search, filter, sort]);
+  }, [transfers, accounts, ipos, search, sort]);
 
   if (transfers.length === 0) return <EmptyState text="No fund transfers logged yet. Tap + to record one." icon={ArrowRightLeft} subtitle="Track money moved between accounts for IPO applications." />;
-
-  const linked = transfers.filter((t) => t.relatedIpoId).length;
 
   return (
     <div>
       <ListControls
         search={search} setSearch={setSearch} placeholder="Search account, IPO or remark"
-        filter={filter} setFilter={setFilter}
-        filters={[
-          { id: "linked", label: "For an IPO", count: linked },
-          { id: "unlinked", label: "Unlinked", count: transfers.length - linked },
-          ...accounts.slice(0, 6).map((a) => ({ id: `acct:${a.id}`, label: a.name })),
-        ]}
         sort={sort} setSort={setSort}
         sorts={[
           { id: "recent", label: "Newest" },
@@ -3489,7 +3479,7 @@ function TransferList({ transfers, accounts, ipos = [], onEdit, onDelete }) {
           padding: "10px 12px", cursor: "pointer",
         }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14, fontWeight: 600, color: COLORS.ink, minWidth: 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14, fontWeight: 600, color: COLORS.heading, fontFamily: "Inter, sans-serif", minWidth: 0 }}>
               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name(t.fromAccountId)}</span>
               <ArrowRightLeft size={13} color={COLORS.gold} style={{ flexShrink: 0 }} />
               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name(t.toAccountId)}</span>
@@ -3507,7 +3497,6 @@ function TransferList({ transfers, accounts, ipos = [], onEdit, onDelete }) {
               {fmtDate(t.date)}
               {t.remarks ? <span style={{ fontStyle: "italic" }}> · "{t.remarks}"</span> : null}
             </div>
-            <ChevronRight size={14} color={COLORS.inkSoft} style={{ flexShrink: 0 }} />
           </div>
         </div>
       ))}
@@ -3551,10 +3540,8 @@ function IpoFormSheet({ initial, onClose, onSave }) {
       </div>
       <Field label="Lot Size (shares)"><Input type="number" inputMode="numeric" value={f.lotSize} onChange={set("lotSize")} placeholder="e.g. 52" /></Field>
 
-      {/* Dates come from Upstox and are shown rather than typed - every one was a
-          duplicate of something the exchange already publishes. But Upstox has no
-          record of some issues, and then a wrong date can only be corrected by
-          hand, so the inputs are a click away rather than gone. */}
+      {/* Dates are filled automatically when prices are refreshed.
+          Manual entry is available for issues not yet on the exchange. */}
       {!editDates ? (
         <div style={{
           background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 10,
@@ -3584,14 +3571,14 @@ function IpoFormSheet({ initial, onClose, onSave }) {
             : listingDateOf(f).date && <span>Lists {fmtDate(listingDateOf(f).date)} (expected)</span>}
           {!(f.openDate || f.closeDate || f.listingDate) && (
             <span style={{ fontFamily: "Inter, sans-serif" }}>
-              Upstox has none for this issue. Refreshing prices fills them in when it does.
+              No dates available yet. Refresh prices to fill them in automatically.
             </span>
           )}
         </div>
       ) : (
         <>
           <div style={{ fontSize: 11.5, color: COLORS.inkSoft, marginBottom: 10 }}>
-            A refresh overwrites these whenever Upstox has its own value.
+            Dates update automatically when prices are refreshed.
           </div>
           <Field label="Opens"><Input type="date" value={f.openDate || ""} onChange={set("openDate")} /></Field>
           <Field label="Closes - last day to apply"><Input type="date" value={f.closeDate || ""} onChange={set("closeDate")} /></Field>
@@ -3599,7 +3586,7 @@ function IpoFormSheet({ initial, onClose, onSave }) {
           <Field label="Listing date"><Input type="date" value={f.listingDate || ""} onChange={set("listingDate")} /></Field>
         </>
       )}
-      <Field label={f.listingPriceSource === "bse-open" ? "Listing Price - day-one open (from Upstox, ₹)" : f.listingPriceSource === "bse-close" ? "Listing Day Close (from Upstox, ₹)" : "Listing Price (optional, ₹)"}>
+      <Field label={f.listingPriceSource === "bse-open" ? "Listing Price - day-one open (from exchange, ₹)" : f.listingPriceSource === "bse-close" ? "Listing Day Close (from exchange, ₹)" : "Listing Price (optional, ₹)"}>
         <Input
           type="number" inputMode="numeric" value={f.listingPrice}
           // Typing over it makes it yours, so it is no longer BSE's close.
@@ -4278,7 +4265,7 @@ function BulkStatusSheet({ ipo, accounts, onClose, onSave }) {
       </div>
 
       <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" }}>
-        {ALLOTMENT_STATUSES.map((s) => (
+        {["Pending", "Allotted", "Not Allotted"].map((s) => (
           <button key={s} onClick={() => setAll(s)} style={{ ...chipBase }}>All: {s}</button>
         ))}
       </div>
@@ -4407,7 +4394,7 @@ function LiveIposSheet({ existing, onClose, onImport }) {
         let note = "";
         if (mode === "current") {
           rows = (data.ipos || []).map((r) => ({ ...r, listedOn: "" }));
-          note = "Open and forthcoming issues, from Upstox.";
+          note = "Open and forthcoming issues from the exchange.";
         } else {
           /* Only the chosen year, since the feed is cumulative from it. Judged
              on the listing date, or the close date for an issue that has closed
@@ -4692,8 +4679,8 @@ function LiveIposSheet({ existing, onClose, onImport }) {
                     opacity: already ? 0.55 : 1,
                   }}>
                     <input
-                      type="checkbox" checked={on}
-                      onChange={() => setPicked((p) => ({ ...p, [r.company]: !p[r.company] }))}
+                      type="checkbox" checked={on} disabled={already}
+                      onChange={() => { if (already) return; setPicked((p) => ({ ...p, [r.company]: !p[r.company] })); }}
                       style={{ marginTop: 3, width: 18, height: 18, flexShrink: 0 }}
                     />
                     <div style={{ minWidth: 0, flex: 1 }}>

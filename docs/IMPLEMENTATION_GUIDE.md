@@ -1,591 +1,265 @@
-# Implementation Guide — Next Iteration
+# Implementation Guide -- Remaining UX Changes
 
-Branch: `feat/upstox-migration`
-Base commit: `0d3da08` (reverted to working state after `b410b44`)
+Branch: `feat/upstox-migration`  
+Base commit: `a5a6738` (account detail sheet, tappable cards, unicode cleanup)
 
-## Architecture Rules
+## Critical Rules
 
-- **All changes go in `src/App.jsx`** (single-file React app)
-- **No external DOM manipulation** — everything is React JSX and state
-- **Build with `npx vite build`** after every change to verify
-- **One commit, one push** when all items are done
-- The file contains special Unicode: non-breaking spaces (`\u00A0`), em dashes (`\u2014`), middle dots (`\u00B7`). Be careful with string matching.
+1. **Do NOT use string-replace patch scripts.** They have repeatedly matched the wrong locations in this 4700-line file. Use `str_replace` tool directly, reading the exact lines first.
+2. **The file has `·` (U+00B7 middle dot) and `₹` (U+20B9 rupee) as the only non-ASCII.** All em dashes, curly quotes, etc. have been replaced with ASCII. `str_replace` should work on most strings.
+3. **Build with `npx vite build` after EVERY change** to catch errors early.
+4. **Read the exact lines before editing.** The file is large -- use line numbers as hints, not gospel.
+5. **One commit, one push** when everything is done and verified.
 
-## Overview of Changes
+## What's Already Working (do NOT break)
 
-| # | Change | Scope |
-|---|--------|-------|
-| 1 | Account Detail Sheet | New component + wiring |
-| 2 | Tappable Account Cards | AccountList component |
-| 3 | Tappable Transfer Cards | TransferList component |
-| 4 | Transfer Delete in Form | TransferFormSheet component |
-| 5 | IPO Form: Manual Entry Warning | IpoFormSheet component |
-| 6 | IPO Form: Price Band (min/max) | IpoFormSheet component |
-| 7 | IPO Detail: Show Price Band | IpoDetailSheet component |
+- Account detail sheet with stats, IPO list, transfers, edit/delete
+- Tappable account cards with chevron (open detail sheet)
+- Tappable transfer cards (open edit form)  
+- Delete Transfer button inside the edit form
+- IPO form manual entry warning banner
+- IPO form price band low/high fields
+- IPO detail shows price band when both values exist
+- Badge tinted fill for Allotted/Not Allotted
+- Swipe-to-dismiss sheets
+- Offline indicator
+- Search clear button... WAIT -- this was in the reverted commit
+
+## Changes Needed
+
+### 1. Remove chevron from transfer cards
+
+**Why:** The `>` symbol doesn't look good on transfer cards.
+
+**Location:** `TransferList` component. Find the ChevronRight inside the transfer card.
+
+**How:** Read the transfer card JSX in `TransferList`. There's a `<ChevronRight>` after the date/remarks line. Remove just that one line. Do NOT remove the ChevronRight in AccountList (account cards should keep theirs).
+
+**Exact approach:** Read lines around the transfer card in `TransferList` (starts around line 3419). Find the `<ChevronRight` inside that area and remove it.
 
 ---
 
-## Change 1: Account Detail Sheet
+### 2. Store priceBandLow from Upstox API response
 
-### Why
-Account cards currently have inline edit/delete buttons. We want to match the IPO pattern: tap card → open detail sheet → see all data → edit/delete from there.
+**Why:** Upstox returns `minimum_price` and `maximum_price`. We store `maximum_price` as `priceBand` but never store `minimum_price`.
 
-### Step 1a: Add `acctDetail` state
-
-**File:** `src/App.jsx`
-**Location:** Line ~1028 (after `ipoDetail` state declaration)
-
-Add this line right after `const [ipoDetail, setIpoDetail] = useState(null);`:
-
-```jsx
-const [acctDetail, setAcctDetail] = useState(null);       // account id
+**Location:** In `refreshPricesFrom` function (around line 1455), find:
+```
+if (hit.priceMax != null) patch.priceBand = String(hit.priceMax);
 ```
 
-### Step 1b: Add `acctDetail` to `backLayers`
-
-**Location:** Line ~1221
-
-Change:
-```jsx
-const backLayers = { appSheet, bulkApplyFor, bulkStatusFor, ipoSheet, acctSheet,
-    transferSheet, liveOpen, dataSheetOpen, ipoDetail, tab };
+**Add after it:**
 ```
-
-To:
-```jsx
-const backLayers = { appSheet, bulkApplyFor, bulkStatusFor, ipoSheet, acctSheet,
-    transferSheet, liveOpen, dataSheetOpen, ipoDetail, acctDetail, tab };
-```
-
-### Step 1c: Add `acctDetail` to `closeTopLayer`
-
-**Location:** Line ~1247 (after the `if (v.acctSheet)` line)
-
-Add this line right after `if (v.acctSheet) { setAcctSheet(null); return true; }`:
-
-```jsx
-if (v.acctDetail) { setAcctDetail(null); return true; }
-```
-
-### Step 1d: Create the `AccountDetailSheet` component
-
-**Location:** Insert before `function TransfersScreen(` (line ~3146)
-
-```jsx
-function AccountDetailSheet({ account, ipos, transfers, accounts, onClose, onEdit, onDelete }) {
-  if (!account) return null;
-
-  const apps = useMemo(() => {
-    const list = [];
-    ipos.forEach((ipo) => {
-      (ipo.applications || []).forEach((app) => {
-        if (app.accountId === account.id) list.push({ ...app, ipo });
-      });
-    });
-    return list.sort((a, b) =>
-      (b.ipo.applicationDate || b.ipo.openDate || "").localeCompare(
-        a.ipo.applicationDate || a.ipo.openDate || ""));
-  }, [account.id, ipos]);
-
-  const totals = useMemo(() => {
-    let applied = 0, allotted = 0, invested = 0, realized = 0, unrealized = 0;
-    apps.forEach((app) => {
-      applied++;
-      const price = Number(app.ipo.priceBand) || 0;
-      const shares = Number(app.sharesAllotted) || 0;
-      if (app.allotmentStatus === "Allotted" || app.allotmentStatus === "Partial") {
-        allotted++;
-        invested += shares * price;
-        if (app.sold) {
-          realized += shares * ((Number(app.sellPrice) || 0) - price);
-        } else {
-          const mark = valuationPrice(app.ipo);
-          if (mark) unrealized += shares * (mark - price);
-        }
-      }
-    });
-    return { applied, allotted, invested, realized, unrealized };
-  }, [apps]);
-
-  const acctTransfers = useMemo(() =>
-    transfers.filter((t) => t.fromAccountId === account.id || t.toAccountId === account.id),
-    [account.id, transfers]
-  );
-
-  const pan = panOf(account);
-
-  return (
-    <Sheet title={account.name} onClose={onClose}>
-      {/* Header: badges + edit pencil */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <Badge color={COLORS.navy} bg={COLORS.chip}>{account.relation || "Self"}</Badge>
-          {account.bank && <Badge color={COLORS.inkSoft} bg="#EFEDE7">{account.bank}</Badge>}
-          {pan
-            ? <Badge color={COLORS.inkSoft} bg="#EFEDE7">{pan}</Badge>
-            : <Badge color={COLORS.gold} bg={COLORS.goldSoft}>No PAN</Badge>}
-        </div>
-        <button onClick={onEdit} aria-label="Edit account" style={roundIconBtn}>
-          <Pencil size={14} color={COLORS.inkSoft} />
-        </button>
-      </div>
-
-      {/* Notes */}
-      {account.notes && (
-        <div style={{
-          fontSize: 12.5, color: COLORS.inkSoft, fontFamily: "Inter, sans-serif",
-          fontStyle: "italic", marginBottom: 14,
-        }}>"{account.notes}"</div>
-      )}
-
-      {/* 2×2 stats grid */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
-        <div style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: "10px 12px" }}>
-          <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 16, fontWeight: 700, color: COLORS.ink }}>{totals.applied}</div>
-          <div style={{ fontSize: 11, color: COLORS.inkSoft, fontFamily: "Inter, sans-serif" }}>Applied</div>
-        </div>
-        <div style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: "10px 12px" }}>
-          <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 16, fontWeight: 700, color: totals.allotted ? COLORS.green : COLORS.ink }}>{totals.allotted}</div>
-          <div style={{ fontSize: 11, color: COLORS.inkSoft, fontFamily: "Inter, sans-serif" }}>Allotted</div>
-        </div>
-        <div style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: "10px 12px" }}>
-          <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 16, fontWeight: 700, color: COLORS.ink }}>{inr(totals.invested)}</div>
-          <div style={{ fontSize: 11, color: COLORS.inkSoft, fontFamily: "Inter, sans-serif" }}>Invested</div>
-        </div>
-        <div style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: "10px 12px" }}>
-          <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 16, fontWeight: 700, color: (totals.realized + totals.unrealized) >= 0 ? COLORS.green : COLORS.red }}>{inr(totals.realized + totals.unrealized)}</div>
-          <div style={{ fontSize: 11, color: COLORS.inkSoft, fontFamily: "Inter, sans-serif" }}>Total P&L</div>
-        </div>
-      </div>
-
-      {/* IPO Applications list */}
-      <SectionLabel>IPO Applications ({apps.length})</SectionLabel>
-      {apps.length === 0 ? (
-        <EmptyState text="No applications from this account yet." />
-      ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
-          {apps.map((app) => {
-            const meta = STATUS_META[app.allotmentStatus] || STATUS_META.Pending;
-            const strongStatus = app.allotmentStatus === "Allotted" || app.allotmentStatus === "Not Allotted";
-            const price = Number(app.ipo.priceBand) || 0;
-            const shares = Number(app.sharesAllotted) || 0;
-            let pnl = null;
-            if (app.sold) pnl = shares * ((Number(app.sellPrice) || 0) - price);
-            else if ((app.allotmentStatus === "Allotted" || app.allotmentStatus === "Partial") && shares) {
-              const mark = valuationPrice(app.ipo);
-              if (mark) pnl = shares * (mark - price);
-            }
-            return (
-              <div key={app.id} style={{
-                background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: "9px 10px",
-              }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-                  <div style={{
-                    fontFamily: "Inter, sans-serif", fontWeight: 600, fontSize: 13.5, color: COLORS.ink,
-                    minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                  }}>{app.ipo.company || "Untitled IPO"}</div>
-                  <Badge color={meta.color} bg={meta.bg} strong={strongStatus}>{app.allotmentStatus}</Badge>
-                </div>
-                <div style={{
-                  display: "flex", justifyContent: "space-between", alignItems: "center",
-                  marginTop: 4, fontFamily: "'JetBrains Mono', monospace", fontSize: 11.5,
-                }}>
-                  <span style={{ color: COLORS.inkSoft }}>{app.lots || 0} lot(s){app.sold ? " · Sold" : ""}</span>
-                  {pnl !== null && (
-                    <span style={{ fontWeight: 700, color: pnl >= 0 ? COLORS.green : COLORS.red }}>
-                      {app.sold ? "P&L " : "Unreal. "}{inr(pnl)}
-                    </span>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {/* Fund Transfers for this account */}
-      {acctTransfers.length > 0 && (
-        <>
-          <SectionLabel>Fund Transfers ({acctTransfers.length})</SectionLabel>
-          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
-            {acctTransfers.map((t) => {
-              const from = accounts.find((a) => a.id === t.fromAccountId)?.name || "Unknown";
-              const to = accounts.find((a) => a.id === t.toAccountId)?.name || "Unknown";
-              const isOutgoing = t.fromAccountId === account.id;
-              return (
-                <div key={t.id} style={{
-                  background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: "8px 10px",
-                  fontFamily: "Inter, sans-serif", fontSize: 12.5,
-                }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <span style={{ color: COLORS.ink, fontWeight: 600 }}>
-                      {isOutgoing ? `To ${to}` : `From ${from}`}
-                    </span>
-                    <span style={{
-                      fontFamily: "'JetBrains Mono', monospace", fontWeight: 700,
-                      color: isOutgoing ? COLORS.red : COLORS.green,
-                    }}>{isOutgoing ? "-" : "+"}{inrOrDash(t.amount)}</span>
-                  </div>
-                  <div style={{ fontSize: 11, color: COLORS.inkSoft, marginTop: 2 }}>
-                    {fmtDate(t.date)}{t.remarks ? ` · ${t.remarks}` : ""}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </>
-      )}
-
-      {/* Delete at bottom */}
-      <div style={{ marginTop: 20, paddingTop: 14, borderTop: `1px solid ${COLORS.border}` }}>
-        <SectionLabel>Account actions</SectionLabel>
-        <button onClick={() => {
-          const n = apps.length;
-          const msg = n
-            ? `Delete ${account.name || "this account"} and remove it from ${n} application${n === 1 ? "" : "s"}? The applications stay on their IPOs.`
-            : `Delete ${account.name || "this account"}?`;
-          if (confirm(msg)) onDelete(account.id);
-        }} style={{
-          width: "100%", marginTop: 6, minHeight: 44, borderRadius: 10,
-          border: `1px solid ${COLORS.red}`, background: COLORS.redSoft, color: COLORS.red,
-          fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "Inter, sans-serif",
-        }}>Delete Account</button>
-      </div>
-    </Sheet>
-  );
-}
-```
-
-### Step 1e: Wire `AccountDetailSheet` in the render
-
-**Location:** Right before `{acctSheet && (` (line ~1853)
-
-Insert this block:
-
-```jsx
-      {acctDetail && (
-        <AccountDetailSheet
-          account={accounts.find((a) => a.id === acctDetail)}
-          ipos={ipos}
-          transfers={transfers}
-          accounts={accounts}
-          onClose={() => setAcctDetail(null)}
-          onEdit={() => { setAcctSheet({ account: accounts.find((a) => a.id === acctDetail) }); }}
-          onDelete={(id) => {
-            const gone = accounts.find((x) => x.id === id);
-            if (!gone) return;
-            discard("account", gone, gone.name || "Unnamed account");
-            persistAccounts(accounts.filter((x) => x.id !== id));
-            setAcctDetail(null);
-          }}
-        />
-      )}
+if (hit.priceMin != null) patch.priceBandLow = String(hit.priceMin);
 ```
 
 ---
 
-## Change 2: Tappable Account Cards
+### 3. Search bar clear button (X)
 
-### Why
-Remove inline edit/delete buttons from account cards. Make the whole card tappable to open the detail sheet.
+**Why:** All search bars need a way to clear text without manually selecting and deleting.
 
-### Step 2a: Update `AccountList` function signature
+**Location:** `ListControls` component (around line 2385). The search input is inside a relative-positioned div wrapper.
 
-**Location:** Line ~3011
+**How:** After the `<Input>` element inside the search wrapper div, add a clear button that shows when search is non-empty. Also add `paddingRight: search ? 34 : 12` to the Input style so text doesn't overlap the button.
 
-Change:
+Find the Input:
 ```jsx
-function AccountList({ accounts, ipos, transfers = [], onEdit, onDelete }) {
-```
-To:
-```jsx
-function AccountList({ accounts, ipos, transfers = [], onOpen }) {
-```
-
-### Step 2b: Make account card tappable
-
-**Location:** Line ~3112 (the `<div key={acc.id}` line)
-
-Change:
-```jsx
-              <div key={acc.id} style={{
-                background: COLORS.surface, border: `1px solid ${isDup ? COLORS.red : COLORS.border}`,
-                borderRadius: 12, padding: "12px 14px",
-                display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10,
-              }}>
-```
-To:
-```jsx
-              <div key={acc.id} onClick={() => onOpen(acc.id)} style={{
-                background: COLORS.surface, border: `1px solid ${isDup ? COLORS.red : COLORS.border}`,
-                borderRadius: 12, padding: "12px 14px", cursor: "pointer",
-                display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10,
-              }}>
-```
-
-### Step 2c: Replace edit/delete buttons with chevron
-
-**Location:** Line ~3137 (the `<div style={{ display: "flex", gap: 6` block with the two buttons)
-
-Replace the entire block:
-```jsx
-                <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
-                  <button onClick={() => onEdit(acc)} aria-label="Edit account" style={roundIconBtn}><Pencil size={14} color={COLORS.inkSoft} /></button>
-                  <button onClick={() => { if (confirmAccountDelete(acc)) onDelete(acc.id); }} aria-label="Delete account" style={roundIconBtn}><Trash2 size={14} color={COLORS.red} /></button>
-                </div>
-```
-
-With:
-```jsx
-                <ChevronRight size={14} color={COLORS.inkSoft} style={{ flexShrink: 0 }} />
-```
-
-### Step 2d: Update AccountList caller
-
-**Location:** Line ~1708 (inside the `{tab === "accounts"` block)
-
-Change:
-```jsx
-          <AccountList
-            transfers={transfers}
-            accounts={accounts} ipos={ipos}
-            onEdit={(account) => setAcctSheet({ account })}
-            onDelete={(id) => {
-              const gone = accounts.find((x) => x.id === id);
-              if (!gone) return;
-              discard("account", gone, gone.name || "Unnamed account");
-              persistAccounts(accounts.filter((x) => x.id !== id));
-            }}
-          />
-```
-
-To:
-```jsx
-          <AccountList
-            transfers={transfers}
-            accounts={accounts} ipos={ipos}
-            onOpen={(id) => setAcctDetail(id)}
-          />
-```
-
----
-
-## Change 3: Tappable Transfer Cards
-
-### Why
-Make transfer cards tappable to open the edit form (same interaction pattern as IPO/account cards).
-
-### Step 3a: Make transfer card clickable
-
-**Location:** Line ~3331 (the `<div key={t.id} style={{` line in TransferList)
-
-Change:
-```jsx
-        <div key={t.id} style={{
-          background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 12,
-          padding: "10px 12px",
-        }}>
-```
-
-To:
-```jsx
-        <div key={t.id} onClick={() => onEdit(t)} style={{
-          background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 12,
-          padding: "10px 12px", cursor: "pointer",
-        }}>
-```
-
-### Step 3b: Replace edit/delete buttons with chevron
-
-**Location:** Line ~3353 (the edit/delete button div inside the transfer card)
-
-Replace:
-```jsx
-            <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
-              <button onClick={() => onEdit(t)} aria-label="Edit transfer" style={smallIconBtn}><Pencil size={13} color={COLORS.inkSoft} /></button>
-              <button onClick={() => { if (confirm("Delete this transfer?")) onDelete(t.id); }} aria-label="Delete transfer" style={smallIconBtn}><Trash2 size={13} color={COLORS.red} /></button>
-            </div>
-```
-
-With:
-```jsx
-            <ChevronRight size={14} color={COLORS.inkSoft} style={{ flexShrink: 0 }} />
-```
-
----
-
-## Change 4: Transfer Delete in Form
-
-### Why
-Since we removed the delete button from the card, it needs to live inside the edit form.
-
-### Step 4a: Update `TransferFormSheet` signature
-
-**Location:** Line ~3597
-
-Change:
-```jsx
-function TransferFormSheet({ initial, accounts, ipos, onClose, onSave }) {
-```
-To:
-```jsx
-function TransferFormSheet({ initial, accounts, ipos, onClose, onSave, onDelete }) {
-```
-
-### Step 4b: Add delete button to the form
-
-**Location:** Right after the `</PrimaryButton>` and before `</Sheet>` in `TransferFormSheet` (line ~3633)
-
-Insert between `</PrimaryButton>` and `</Sheet>`:
-
-```jsx
-      {initial && onDelete && (
-        <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px solid ${COLORS.border}` }}>
-          <button onClick={() => {
-            if (confirm("Delete this transfer?")) { onDelete(f.id); onClose(); }
-          }} style={{
-            width: "100%", minHeight: 44, borderRadius: 10,
-            border: `1px solid ${COLORS.red}`, background: COLORS.redSoft, color: COLORS.red,
-            fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "Inter, sans-serif",
-          }}>Delete Transfer</button>
-        </div>
-      )}
-```
-
-### Step 4c: Pass `onDelete` to `TransferFormSheet`
-
-**Location:** Line ~1869 (where `<TransferFormSheet` is rendered inside App)
-
-Add the `onDelete` prop:
-
-```jsx
-      {transferSheet && (
-        <TransferFormSheet
-          initial={transferSheet.transfer}
-          accounts={accounts}
-          ipos={ipos}
-          onClose={() => setTransferSheet(null)}
-          onDelete={(id) => {
-            const gone = transfers.find((x) => x.id === id);
-            if (!gone) return;
-            const who = (aid) => accounts.find((a) => a.id === aid)?.name || "Unknown";
-            discard("transfer", gone, `${inr(gone.amount)} · ${who(gone.fromAccountId)} to ${who(gone.toAccountId)}`);
-            persistTransfers(transfers.filter((x) => x.id !== id));
-          }}
-          onSave={(data) => {
-```
-
-Note: the existing `onSave` block stays as-is, just insert `onDelete` before it.
-
----
-
-## Change 5: IPO Form — Manual Entry Warning
-
-### Why
-When manually adding an IPO (not from exchange), market prices won't sync. Warn the user.
-
-### Step 5: Add warning banner
-
-**Location:** Inside `IpoFormSheet`, right after `<Sheet title={...} onClose={onClose}>` (line ~3389)
-
-Insert before `<Field label="Company Name">`:
-
-```jsx
-      {!initial && (
-        <div style={{
-          background: COLORS.goldSoft, display: "flex", alignItems: "flex-start",
-          gap: 8, padding: "10px 12px", borderRadius: 10, marginBottom: 14,
-          fontSize: 12, color: COLORS.ink, fontFamily: "Inter, sans-serif",
-        }}>
-          <AlertTriangle size={14} color={COLORS.gold} style={{ flexShrink: 0, marginTop: 1 }} />
-          <span>Market prices can only sync for IPOs added from the exchange. Use <strong>Add from exchange</strong> in the IPO list header when possible.</span>
-        </div>
-      )}
-```
-
----
-
-## Change 6: IPO Form — Price Band (min/max)
-
-### Why
-Currently only shows the cutoff price. Users need to see and set the full band (low–high).
-
-### Step 6a: Add `priceBandLow` to the form state default
-
-**Location:** Line ~3370 (the `useState` in `IpoFormSheet`)
-
-The current state initializer has `priceBand: ""`. Keep it and ensure `priceBandLow` is also initialized:
-
-```jsx
-  const [f, setF] = useState(initial || {
-    id: undefined, company: "", category: "Mainboard", applicationDate: "", priceBand: "",
-    priceBandLow: "", lotSize: "", listingDate: "", listingPrice: "", remarks: "",
-  });
-```
-
-### Step 6b: Replace single price field with two fields
-
-**Location:** Line ~3388 (the Price per Share field)
-
-Replace:
-```jsx
-      <Field label="Price per Share (₹)"><Input type="number" inputMode="numeric" value={f.priceBand} onChange={set("priceBand")} placeholder="e.g. 285" /></Field>
-```
-
-With:
-```jsx
-      <div style={{ display: "flex", gap: 10 }}>
-        <div style={{ flex: 1 }}>
-          <Field label="Price Band Low (₹)">
-            <Input type="number" inputMode="numeric" value={f.priceBandLow || ""} onChange={set("priceBandLow")} placeholder="e.g. 270" />
-          </Field>
-        </div>
-        <div style={{ flex: 1 }}>
-          <Field label="Cutoff Price (₹)">
-            <Input type="number" inputMode="numeric" value={f.priceBand} onChange={set("priceBand")} placeholder="e.g. 285" />
-          </Field>
-        </div>
-      </div>
-```
-
----
-
-## Change 7: IPO Detail — Show Price Band
-
-### Why
-Show "₹270–₹285" instead of just "Price ₹285" when both values are set.
-
-### Step 7: Update the price badge in `IpoDetailSheet`
-
-**Location:** Line ~2849 (inside the badges div at the top of `IpoDetailSheet`)
-
-Find the price badge:
-```jsx
-        <Badge color={COLORS.inkSoft} bg="#EFEDE7">Price ₹{ipo.priceBand || "—"}</Badge>
+<Input
+  value={search}
+  onChange={(e) => setSearch(e.target.value)}
+  placeholder={placeholder}
+  style={{ paddingLeft: 34 }}
+/>
+</div>
 ```
 
 Replace with:
 ```jsx
-        <Badge color={COLORS.inkSoft} bg="#EFEDE7">
-          {ipo.priceBandLow
-            ? `₹${ipo.priceBandLow}–₹${ipo.priceBand}`
-            : `Price ₹${ipo.priceBand || "—"}`}
-        </Badge>
+<Input
+  value={search}
+  onChange={(e) => setSearch(e.target.value)}
+  placeholder={placeholder}
+  style={{ paddingLeft: 34, paddingRight: search ? 34 : 12 }}
+/>
+{search && (
+  <button onClick={() => setSearch("")} aria-label="Clear search" style={{
+    position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)",
+    background: "none", border: "none", padding: 4, cursor: "pointer", display: "flex",
+  }}><X size={14} color={COLORS.inkSoft} /></button>
+)}
+</div>
 ```
+
+---
+
+### 4. Remove filter section from Transfers list
+
+**Why:** Transfer filters are vague and redundant with search.
+
+**Location:** `TransferList` component (around line 3419).
+
+**How:** 
+1. Remove `const [filter, setFilter] = useState([]);` from the state
+2. In the `shown` useMemo, remove the filter logic (the `if (!filter.length) return true; return filter.some(...)` block). Just keep the search filter.
+3. Remove `filter` from the useMemo dependency array  
+4. Remove the `linked` count line
+5. Remove the `filter`, `setFilter`, and `filters` props from the `<ListControls>` call
+
+**IMPORTANT:** `ListControls` receives `filter` and `filters` as optional props. When they are not passed, `ListControls` must NOT crash. The component uses `Array.isArray(filter) ? filter : []` which is safe. BUT: it calls `setFilter(...)` in the filter panel and `filters.map(...)` in the render. To prevent crashes, also make `ListControls` guard the filter section:
+
+In `ListControls`, wrap the "Show" filter section (the div with SectionLabel "Show" and the filter chips) with: `{Array.isArray(filters) && filters.length > 0 && ( ... )}`. Also guard the `toggleFilter` function: `if (!setFilter) return;`.
+
+---
+
+### 5. Remove "All: Partial" from bulk allotment quick-set
+
+**Why:** Partial allotment is rare; the button adds no value.
+
+**Location:** `BulkStatusSheet` (around line 4205). Find:
+```
+{ALLOTMENT_STATUSES.map((s) => (
+  <button key={s} onClick={() => setAll(s)} ...>All: {s}</button>
+```
+
+**Replace with:**
+```
+{["Pending", "Allotted", "Not Allotted"].map((s) => (
+  <button key={s} onClick={() => setAll(s)} ...>All: {s}</button>
+```
+
+IMPORTANT: The `ALLOTMENT_STATUSES` constant is also used elsewhere (per-application dropdowns). Do NOT change the constant -- only change this one `.map()` call.
+
+---
+
+### 6. Transfer card padding fix
+
+**Why:** Top padding looks larger than bottom in transfer cards.
+
+**Location:** Transfer card in `TransferList` (around line 3480).
+
+**How:** Change `padding: "10px 12px"` to `padding: "10px 12px 11px"` or just equalize to `padding: "10px 12px"`. The issue might be font metrics making it look uneven. Try `padding: "9px 12px 10px"` to visually balance.
+
+Also change the account name font color from `COLORS.ink` to `COLORS.heading` and add `fontFamily: "Inter, sans-serif"` to match other card name styles.
+
+---
+
+### 7. Remove ALL "Upstox" from UI strings  
+
+**Why:** Implementation detail shouldn't be user-facing.
+
+**Locations to check:**
+1. `IpoFormSheet` dates comment (around line 3554) -- replace with "Dates are typically filled automatically when prices are refreshed."
+2. No-dates message (around line 3587): "Upstox has none..." -> "No dates available yet. Refresh prices to fill them in automatically."
+3. Edit dates note (around line 3594): "A refresh overwrites these whenever Upstox..." -> "Dates update automatically when prices are refreshed."
+4. Listing price label (around line 3602): "(from Upstox, ...)" -> "(from exchange, ...)"  -- there are TWO instances on this line (bse-open and bse-close variants)
+5. Live IPOs note (around line 4410): "from Upstox." -> "from the exchange."
+
+---
+
+### 8. Account detail -- sort transfers descending (newest first)
+
+**Location:** `AccountDetailSheet` component (around line 3196). Find:
+```
+const acctTransfers = useMemo(() =>
+  transfers.filter((t) => t.fromAccountId === account.id || t.toAccountId === account.id),
+  [account.id, transfers]
+);
+```
+
+**Add `.sort()` before the comma:**
+```
+const acctTransfers = useMemo(() =>
+  transfers.filter((t) => t.fromAccountId === account.id || t.toAccountId === account.id)
+    .sort((a, b) => (b.date || "").localeCompare(a.date || "")),
+  [account.id, transfers]
+);
+```
+
+---
+
+### 9. Prevent re-importing already-added IPOs
+
+**Why:** The exchange import greys out existing IPOs but still lets you select them.
+
+**Location:** `LiveIposSheet` (around line 4356). The component has a `known` Set and `isKnown()` function. There is NO `toggle` function in this component -- instead, the checkbox `onChange` calls `setPicked` directly or the `selectAllNew` function.
+
+**How:** Find the checkbox for each IPO row. It likely looks like:
+```jsx
+<input type="checkbox" checked={!!picked[r.company]} onChange={() => setPicked(...)} ... />
+```
+
+Add `disabled={isKnown(r)}` to it. Also, in the `selectAllNew` function, it already only selects `newVisible` (which filters out known ones), so that's fine.
+
+Also check: the `doImport` function -- make sure it doesn't import known ones.
+
+---
+
+### 10. Field component -- error prop support
+
+**Location:** `Field` component (around line 787).
+
+Change signature from `{ label, children }` to `{ label, children, error }`.
+
+Change the label color: `color: error ? COLORS.red : COLORS.inkSoft`
+
+Add after `{children}`:
+```jsx
+{error && <span style={{ display: "block", fontSize: 11, color: COLORS.red, marginTop: 4, fontFamily: "Inter, sans-serif" }}>{error}</span>}
+```
+
+This is prep work for inline form validation (replacing alert() calls later).
+
+---
+
+### 11. Sheet animation -- fix stacking behavior
+
+**Current problem:** The slide-up animation plays on every Sheet mount. When closing a second panel reveals a first panel that was behind it, the first panel either re-animates (if it remounted) or has no animation.
+
+**Desired behavior:**
+- First panel opening: slide-up animation
+- Second panel opening on top: slide-up animation  
+- Closing second panel: NO re-animation on first panel
+- Closing first panel: no animation needed (it's going away)
+
+**The root issue:** In the IPO section, opening BulkApply/BulkStatus does `setIpoDetail(null)` first, then `setBulkApplyFor(ipoId)`. When the bulk sheet closes, it does `setBulkApplyFor(null)` then `setIpoDetail(bulkApplyFor)`. This REMOUNTS the IpoDetailSheet, causing it to re-animate.
+
+In the account section, opening edit does `setAcctSheet(...)` WITHOUT closing `acctDetail`, so the detail sheet stays mounted behind the edit sheet. This is why it doesn't re-animate on accounts -- it never unmounted.
+
+**Fix approach:** Make the IPO section behave like accounts -- keep `ipoDetail` set while `bulkApplyFor`/`bulkStatusFor` are open. Change:
+- `onBulkApply={(ipoId) => { setIpoDetail(null); setBulkApplyFor(ipoId); }}` to just `setBulkApplyFor(ipoId)` (don't clear ipoDetail)
+- `onBulkStatus={(ipoId) => { setIpoDetail(null); setBulkStatusFor(ipoId); }}` to just `setBulkStatusFor(ipoId)`
+- The close handlers already restore ipoDetail, so remove that: `onClose={() => { setBulkApplyFor(null); setIpoDetail(bulkApplyFor); }}` becomes `onClose={() => setBulkApplyFor(null)}`
+
+This keeps the IPO detail sheet mounted behind the bulk sheet, so it doesn't re-animate.
+
+For the slide-up animation itself, keep it as `animation: "sheetSlideUp 280ms ease-out"` (always animate on mount). The fix is preventing unnecessary remounts, not suppressing the animation.
+
+---
+
+### 12. Back button exits app from first panel
+
+**Why:** Pressing back on the first (only) panel should close it and return to the list, not exit the app.
+
+This is likely already handled by `closeTopLayer`. Verify that `acctDetail` is in the `closeTopLayer` chain. It was added in commit `a5a6738`. The issue might be that the back button handler's history buffer isn't being replenished.
+
+Check: does the `onPop` handler in the `useEffect` at the bottom of App's back button logic properly push a new history entry after closing a layer?
 
 ---
 
 ## Verification Checklist
 
-After implementing all changes, verify:
-
-1. `npx vite build` succeeds with no errors
-2. **Accounts tab**: Cards show chevron (no edit/delete buttons), tapping opens detail sheet
-3. **Account detail**: Shows badges, 2×2 stats, IPO list with P&L, transfers, edit pencil, delete at bottom
-4. **Account edit**: Pencil in detail header opens the account form; back button returns to detail
-5. **Transfers tab**: Cards show chevron, tapping opens edit form
-6. **Transfer edit form**: Has "Delete Transfer" button at bottom when editing existing transfer
-7. **IPO form (manual)**: Shows gold warning banner about exchange sync
-8. **IPO form**: Has two price fields (Low + Cutoff)
-9. **IPO detail**: Shows "₹270–₹285" format when band low is set
-10. **Back gesture**: Peels layers correctly: detail sheet → main list
+After all changes:
+1. `npx vite build` succeeds
+2. Transfer cards have no chevron, are tappable, have balanced padding
+3. Search bars show X clear button when text is present
+4. Transfer list has no filter section (just search + sort)
+5. No "All: Partial" in bulk allotment
+6. No "Upstox" in any UI string
+7. Account detail transfers sorted newest first
+8. Already-imported IPOs can't be selected in exchange import
+9. Field component accepts error prop
+10. Opening/closing stacked panels doesn't re-animate the underlying panel
+11. Back button peels layers correctly, doesn't exit the app
+12. Auto-fetched IPOs get priceBandLow from API
+13. ALL existing functionality still works
