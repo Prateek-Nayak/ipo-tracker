@@ -2242,9 +2242,11 @@ function BottomNav({ tab, setTab }) {
    SCREENS
 ---------------------------------------------------------- */
 function Dashboard({ stats, ipos, accounts, onOpenIpo }) {
-  const recent = [...ipos]
-    .sort((a, b) => (b.applicationDate || b.openDate || "").localeCompare(a.applicationDate || a.openDate || ""))
-    .slice(0, 4);
+  const holding = ipos.filter((ipo) =>
+    (ipo.applications || []).some((a) =>
+      (a.allotmentStatus === "Allotted" || a.allotmentStatus === "Partial") && !a.sold
+    )
+  );
   // Figures below are derived from price and lot size; say so when some are absent
   // rather than quietly reporting a total that leaves money out.
   const incomplete = ipos.filter((i) => (i.applications || []).length && missingIpoFields(i).length);
@@ -2349,12 +2351,12 @@ function Dashboard({ stats, ipos, accounts, onOpenIpo }) {
         </div>
       )}
 
-      <SectionLabel>Recent Entries</SectionLabel>
-      {ipos.length === 0 ? (
-        <EmptyState text="No IPOs logged yet. Tap the IPOs tab to add your first application." icon={Receipt} subtitle="Your family IPO register starts here." />
+      <SectionLabel>Currently Holding</SectionLabel>
+      {holding.length === 0 ? (
+        <EmptyState text={ipos.length === 0 ? "No IPOs logged yet. Tap the IPOs tab to add your first application." : "No active holdings. Allotted shares that haven't been sold will appear here."} icon={Receipt} subtitle={ipos.length === 0 ? "Your family IPO register starts here." : ""} />
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {recent.map((ipo) => (
+          {holding.map((ipo) => (
             <IpoCard key={ipo.id} ipo={ipo} accounts={accounts} onClick={() => onOpenIpo(ipo.id)} />
           ))}
         </div>
