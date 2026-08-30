@@ -848,9 +848,13 @@ function ConfirmModal({ state, onResolve }) {
   );
 }
 
+// Module-level ref for dismissing confirm modal from back button handler
+const confirmDismissRef = { current: null };
+
 function ConfirmProvider({ children }) {
   const [state, setState] = useState(null);
   const resolveRef = useRef(null);
+  const dismissRef = useRef(null);
   const show = useCallback((message, opts = {}) => {
     return new Promise((resolve) => {
       resolveRef.current = resolve;
@@ -861,6 +865,9 @@ function ConfirmProvider({ children }) {
     setState(null);
     if (resolveRef.current) { resolveRef.current(result); resolveRef.current = null; }
   }, []);
+  // Expose dismiss for back button handling
+  dismissRef.current = state ? () => onResolve(false) : null;
+  confirmDismissRef.current = dismissRef.current;
   return (
     <ConfirmContext.Provider value={show}>
       {children}
@@ -1312,9 +1319,11 @@ function AppInner() {
   const closeTopLayer = useCallback(() => {
     const v = backRef.current;
     // Innermost first: child sheets close before the parent beneath them.
+    // Dismiss confirm modal if open
+    if (confirmDismissRef.current) { confirmDismissRef.current(); return true; }
     if (v.appSheet) { setAppSheet(null); return true; }
-    if (v.bulkApplyFor) { setBulkApplyFor(null); setIpoDetail(v.bulkApplyFor); return true; }
-    if (v.bulkStatusFor) { setBulkStatusFor(null); setIpoDetail(v.bulkStatusFor); return true; }
+    if (v.bulkApplyFor) { setBulkApplyFor(null); return true; }
+    if (v.bulkStatusFor) { setBulkStatusFor(null); return true; }
     if (v.ipoSheet) { setIpoSheet(null); return true; }
     if (v.acctSheet) { setAcctSheet(null); return true; }
     if (v.acctDetail) { setAcctDetail(null); return true; }
@@ -1806,9 +1815,10 @@ function AppInner() {
           accounts={accounts}
           onClose={() => setIpoDetail(null)}
           onDeleteIpo={(id) => { const gone=ipos.find((x)=>x.id===id); if(!gone)return; discard("ipo",gone,gone.company||"Untitled IPO"); persistIpos(ipos.filter((x)=>x.id!==id)); setIpoDetail(null); }}
+          onEditIpo={() => { setIpoSheet({ ipo: ipos.find((i) => i.id === ipoDetail) }); }}
           onSaveNote={(id,noteValue)=>{ persistIpos(ipos.map((i)=>i.id===id?{...i,remarks:(noteValue||"").trimEnd()}:i)); }}
-          onBulkApply={(ipoId) => { setIpoDetail(null); setBulkApplyFor(ipoId); }}
-          onBulkStatus={(ipoId) => { setIpoDetail(null); setBulkStatusFor(ipoId); }}
+          onBulkApply={(ipoId) => { setBulkApplyFor(ipoId); }}
+          onBulkStatus={(ipoId) => { setBulkStatusFor(ipoId); }}
           onEditApplication={(ipoId, application) => setAppSheet({ ipoId, application })}
           onDeleteApplication={(ipoId, appId) => {
             const owner = ipos.find((i) => i.id === ipoId);
@@ -1874,13 +1884,12 @@ function AppInner() {
         <BulkApplySheet
           ipo={ipos.find((i) => i.id === bulkApplyFor)}
           accounts={accounts}
-          onClose={() => { setBulkApplyFor(null); setIpoDetail(bulkApplyFor); }}
+          onClose={() => { setBulkApplyFor(null); }}
           onSave={(newApps) => {
             persistIpos(ipos.map((i) => (i.id === bulkApplyFor
               ? { ...i, applications: [...(i.applications || []), ...newApps] }
               : i)));
             setBulkApplyFor(null);
-            setIpoDetail(bulkApplyFor);
           }}
         />
       )}
@@ -1889,7 +1898,7 @@ function AppInner() {
         <BulkStatusSheet
           ipo={ipos.find((i) => i.id === bulkStatusFor)}
           accounts={accounts}
-          onClose={() => { setBulkStatusFor(null); setIpoDetail(bulkStatusFor); }}
+          onClose={() => { setBulkStatusFor(null); }}
           onSave={(draft) => {
             persistIpos(ipos.map((i) => (i.id === bulkStatusFor
               ? {
@@ -1899,7 +1908,6 @@ function AppInner() {
                 }
               : i)));
             setBulkStatusFor(null);
-            setIpoDetail(bulkStatusFor);
           }}
         />
       )}
@@ -2928,7 +2936,7 @@ function IpoCard({ ipo, accounts, onClick }) {
    rather than fit inside it. */
 
 
-function IpoDetailSheet({ ipo, accounts, onClose, onDeleteIpo, onSaveNote, onAddApplication, onBulkApply, onBulkStatus, onEditApplication, onDeleteApplication }) {
+function IpoDetailSheet({ ipo, accounts, onClose, onDeleteIpo, onEditIpo, onSaveNote, onAddApplication, onBulkApply, onBulkStatus, onEditApplication, onDeleteApplication }) {
   const confirm = useConfirm();
   if (!ipo) return null;
   const apps = ipo.applications || [];
@@ -2957,10 +2965,11 @@ function IpoDetailSheet({ ipo, accounts, onClose, onDeleteIpo, onSaveNote, onAdd
 
   return (
     <Sheet title={ipo.company} onClose={onClose}>
-      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
-        <Badge color={COLORS.navy} bg={COLORS.chip}>{ipo.category || "Mainboard"}</Badge>
-        <Badge color={COLORS.inkSoft} bg="#EFEDE7">{ipo.priceBandLow ? `₹${ipo.priceBandLow}-₹${ipo.priceBand}` : `Price ₹${ipo.priceBand || "--"}`}</Badge>
-        <Badge color={COLORS.inkSoft} bg="#EFEDE7">Lot {ipo.lotSize || "--"}</Badge>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", flex: 1 }}>
+          <Badge color={COLORS.navy} bg={COLORS.chip}>{ipo.category || "Mainboard"}</Badge>
+          <Badge color={COLORS.inkSoft} bg="#EFEDE7">{ipo.priceBandLow ? `₹${ipo.priceBandLow}-₹${ipo.priceBand}` : `Price ₹${ipo.priceBand || "--"}`}</Badge>
+          <Badge color={COLORS.inkSoft} bg="#EFEDE7">Lot {ipo.lotSize || "--"}</Badge>
         {Number(ipo.listingPrice) > 0 && hasListed(ipo) && (
           <Badge color={COLORS.inkSoft} bg="#EFEDE7">{ipo.listingPriceSource === "bse-close" ? "Listing close" : "Listed"} ₹{ipo.listingPrice}</Badge>
         )}
@@ -2974,6 +2983,10 @@ function IpoDetailSheet({ ipo, accounts, onClose, onDeleteIpo, onSaveNote, onAdd
             Now ₹{ipo.currentPrice}
           </Badge>
         )}
+        </div>
+        <button onClick={onEditIpo} aria-label="Edit IPO" style={roundIconBtn}>
+          <Pencil size={14} color={COLORS.inkSoft} />
+        </button>
       </div>
 
       {/* A fixed 2x2 matrix rather than a row that wraps: Open/Close and
@@ -3591,7 +3604,6 @@ function IpoFormSheet({ initial, onClose, onSave }) {
     id: undefined, company: "", category: "Mainboard", applicationDate: "", priceBand: "",
     priceBandLow: "", lotSize: "", listingDate: "", listingPrice: "", remarks: "",
   });
-  const [editDates, setEditDates] = useState(false);
   const [errors, setErrors] = useState({});
   const set = (k) => (e) => { setF({ ...f, [k]: e.target.value }); if (errors[k]) setErrors((e) => ({ ...e, [k]: "" })); };
   return (
@@ -3618,56 +3630,27 @@ function IpoFormSheet({ initial, onClose, onSave }) {
       </div>
       <Field label="Lot Size (shares)" error={errors.lotSize}><Input type="number" inputMode="numeric" value={f.lotSize} onChange={set("lotSize")} placeholder="e.g. 52" /></Field>
 
-      {/* Dates are filled automatically when prices are refreshed.
-          Manual entry is available for issues not yet on the exchange. */}
-      {!editDates && !errors.openDate && !errors.closeDate ? (
-        <div style={{
-          background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 10,
-          padding: "10px 12px", marginBottom: 14, fontSize: 12, color: COLORS.inkSoft,
-          fontFamily: "'JetBrains Mono', monospace", display: "flex", flexDirection: "column", gap: 3,
-        }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-            <span style={{ fontFamily: "Inter, sans-serif", fontWeight: 600, color: COLORS.ink, fontSize: 11 }}>
-              {f.openDate || f.closeDate || f.listingDate ? "DATES" : "NO DATES YET"}
-            </span>
-            <button
-              type="button"
-              onClick={() => setEditDates(true)}
-              style={{ background: "none", border: 0, padding: 0, color: COLORS.navy, fontWeight: 600, fontSize: 11.5, cursor: "pointer", fontFamily: "Inter, sans-serif" }}
-            >Edit</button>
-          </div>
-          {f.openDate && <span>Opens {fmtDate(f.openDate)}</span>}
-          {f.closeDate && <span>Closes {fmtDate(f.closeDate)} - last day to apply</span>}
-          {!hasListed(f) && !allotmentSettled(f) && allotmentDateOf(f).date && (
-            <span>
-              Allotment {fmtDate(allotmentDateOf(f).date)}
-              {allotmentDateOf(f).exact ? "" : " (expected)"}
-            </span>
-          )}
-          {f.listingDate
-            ? <span>{hasListed(f) ? "Listed" : "Lists"} {fmtDate(f.listingDate)}</span>
-            : listingDateOf(f).date && <span>Lists {fmtDate(listingDateOf(f).date)} (expected)</span>}
-          {!(f.openDate || f.closeDate || f.listingDate) && (
-            <span style={{ fontFamily: "Inter, sans-serif" }}>
-              No dates available yet. Refresh prices to fill them in automatically.
-            </span>
-          )}
-        </div>
-      ) : (
-        <>
-          <div style={{ fontSize: 11.5, color: COLORS.inkSoft, marginBottom: 10 }}>
-            Dates update automatically when prices are refreshed.
-          </div>
-          <Field label="Opens" error={errors.openDate}><Input type="date" value={f.openDate || ""} onChange={set("openDate")} /></Field>
-          <Field label="Closes - last day to apply" error={errors.closeDate}><Input type="date" value={f.closeDate || ""} onChange={set("closeDate")} /></Field>
-          <Field label="Allotment date"><Input type="date" value={f.allotmentDate || ""} onChange={set("allotmentDate")} /></Field>
-          <Field label="Listing date"><Input type="date" value={f.listingDate || ""} onChange={set("listingDate")} /></Field>
-        </>
-      )}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }}>
+        <Field label="Open Date" error={errors.openDate}><Input type="date" value={f.openDate || ""} onChange={set("openDate")} /></Field>
+        <Field label="Close Date" error={errors.closeDate}><Input type="date" value={f.closeDate || ""} onChange={(e) => {
+          const close = e.target.value;
+          const next = { ...f, closeDate: close, applicationDate: close };
+          // Auto-calculate allotment and listing from close date
+          if (close && !f.allotmentDate) next.allotmentDate = addClearingDays(close, 1);
+          if (close && !f.listingDate) {
+            const allot = next.allotmentDate || addClearingDays(close, 1);
+            const credit = addClearingDays(allot, 1);
+            next.listingDate = addTradingDays(credit, 1);
+          }
+          setF(next);
+          if (errors.closeDate) setErrors((prev) => ({ ...prev, closeDate: "" }));
+        }} /></Field>
+        <Field label="Allotment (auto)"><Input type="date" value={f.allotmentDate || (f.closeDate ? addClearingDays(f.closeDate, 1) : "")} disabled style={{ background: COLORS.bg, color: COLORS.inkSoft }} /></Field>
+        <Field label="Listing (auto)"><Input type="date" value={f.listingDate || (f.closeDate ? addTradingDays(addClearingDays(addClearingDays(f.closeDate, 1), 1), 1) : "")} disabled style={{ background: COLORS.bg, color: COLORS.inkSoft }} /></Field>
+      </div>
       <Field label={f.listingPriceSource === "bse-open" ? "Listing Price - day-one open (from exchange, ₹)" : f.listingPriceSource === "bse-close" ? "Listing Day Close (from exchange, ₹)" : "Listing Price (optional, ₹)"}>
         <Input
           type="number" inputMode="numeric" value={f.listingPrice}
-          // Typing over it makes it yours, so it is no longer BSE's close.
           onChange={(e) => setF({ ...f, listingPrice: e.target.value, listingPriceSource: "" })}
           placeholder="e.g. 340"
         />
