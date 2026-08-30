@@ -1118,6 +1118,7 @@ function AppInner() {
   const [transferSheet, setTransferSheet] = useState(null); // { transfer }
   const [ipoDetail, setIpoDetail] = useState(null);         // ipo id
   const [acctDetail, setAcctDetail] = useState(null);       // account id
+  const [holdingDetail, setHoldingDetail] = useState(null); // ipo id (for holding view)
   const [dataSheetOpen, setDataSheetOpen] = useState(false);
   const [bulkApplyFor, setBulkApplyFor] = useState(null);   // ipo id
   const [bulkStatusFor, setBulkStatusFor] = useState(null); // ipo id
@@ -1310,7 +1311,7 @@ function AppInner() {
      still see current state; re-registering on every state change would drop
      the buffered history entry. */
   const backLayers = { appSheet, bulkApplyFor, bulkStatusFor, ipoSheet, acctSheet,
-    transferSheet, liveOpen, dataSheetOpen, ipoDetail, acctDetail, tab };
+    transferSheet, liveOpen, dataSheetOpen, ipoDetail, acctDetail, holdingDetail, tab };
 
   /* A sheet covers the screen but the page behind it still scrolls, so dragging
      anywhere outside the panel moved the list underneath and you came back to
@@ -1337,6 +1338,7 @@ function AppInner() {
     if (v.ipoSheet) { setIpoSheet(null); return true; }
     if (v.acctSheet) { setAcctSheet(null); return true; }
     if (v.acctDetail) { setAcctDetail(null); return true; }
+    if (v.holdingDetail) { setHoldingDetail(null); return true; }
     if (v.transferSheet) { setTransferSheet(null); return true; }
     if (v.liveOpen) { setLiveOpen(false); return true; }
     if (v.dataSheetOpen) { setDataSheetOpen(false); return true; }
@@ -1442,6 +1444,7 @@ function AppInner() {
       const incomplete = (list) =>
         list.filter((i) =>
           !i.lotSize || !i.closeDate || !i.openDate || isBlank(i.priceBand) ||
+          !i.allotmentDate ||
           (hasListed(i) && isBlank(i.listingPrice)));
       const asking = incomplete(list);
       const keys = asking
@@ -1786,7 +1789,7 @@ function AppInner() {
 
       <div style={{ padding: "14px 14px 0" }}>
         {tab === "dashboard" && (
-          <Dashboard stats={stats} ipos={ipos} accounts={accounts} onOpenIpo={(id) => setIpoDetail(id)} />
+          <Dashboard stats={stats} ipos={ipos} accounts={accounts} onOpenIpo={(id) => setIpoDetail(id)} onOpenHolding={(id) => setHoldingDetail(id)} />
         )}
         {tab === "ipos" && (
           <IpoList
@@ -1930,6 +1933,14 @@ function AppInner() {
             setLiveOpen(false);
             setTab("ipos");
           }}
+        />
+      )}
+
+      {holdingDetail && (
+        <HoldingDetailSheet
+          ipo={ipos.find((i) => i.id === holdingDetail)}
+          accounts={accounts}
+          onClose={() => setHoldingDetail(null)}
         />
       )}
 
@@ -2241,7 +2252,7 @@ function BottomNav({ tab, setTab }) {
 /* ---------------------------------------------------------
    SCREENS
 ---------------------------------------------------------- */
-function Dashboard({ stats, ipos, accounts, onOpenIpo }) {
+function Dashboard({ stats, ipos, accounts, onOpenIpo, onOpenHolding }) {
   const holding = ipos.filter((ipo) =>
     (ipo.applications || []).some((a) =>
       (a.allotmentStatus === "Allotted" || a.allotmentStatus === "Partial") && !a.sold
@@ -2372,7 +2383,7 @@ function Dashboard({ stats, ipos, accounts, onOpenIpo }) {
             const pnlPct = investedValue > 0 && currentPrice > 0 ? ((currentPrice - entryPrice) / entryPrice) * 100 : null;
             const isUp = pnl >= 0;
             return (
-              <div key={ipo.id} onClick={() => onOpenIpo(ipo.id)} style={{
+              <div key={ipo.id} onClick={() => onOpenHolding(ipo.id)} style={{
                 background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 10,
                 padding: "10px 12px", cursor: "pointer",
               }}>
@@ -3316,6 +3327,85 @@ function AccountList({ accounts, ipos, transfers = [], onOpen }) {
         </div>
       )}
     </div>
+  );
+}
+
+function HoldingDetailSheet({ ipo, accounts, onClose }) {
+  if (!ipo) return null;
+  const entryPrice = Number(ipo.priceBand) || 0;
+  const currentPrice = Number(ipo.currentPrice) || Number(ipo.listingPrice) || 0;
+  const lotSize = Number(ipo.lotSize) || 1;
+  const holdingApps = (ipo.applications || []).filter((a) =>
+    (a.allotmentStatus === "Allotted" || a.allotmentStatus === "Partial") && !a.sold);
+  const totalShares = holdingApps.reduce((s, a) => s + (Number(a.sharesAllotted) || 0), 0);
+  const totalLots = holdingApps.reduce((s, a) => s + (Math.round((Number(a.sharesAllotted) || 0) / lotSize) || 1), 0);
+  const investedValue = totalShares * entryPrice;
+  const currentValue = currentPrice > 0 ? totalShares * currentPrice : 0;
+  const pnl = currentPrice > 0 ? currentValue - investedValue : 0;
+  const pnlPct = investedValue > 0 && currentPrice > 0 ? ((currentPrice - entryPrice) / entryPrice) * 100 : null;
+  const isUp = pnl >= 0;
+
+  return (
+    <Sheet title={ipo.company} onClose={onClose}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
+        <div style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: "10px 12px" }}>
+          <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 16, fontWeight: 700, color: COLORS.ink }}>₹{entryPrice}</div>
+          <div style={{ fontSize: 11, color: COLORS.inkSoft, fontFamily: "Inter, sans-serif" }}>Entry Price</div>
+        </div>
+        <div style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: "10px 12px" }}>
+          <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 16, fontWeight: 700, color: currentPrice > 0 ? COLORS.ink : COLORS.inkSoft }}>{currentPrice > 0 ? `₹${currentPrice}` : "--"}</div>
+          <div style={{ fontSize: 11, color: COLORS.inkSoft, fontFamily: "Inter, sans-serif" }}>Current Price</div>
+        </div>
+        <div style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: "10px 12px" }}>
+          <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 16, fontWeight: 700, color: COLORS.ink }}>{inr(investedValue)}</div>
+          <div style={{ fontSize: 11, color: COLORS.inkSoft, fontFamily: "Inter, sans-serif" }}>Invested</div>
+        </div>
+        <div style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: "10px 12px" }}>
+          <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 16, fontWeight: 700, color: currentPrice > 0 ? (isUp ? COLORS.green : COLORS.red) : COLORS.inkSoft }}>
+            {currentPrice > 0 ? `${isUp ? "+" : ""}${inr(pnl)}` : "--"}
+          </div>
+          <div style={{ fontSize: 11, color: COLORS.inkSoft, fontFamily: "Inter, sans-serif" }}>
+            P&L{pnlPct !== null ? ` (${isUp ? "+" : ""}${pnlPct.toFixed(1)}%)` : ""}
+          </div>
+        </div>
+      </div>
+
+      <div style={{
+        background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 10,
+        padding: "10px 12px", marginBottom: 16, fontFamily: "'JetBrains Mono', monospace", fontSize: 12,
+        display: "flex", justifyContent: "space-between", color: COLORS.inkSoft,
+      }}>
+        <span>{totalLots} lot{totalLots === 1 ? "" : "s"} · {totalShares} shares</span>
+        {currentPrice > 0 && <span style={{ color: COLORS.ink, fontWeight: 700 }}>{inr(currentValue)}</span>}
+      </div>
+
+      <SectionLabel>Holding Accounts ({holdingApps.length})</SectionLabel>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {holdingApps.map((app) => {
+          const accountName = accounts.find((a) => a.id === app.accountId)?.name || "Unknown";
+          const shares = Number(app.sharesAllotted) || 0;
+          const lots = Math.round(shares / lotSize) || 1;
+          const appPnl = currentPrice > 0 ? shares * (currentPrice - entryPrice) : 0;
+          return (
+            <div key={app.id} style={{
+              background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: "9px 10px",
+            }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span style={{ fontFamily: "Inter, sans-serif", fontWeight: 600, fontSize: 13.5, color: COLORS.ink }}>{accountName}</span>
+                {currentPrice > 0 && (
+                  <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, fontWeight: 700, color: appPnl >= 0 ? COLORS.green : COLORS.red }}>
+                    {appPnl >= 0 ? "+" : ""}{inr(appPnl)}
+                  </span>
+                )}
+              </div>
+              <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11.5, color: COLORS.inkSoft, marginTop: 3 }}>
+                {lots} lot{lots === 1 ? "" : "s"} · {inr(shares * entryPrice)} invested
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </Sheet>
   );
 }
 
