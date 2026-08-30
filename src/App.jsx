@@ -3650,11 +3650,16 @@ function IpoFormSheet({ initial, onClose, onSave }) {
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }}>
         <Field label="Open Date" error={errors.openDate}><Input type="date" value={f.openDate || ""} onChange={(e) => {
-          setF({ ...f, openDate: e.target.value });
+          const v = e.target.value;
+          const bad = v ? isNonTradingDay(v) : false;
+          if (bad) { setErrors((prev) => ({ ...prev, openDate: bad })); setF({ ...f, openDate: v }); return; }
+          setF({ ...f, openDate: v });
           if (errors.openDate) setErrors((prev) => ({ ...prev, openDate: "" }));
         }} /></Field>
         <Field label="Close Date" error={errors.closeDate}><Input type="date" value={f.closeDate || ""} onChange={(e) => {
           const close = e.target.value;
+          const bad = close ? isNonTradingDay(close) : false;
+          if (bad) { setErrors((prev) => ({ ...prev, closeDate: bad })); setF({ ...f, closeDate: close }); return; }
           const next = { ...f, closeDate: close, applicationDate: close };
           if (close) {
             next.allotmentDate = addClearingDays(close, 1);
