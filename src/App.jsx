@@ -10,7 +10,7 @@ import { createPortal } from "react-dom";
 const COLORS_LIGHT = {
   bg: "#F7F5F0",
   surface: "#FFFFFF",
-  border: "#E4DFD3",
+  border: "#D4CFC3",
   ink: "#1C2333",
   inkSoft: "#4B5563",
   navy: "#1F3A5F",
@@ -227,7 +227,8 @@ function isNonTradingDay(iso) {
   const d = new Date(iso + "T00:00:00");
   const day = d.getDay();
   if (day === 0 || day === 6) return "Weekend";
-  if (tradingHolidays.has(iso)) return "Market holiday";
+  if (tradingHolidays.has(iso)) return "Trading holiday";
+  if (clearingHolidays.has(iso)) return "Clearing holiday";
   return false;
 }
 
@@ -2006,10 +2007,12 @@ function AppInner() {
           onRefreshPrices={refreshPrices}
           onSignOut={async () => {
             setDataSheetOpen(false);
-            // Clear local data and React state to prevent leaking to next account
+            // Clear ALL local data and React state to prevent leaking to next account
             TABLES.forEach((k) => saveTable(k, []));
             setAccounts([]); setIpos([]); setTransfers([]); setTrash([]);
-            try { localStorage.removeItem(STORAGE_PREFIX + "owner"); } catch {}
+            setLocalOwner(null);
+            // Also clear session so migration script doesn't use stale credentials
+            try { localStorage.removeItem(STORAGE_PREFIX + "session"); } catch {}
             await cloudSignOut();
           }}
         />
@@ -3000,7 +3003,7 @@ function IpoDetailSheet({ ipo, accounts, onClose, onDeleteIpo, onEditIpo, onSave
           </Badge>
         )}
         </div>
-        <button onClick={onEditIpo} aria-label="Edit IPO" style={{ ...roundIconBtn, display: (ipo.fromExchange || ipo.upstoxId || ipo.isin) ? "none" : "flex" }}>
+        <button onClick={onEditIpo} aria-label="Edit IPO" style={{ ...roundIconBtn, display: (ipo.fromExchange || ipo.upstoxId || ipo.isin || ipo.symbol) ? "none" : "flex" }}>
           <Pencil size={14} color={COLORS.inkSoft} />
         </button>
       </div>
@@ -3648,16 +3651,11 @@ function IpoFormSheet({ initial, onClose, onSave }) {
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }}>
         <Field label="Open Date" error={errors.openDate}><Input type="date" value={f.openDate || ""} onChange={(e) => {
-          const v = e.target.value;
-          const bad = isNonTradingDay(v);
-          if (bad) return setErrors((prev) => ({ ...prev, openDate: bad }));
-          setF({ ...f, openDate: v });
+          setF({ ...f, openDate: e.target.value });
           if (errors.openDate) setErrors((prev) => ({ ...prev, openDate: "" }));
         }} /></Field>
         <Field label="Close Date" error={errors.closeDate}><Input type="date" value={f.closeDate || ""} onChange={(e) => {
           const close = e.target.value;
-          const bad = isNonTradingDay(close);
-          if (bad) return setErrors((prev) => ({ ...prev, closeDate: bad }));
           const next = { ...f, closeDate: close, applicationDate: close };
           if (close) {
             next.allotmentDate = addClearingDays(close, 1);
@@ -3689,7 +3687,9 @@ function IpoFormSheet({ initial, onClose, onSave }) {
         if (!f.priceBand) e.priceBand = "Required";
         if (!f.lotSize) e.lotSize = "Required";
         if (!f.openDate) e.openDate = "Required";
+        else { const bad = isNonTradingDay(f.openDate); if (bad) e.openDate = bad; }
         if (!f.closeDate) e.closeDate = "Required";
+        else { const bad = isNonTradingDay(f.closeDate); if (bad) e.closeDate = bad; }
         if (Object.keys(e).length) return setErrors(e);
         onSave(trimFields({ ...f, id: f.id || uid() }));
       }}>
