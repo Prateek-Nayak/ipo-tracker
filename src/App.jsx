@@ -1255,16 +1255,13 @@ export default function App() {
 
   useEffect(() => {
     if (typeof window === "undefined" || !window.history) return;
-    // One buffered entry to absorb the first back press.
     window.history.replaceState({ ledger: "root" }, "");
     window.history.pushState({ ledger: "layer" }, "");
 
-    const onPop = () => {
+    const onPop = (e) => {
       if (closeTopLayer()) {
-        // Something closed, so put the buffer back for the next press.
         window.history.pushState({ ledger: "layer" }, "");
       } else {
-        // Nothing left: let the press do what it would have done anyway.
         window.history.back();
       }
     };
@@ -1272,6 +1269,17 @@ export default function App() {
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, [closeTopLayer]);
+
+  /* Ensure the history buffer is always in place when a sheet is open.
+     Without this, closing a sheet via X/swipe (which doesn't touch history)
+     can leave the buffer consumed, and the next back press exits the app. */
+  useEffect(() => {
+    if (!sheetIsOpen) return;
+    // Push a buffer if the current state isn't already our layer marker
+    if (!window.history.state?.ledger || window.history.state.ledger === "root") {
+      window.history.pushState({ ledger: "layer" }, "");
+    }
+  }, [sheetIsOpen]);
 
   /* ---------- writes ---------- */
   const persistAccounts = useCallback((next) => { setAccounts(next); saveTable("accounts", next); }, []);
