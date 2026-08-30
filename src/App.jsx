@@ -807,6 +807,70 @@ function Select(props) {
   return <select {...props} style={{ ...inputStyle, ...(props.style || {}) }} />;
 }
 
+/* ---------------------------------------------------------
+   CONFIRM MODAL
+   Replaces browser confirm() and alert() with a styled modal.
+   Usage: const confirm = useConfirm();
+          const ok = await confirm("Delete this?", { danger: true });
+---------------------------------------------------------- */
+const ConfirmContext = React.createContext(null);
+
+function ConfirmModal({ state, onResolve }) {
+  if (!state) return null;
+  const { message, danger, confirmLabel, cancelLabel } = state;
+  return (
+    <div style={{
+      position: "fixed", inset: 0, background: "rgba(24, 27, 32, 0.55)", zIndex: 100,
+      display: "flex", alignItems: "center", justifyContent: "center", padding: 20,
+      animation: "sheetFadeIn 150ms ease-out",
+    }} onClick={() => onResolve(false)}>
+      <div onClick={(e) => e.stopPropagation()} style={{
+        background: COLORS.bg, borderRadius: 14, padding: "20px 18px", width: "100%", maxWidth: 320,
+        boxShadow: "0 12px 40px rgba(0,0,0,0.3)", fontFamily: "Inter, sans-serif",
+      }}>
+        <div style={{ fontSize: 14, color: COLORS.ink, lineHeight: 1.5, marginBottom: 18 }}>
+          {message}
+        </div>
+        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+          <button onClick={() => onResolve(false)} style={{
+            padding: "9px 16px", borderRadius: 8, border: `1px solid ${COLORS.border}`,
+            background: COLORS.surface, color: COLORS.ink, fontSize: 13, fontWeight: 600,
+            cursor: "pointer", fontFamily: "Inter, sans-serif",
+          }}>{cancelLabel || "Cancel"}</button>
+          <button onClick={() => onResolve(true)} style={{
+            padding: "9px 16px", borderRadius: 8, border: "none",
+            background: danger ? COLORS.red : COLORS.action, color: "#fff",
+            fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "Inter, sans-serif",
+          }}>{confirmLabel || (danger ? "Delete" : "OK")}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ConfirmProvider({ children }) {
+  const [state, setState] = useState(null);
+  const resolveRef = useRef(null);
+  const show = useCallback((message, opts = {}) => {
+    return new Promise((resolve) => {
+      resolveRef.current = resolve;
+      setState({ message, ...opts });
+    });
+  }, []);
+  const onResolve = useCallback((result) => {
+    setState(null);
+    if (resolveRef.current) { resolveRef.current(result); resolveRef.current = null; }
+  }, []);
+  return (
+    <ConfirmContext.Provider value={show}>
+      {children}
+      <ConfirmModal state={state} onResolve={onResolve} />
+    </ConfirmContext.Provider>
+  );
+}
+
+function useConfirm() { return useContext(ConfirmContext); }
+
 /* Lets a sheet's confirming action live outside the scrolling list. */
 const SheetFooterSlot = React.createContext(null);
 
@@ -971,6 +1035,15 @@ function PrimaryButton({ children, onClick, danger, ghost, disabled, type = "but
    APP
 ---------------------------------------------------------- */
 export default function App() {
+  return (
+    <ConfirmProvider>
+      <AppInner />
+    </ConfirmProvider>
+  );
+}
+
+function AppInner() {
+  const confirm = useConfirm();
   const [session, setSessionState] = useState(currentSession);
   const [authMode, setAuthMode] = useState("login");
   const [linkBusy, setLinkBusy] = useState(() => cloudEnabled() && !!readAuthHash());
@@ -1765,16 +1838,15 @@ export default function App() {
         <IpoFormSheet
           initial={ipoSheet.ipo}
           onClose={() => setIpoSheet(null)}
-          onSave={(data) => {
+          onSave={async (data) => {
             if (ipoSheet.ipo) {
               const merged = { ...ipoSheet.ipo, ...data };
-              // Applications added before the price and lot size were known were
-              // saved with a blank amount. Now that we can work it out, offer to.
               const fillable = fillableApplications(merged);
-              const applications = fillable.length && confirm(
-                `Work out the blocked amount for ${fillable.length} application` +
-                `${fillable.length === 1 ? "" : "s"} that had none, from this price and lot size?`
-              )
+              const shouldFill = fillable.length && await confirm(
+                `Work out the blocked amount for ${fillable.length} application${fillable.length === 1 ? "" : "s"} from this price and lot size?`,
+                { confirmLabel: "Yes, fill in" }
+              );
+              const applications = shouldFill
                 ? (merged.applications || []).map((a) =>
                     isBlank(a.amountBlocked) && blockedFor(merged, a.lots) > 0
                       ? { ...a, amountBlocked: String(blockedFor(merged, a.lots)) }
@@ -2866,6 +2938,7 @@ function IpoCard({ ipo, accounts, onClick }) {
 
 
 function IpoDetailSheet({ ipo, accounts, onClose, onDeleteIpo, onSaveNote, onAddApplication, onBulkApply, onBulkStatus, onEditApplication, onDeleteApplication }) {
+  const confirm = useConfirm();
   if (!ipo) return null;
   const apps = ipo.applications || [];
   const tally = allotmentTally(ipo);
@@ -2992,13 +3065,13 @@ function IpoDetailSheet({ ipo, accounts, onClose, onDeleteIpo, onSaveNote, onAdd
           {apps.map((app) => (
             <ApplicationRow key={app.id} app={app} ipo={ipo} accounts={accounts}
               onEdit={() => onEditApplication(ipo.id, app)}
-              onDelete={() => { if (confirm("Delete this application?")) onDeleteApplication(ipo.id, app.id); }} />
+              onDelete={async () => { if (await confirm(`Delete ${accounts.find((a) => a.id === app.accountId)?.name || "this"}'s application?`, { danger: true })) onDeleteApplication(ipo.id, app.id); }} />
           ))}
         </div>
       )}
       <div style={{ marginTop: 20, paddingTop: 14, borderTop: `1px solid ${COLORS.border}` }}>
         <SectionLabel>IPO actions</SectionLabel>
-        <button onClick={() => { const n=apps.length; const msg=n ? `Delete ${ipo.company || "this IPO"} and its ${n} application${n===1?"":"s"}?` : `Delete ${ipo.company || "this IPO entry"}?`; if(confirm(msg)) onDeleteIpo(ipo.id); }} style={{ width: "100%", marginTop: 6, minHeight: 44, borderRadius: 10, border: `1px solid ${COLORS.red}`, background: COLORS.redSoft, color: COLORS.red, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>Delete IPO</button>
+        <button onClick={async () => { const n=apps.length; const msg=n ? `Delete ${ipo.company || "this IPO"} and its ${n} application${n===1?"":"s"}? This cannot be undone.` : `Delete ${ipo.company || "this IPO entry"}? This cannot be undone.`; if(await confirm(msg, { danger: true })) onDeleteIpo(ipo.id); }} style={{ width: "100%", marginTop: 6, minHeight: 44, borderRadius: 10, border: `1px solid ${COLORS.red}`, background: COLORS.redSoft, color: COLORS.red, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>Delete IPO</button>
       </div>
     </Sheet>
   );
@@ -3181,6 +3254,7 @@ function AccountList({ accounts, ipos, transfers = [], onOpen }) {
 }
 
 function AccountDetailSheet({ account, ipos, transfers, accounts, onClose, onEdit, onDelete }) {
+  const confirm = useConfirm();
   if (!account) return null;
   const apps = useMemo(() => {
     const list = [];
@@ -3315,7 +3389,7 @@ function AccountDetailSheet({ account, ipos, transfers, accounts, onClose, onEdi
       )}
       <div style={{ marginTop: 20, paddingTop: 14, borderTop: `1px solid ${COLORS.border}` }}>
         <SectionLabel>Account actions</SectionLabel>
-        <button onClick={() => { const n = apps.length; const msg = n ? `Delete ${account.name || "this account"} and remove it from ${n} application${n === 1 ? "" : "s"}? The applications stay on their IPOs.` : `Delete ${account.name || "this account"}?`; if (confirm(msg)) onDelete(account.id); }} style={{ width: "100%", marginTop: 6, minHeight: 44, borderRadius: 10, border: `1px solid ${COLORS.red}`, background: COLORS.redSoft, color: COLORS.red, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "Inter, sans-serif" }}>Delete Account</button>
+        <button onClick={async () => { const n = apps.length; const msg = n ? `Delete ${account.name || "this account"}? This cannot be undone.` : `Delete ${account.name || "this account"}? This cannot be undone.`; if (await confirm(msg, { danger: true })) onDelete(account.id); }} style={{ width: "100%", marginTop: 6, minHeight: 44, borderRadius: 10, border: `1px solid ${COLORS.red}`, background: COLORS.redSoft, color: COLORS.red, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "Inter, sans-serif" }}>Delete Account</button>
       </div>
     </Sheet>
   );
@@ -3762,6 +3836,7 @@ function AccountFormSheet({ initial, accounts = [], onClose, onSave }) {
 }
 
 function TransferFormSheet({ initial, accounts, ipos, onClose, onSave, onDelete }) {
+  const confirm = useConfirm();
   // Backward compat: relatedIpoId (string) → relatedIpoIds (array)
   const initIds = initial?.relatedIpoIds
     ? initial.relatedIpoIds
@@ -3857,7 +3932,7 @@ function TransferFormSheet({ initial, accounts, ipos, onClose, onSave, onDelete 
       </PrimaryButton>
       {initial && onDelete && (
         <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px solid ${COLORS.border}` }}>
-          <button onClick={() => { if (confirm("Delete this transfer?")) { onDelete(f.id); onClose(); } }} style={{
+          <button onClick={async () => { if (await confirm("Delete this transfer? This cannot be undone.", { danger: true })) { onDelete(f.id); onClose(); } }} style={{
             width: "100%", minHeight: 44, borderRadius: 10, border: `1px solid ${COLORS.red}`,
             background: COLORS.redSoft, color: COLORS.red, fontSize: 13, fontWeight: 700,
             cursor: "pointer", fontFamily: "Inter, sans-serif",
@@ -4102,6 +4177,7 @@ function AuthScreen({ mode, setMode, notice }) {
    are painful one form at a time.
 ---------------------------------------------------------- */
 function BulkApplySheet({ ipo, accounts, onClose, onSave }) {
+  const confirm = useConfirm();
   const alreadyApplied = useMemo(
     () => new Set((ipo.applications || []).map((a) => a.accountId)),
     [ipo]
@@ -4135,12 +4211,12 @@ function BulkApplySheet({ ipo, accounts, onClose, onSave }) {
     setPicked(next);
   };
 
-  const submit = () => {
+  const submit = async () => {
     if (!chosen.length) return;
-    if (clashes.length && !confirm(
-      clashes.length + " of the selected accounts share a PAN with another application on this IPO. " +
-      "Duplicate PANs normally get every application rejected. Add them anyway?"
-    )) return;
+    if (clashes.length && !(await confirm(
+      clashes.length + " of the selected accounts share a PAN with another application on this IPO. Duplicate PANs normally get every application rejected. Add them anyway?",
+      { confirmLabel: "Add anyway", danger: false }
+    ))) return;
     onSave(chosen.map((a) => ({
       id: uid(),
       accountId: a.id,
