@@ -220,6 +220,7 @@ const inr = (n) => "₹" + (Number(n) || 0).toLocaleString("en-IN", { maximumFra
    than saying nothing - so unknown values render as an em dash instead. */
 const isBlank = (v) => v === "" || v == null || !Number.isFinite(Number(v));
 const inrOrDash = (v) => (isBlank(v) ? "--" : inr(v));
+const trimFields = (obj) => { const out = { ...obj }; for (const k in out) { if (typeof out[k] === "string") out[k] = out[k].trimEnd(); } return out; };
 
 /* The same normalisation the price API uses, so a company matches across
    sources: "Lumino Industries Limited" here, "LUMINO INDUSTRIES LTD" there. */
@@ -820,7 +821,7 @@ function Sheet({ title, onClose, children }) {
   const animateClose = useCallback(() => {
     if (closing) return;
     setClosing(true);
-    setTimeout(() => { window.scrollTo(0, window.scrollY); onClose(); }, 250);
+    setTimeout(() => { window.scrollTo(0, window.scrollY); onClose(); }, 180);
   }, [closing, onClose]);
 
   const onTouchStart = (e) => {
@@ -863,7 +864,7 @@ function Sheet({ title, onClose, children }) {
     <div style={{
       position: "fixed", inset: 0, background: "rgba(24, 27, 32, 0.45)", zIndex: 50,
       display: "flex", alignItems: "flex-end", justifyContent: "center",
-      animation: closing ? "sheetFadeOut 250ms ease-in forwards" : "sheetFadeIn 200ms ease-out",
+      animation: closing ? "sheetFadeOut 180ms ease-in forwards" : "sheetFadeIn 200ms ease-out",
     }} onClick={animateClose}>
       <div
         onClick={(e) => e.stopPropagation()}
@@ -877,7 +878,7 @@ function Sheet({ title, onClose, children }) {
           display: "flex", flexDirection: "column", minHeight: 0,
           boxShadow: "0 -8px 30px rgba(0,0,0,0.2)",
           transform: closing ? "translateY(100%)" : dragY ? `translateY(${dragY}px)` : undefined,
-          transition: dragging ? "none" : "transform 280ms ease-out",
+          transition: dragging ? "none" : "transform 200ms ease-out",
           animation: closing ? "none" : "sheetSlideUp 280ms ease-out",
         }}
       >
@@ -2806,7 +2807,7 @@ function IpoCard({ ipo, accounts, onClick }) {
               fontSize: 11, color: COLORS.inkSoft, marginTop: 2, fontFamily: "'JetBrains Mono', monospace",
               whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
             }}>
-              {ipo.category || "Mainboard"} · {ipo.priceBandLow ? `₹${ipo.priceBandLow}-₹${ipo.priceBand}` : `₹${ipo.priceBand || "--"}`}/sh · {totalLots} lot{totalLots === 1 ? "" : "s"} · {apps.length} app{apps.length === 1 ? "" : "s"}
+              {ipo.category || "Mainboard"} · {ipo.priceBandLow ? `₹${ipo.priceBandLow}-₹${ipo.priceBand}` : `₹${ipo.priceBand || "--"}`} · {totalLots} lot{totalLots === 1 ? "" : "s"} · {apps.length} app{apps.length === 1 ? "" : "s"}
             </div>
             <div style={{ marginTop: 5, display: "flex", gap: 6, flexWrap: "wrap" }}>
               {stage && <Badge color={stage.color} bg={stage.bg}>{stage.label}</Badge>}
@@ -2887,7 +2888,7 @@ function IpoDetailSheet({ ipo, accounts, onClose, onDeleteIpo, onSaveNote, onAdd
       <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
         <Badge color={COLORS.navy} bg={COLORS.chip}>{ipo.category || "Mainboard"}</Badge>
         <Badge color={COLORS.inkSoft} bg="#EFEDE7">{ipo.priceBandLow ? `₹${ipo.priceBandLow}-₹${ipo.priceBand}` : `Price ₹${ipo.priceBand || "--"}`}</Badge>
-        <Badge color={COLORS.inkSoft} bg="#EFEDE7">Lot {ipo.lotSize || "--"} sh</Badge>
+        <Badge color={COLORS.inkSoft} bg="#EFEDE7">Lot {ipo.lotSize || "--"}</Badge>
         {Number(ipo.listingPrice) > 0 && hasListed(ipo) && (
           <Badge color={COLORS.inkSoft} bg="#EFEDE7">{ipo.listingPriceSource === "bse-close" ? "Listing close" : "Listed"} ₹{ipo.listingPrice}</Badge>
         )}
@@ -3446,7 +3447,7 @@ function TransferList({ transfers, accounts, ipos = [], onEdit, onDelete }) {
     return transfers
       .filter((t) => {
         if (q) {
-          const hay = `${name(t.fromAccountId)} ${name(t.toAccountId)} ${t.remarks || ""} ${ipoName(t.relatedIpoId)}`.toLowerCase();
+          const hay = `${name(t.fromAccountId)} ${name(t.toAccountId)} ${t.remarks || ""} ${ipoName(t.relatedIpoId)} ${(t.relatedIpoIds || []).map(ipoName).join(" ")}`.toLowerCase();
           if (!hay.includes(q)) return false;
         }
         return true;
@@ -3600,7 +3601,7 @@ function IpoFormSheet({ initial, onClose, onSave }) {
       <Field label="Remarks">
         <textarea value={f.remarks} onChange={set("remarks")} rows={3} style={{ ...inputStyle, resize: "vertical" }} placeholder="Any notes about this IPO" />
       </Field>
-      <PrimaryButton onClick={() => { if (!f.company) return alert("Company name is required"); onSave({ ...f, id: f.id || uid() }); }}>
+      <PrimaryButton onClick={() => { if (!f.company) return alert("Company name is required"); onSave(trimFields({ ...f, id: f.id || uid() })); }}>
         {initial ? "Save Changes" : "Add IPO"}
       </PrimaryButton>
     </Sheet>
@@ -3695,7 +3696,7 @@ function ApplicationFormSheet({ initial, ipo, accounts, onClose, onSave }) {
       <Field label="Remarks">
         <textarea value={f.remarks} onChange={set("remarks")} rows={2} style={{ ...inputStyle, resize: "vertical" }} placeholder="e.g. Funds sent by dad, to be returned after listing" />
       </Field>
-      <PrimaryButton onClick={() => { if (!f.accountId) return alert("Select an account"); onSave({ ...f, id: f.id || uid() }); }}>
+      <PrimaryButton onClick={() => { if (!f.accountId) return alert("Select an account"); onSave(trimFields({ ...f, id: f.id || uid() })); }}>
         {initial ? "Save Changes" : "Add Application"}
       </PrimaryButton>
     </Sheet>
@@ -3744,7 +3745,7 @@ function AccountFormSheet({ initial, accounts = [], onClose, onSave }) {
       <Field label="Notes"><textarea value={f.notes} onChange={set("notes")} rows={2} style={{ ...inputStyle, resize: "vertical" }} /></Field>
       <PrimaryButton onClick={() => {
         if (!f.name) return alert("Name is required");
-        onSave({ ...f, pan, id: f.id || uid() });
+        onSave(trimFields({ ...f, pan, id: f.id || uid() }));
       }}>
         {initial ? "Save Changes" : "Add Account"}
       </PrimaryButton>
@@ -3753,11 +3754,31 @@ function AccountFormSheet({ initial, accounts = [], onClose, onSave }) {
 }
 
 function TransferFormSheet({ initial, accounts, ipos, onClose, onSave, onDelete }) {
-  const [f, setF] = useState(initial || {
-    id: undefined, fromAccountId: accounts[0]?.id || "", toAccountId: accounts[1]?.id || accounts[0]?.id || "",
-    amount: "", date: todayISO(), relatedIpoId: "", remarks: "",
+  // Backward compat: relatedIpoId (string) → relatedIpoIds (array)
+  const initIds = initial?.relatedIpoIds
+    ? initial.relatedIpoIds
+    : initial?.relatedIpoId ? [initial.relatedIpoId] : [];
+  const [f, setF] = useState({
+    ...(initial || {
+      id: undefined, fromAccountId: accounts[0]?.id || "", toAccountId: accounts[1]?.id || accounts[0]?.id || "",
+      amount: "", date: todayISO(), remarks: "",
+    }),
+    relatedIpoIds: initIds,
   });
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  const [ipoSearch, setIpoSearch] = useState("");
+
+  const ipoMatches = useMemo(() => {
+    const q = ipoSearch.trim().toLowerCase();
+    if (!q) return [];
+    const selected = new Set(f.relatedIpoIds);
+    return ipos.filter((i) => !selected.has(i.id) && (i.company || "").toLowerCase().includes(q)).slice(0, 6);
+  }, [ipoSearch, ipos, f.relatedIpoIds]);
+
+  const addIpo = (id) => { setF((prev) => ({ ...prev, relatedIpoIds: [...prev.relatedIpoIds, id] })); setIpoSearch(""); };
+  const removeIpo = (id) => { setF((prev) => ({ ...prev, relatedIpoIds: prev.relatedIpoIds.filter((x) => x !== id) })); };
+  const ipoNameOf = (id) => ipos.find((i) => i.id === id)?.company || "Unknown IPO";
+
   return (
     <Sheet title={initial ? "Edit Transfer" : "New Transfer"} onClose={onClose}>
       <Field label="From Account">
@@ -3774,16 +3795,56 @@ function TransferFormSheet({ initial, accounts, ipos, onClose, onSave, onDelete 
         <div style={{ flex: 1 }}><Field label="Amount (₹)"><Input type="number" inputMode="numeric" value={f.amount} onChange={set("amount")} /></Field></div>
         <div style={{ flex: 1 }}><Field label="Date"><Input type="date" value={f.date} onChange={set("date")} /></Field></div>
       </div>
-      <Field label="Related IPO (optional)">
-        <Select value={f.relatedIpoId} onChange={set("relatedIpoId")}>
-          <option value="">-- None --</option>
-          {ipos.map((i) => <option key={i.id} value={i.id}>{i.company}</option>)}
-        </Select>
+      <Field label="Related IPOs (optional)">
+        {f.relatedIpoIds.length > 0 && (
+          <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginBottom: 6 }}>
+            {f.relatedIpoIds.map((id) => (
+              <span key={id} onClick={() => removeIpo(id)} style={{
+                background: COLORS.chip, color: COLORS.navy, border: `1px solid ${COLORS.border}`,
+                borderRadius: 999, padding: "3px 8px", fontSize: 11, fontWeight: 600,
+                fontFamily: "Inter, sans-serif", cursor: "pointer", display: "inline-flex",
+                alignItems: "center", gap: 4, whiteSpace: "nowrap",
+              }}>{ipoNameOf(id)} <X size={10} color={COLORS.inkSoft} /></span>
+            ))}
+          </div>
+        )}
+        <div style={{ position: "relative" }}>
+          <Input
+            value={ipoSearch}
+            onChange={(e) => setIpoSearch(e.target.value)}
+            placeholder="Search IPO to link..."
+            style={{ paddingRight: ipoSearch ? 34 : 12 }}
+          />
+          {ipoSearch && (
+            <button onClick={() => setIpoSearch("")} aria-label="Clear" style={{
+              position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)",
+              background: "none", border: "none", padding: 4, cursor: "pointer", display: "flex",
+            }}><X size={14} color={COLORS.inkSoft} /></button>
+          )}
+        </div>
+        {ipoSearch && (
+          <div style={{
+            border: `1px solid ${COLORS.border}`, borderRadius: 8, marginTop: 4,
+            background: COLORS.surface, maxHeight: 160, overflowY: "auto",
+          }}>
+            {ipoMatches.length === 0 ? (
+              <div style={{ padding: "10px 12px", fontSize: 12, color: COLORS.inkSoft, fontFamily: "Inter, sans-serif" }}>No matching IPOs</div>
+            ) : (
+              ipoMatches.map((i) => (
+                <button key={i.id} onClick={() => addIpo(i.id)} style={{
+                  display: "block", width: "100%", textAlign: "left", padding: "8px 12px",
+                  background: "transparent", border: "none", borderBottom: `1px solid ${COLORS.border}`,
+                  fontSize: 13, color: COLORS.ink, fontFamily: "Inter, sans-serif", cursor: "pointer",
+                }}>{i.company}</button>
+              ))
+            )}
+          </div>
+        )}
       </Field>
       <Field label="Remarks">
         <textarea value={f.remarks} onChange={set("remarks")} rows={2} style={{ ...inputStyle, resize: "vertical" }} placeholder="e.g. Sent for application, to be returned" />
       </Field>
-      <PrimaryButton onClick={() => { if (!f.fromAccountId || !f.toAccountId) return alert("Select both accounts"); onSave({ ...f, id: f.id || uid() }); }}>
+      <PrimaryButton onClick={() => { if (!f.fromAccountId || !f.toAccountId) return alert("Select both accounts"); onSave(trimFields({ ...f, relatedIpoId: f.relatedIpoIds[0] || "", id: f.id || uid() })); }}>
         {initial ? "Save Changes" : "Add Transfer"}
       </PrimaryButton>
       {initial && onDelete && (
@@ -4095,7 +4156,7 @@ function BulkApplySheet({ ipo, accounts, onClose, onSave }) {
       }}>
         <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 600, fontSize: 15, color: COLORS.heading }}>{ipo.company}</div>
         <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11.5, color: COLORS.inkSoft, marginTop: 3 }}>
-          {ipo.priceBandLow ? `₹${ipo.priceBandLow}-₹${ipo.priceBand}` : `₹${ipo.priceBand || "--"}`}/sh · lot {ipo.lotSize || "--"} sh
+          {ipo.priceBandLow ? `₹${ipo.priceBandLow}-₹${ipo.priceBand}` : `₹${ipo.priceBand || "--"}`} · lot {ipo.lotSize || "--"} sh
           {lotSizeKnown ? ` · ₹${(Number(ipo.lotSize) * Number(ipo.priceBand)).toLocaleString("en-IN")} per lot` : ""}
         </div>
       </div>
