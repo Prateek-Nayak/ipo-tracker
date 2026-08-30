@@ -2353,12 +2353,46 @@ function Dashboard({ stats, ipos, accounts, onOpenIpo }) {
 
       <SectionLabel>Currently Holding</SectionLabel>
       {holding.length === 0 ? (
-        <EmptyState text={ipos.length === 0 ? "No IPOs logged yet. Tap the IPOs tab to add your first application." : "No active holdings. Allotted shares that haven't been sold will appear here."} icon={Receipt} subtitle={ipos.length === 0 ? "Your family IPO register starts here." : ""} />
+        <EmptyState text={ipos.length === 0 ? "No IPOs logged yet. Tap the IPOs tab to add your first application." : "No active holdings."} icon={Receipt} subtitle={ipos.length === 0 ? "Your family IPO register starts here." : ""} />
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {holding.map((ipo) => (
-            <IpoCard key={ipo.id} ipo={ipo} accounts={accounts} onClick={() => onOpenIpo(ipo.id)} />
-          ))}
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {holding.map((ipo) => {
+            const entryPrice = Number(ipo.priceBand) || 0;
+            const currentPrice = Number(ipo.currentPrice) || Number(ipo.listingPrice) || 0;
+            const totalShares = (ipo.applications || []).reduce((s, a) =>
+              (a.allotmentStatus === "Allotted" || a.allotmentStatus === "Partial") && !a.sold
+                ? s + (Number(a.sharesAllotted) || 0) : s, 0);
+            const investedValue = totalShares * entryPrice;
+            const currentValue = currentPrice > 0 ? totalShares * currentPrice : 0;
+            const pnl = currentPrice > 0 ? currentValue - investedValue : 0;
+            const pnlPct = investedValue > 0 && currentPrice > 0 ? ((currentPrice - entryPrice) / entryPrice) * 100 : null;
+            const isUp = pnl >= 0;
+            return (
+              <div key={ipo.id} onClick={() => onOpenIpo(ipo.id)} style={{
+                background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 10,
+                padding: "10px 12px", cursor: "pointer",
+              }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                  <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 600, fontSize: 14, color: COLORS.heading, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {ipo.company}
+                  </div>
+                  {currentPrice > 0 && (
+                    <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 13, fontWeight: 700, color: isUp ? COLORS.green : COLORS.red, flexShrink: 0 }}>
+                      {isUp ? "+" : ""}{inr(pnl)}
+                    </span>
+                  )}
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 4, fontFamily: "'JetBrains Mono', monospace", fontSize: 11.5, color: COLORS.inkSoft }}>
+                  <span>₹{entryPrice} → {currentPrice > 0 ? `₹${currentPrice}` : "--"} · {totalShares} sh</span>
+                  {pnlPct !== null && (
+                    <span style={{ color: isUp ? COLORS.green : COLORS.red, fontWeight: 600 }}>
+                      {isUp ? "+" : ""}{pnlPct.toFixed(1)}%
+                    </span>
+                  )}
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
