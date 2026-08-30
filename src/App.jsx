@@ -12,7 +12,7 @@ const COLORS_LIGHT = {
   surface: "#FFFFFF",
   border: "#E4DFD3",
   ink: "#1C2333",
-  inkSoft: "#6B7280",
+  inkSoft: "#4B5563",
   navy: "#1F3A5F",
   navyDeep: "#152A44",
   gold: "#B08D57",
@@ -1995,7 +1995,12 @@ function AppInner() {
           pricing={pricing}
           priceInfo={priceInfo}
           onRefreshPrices={refreshPrices}
-          onSignOut={async () => { setDataSheetOpen(false); await cloudSignOut(); }}
+          onSignOut={async () => {
+            setDataSheetOpen(false);
+            // Clear local data to prevent it leaking to the next account
+            TABLES.forEach((k) => saveTable(k, []));
+            await cloudSignOut();
+          }}
         />
       )}
     </div>
@@ -2984,7 +2989,7 @@ function IpoDetailSheet({ ipo, accounts, onClose, onDeleteIpo, onEditIpo, onSave
           </Badge>
         )}
         </div>
-        <button onClick={onEditIpo} aria-label="Edit IPO" style={roundIconBtn}>
+        <button onClick={onEditIpo} aria-label="Edit IPO" style={{ ...roundIconBtn, display: ipo.source ? "none" : "flex" }}>
           <Pencil size={14} color={COLORS.inkSoft} />
         </button>
       </div>
@@ -3569,7 +3574,7 @@ function TransferList({ transfers, accounts, ipos = [], onEdit, onDelete }) {
           padding: "10px 12px", cursor: "pointer",
         }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14, fontWeight: 600, color: COLORS.heading, fontFamily: "Inter, sans-serif", minWidth: 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14, fontWeight: 600, color: COLORS.heading, fontFamily: "'Fraunces', serif", minWidth: 0 }}>
               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name(t.fromAccountId)}</span>
               <ArrowRightLeft size={13} color={COLORS.gold} style={{ flexShrink: 0 }} />
               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name(t.toAccountId)}</span>
@@ -3635,18 +3640,20 @@ function IpoFormSheet({ initial, onClose, onSave }) {
         <Field label="Close Date" error={errors.closeDate}><Input type="date" value={f.closeDate || ""} onChange={(e) => {
           const close = e.target.value;
           const next = { ...f, closeDate: close, applicationDate: close };
-          // Auto-calculate allotment and listing from close date
-          if (close && !f.allotmentDate) next.allotmentDate = addClearingDays(close, 1);
-          if (close && !f.listingDate) {
-            const allot = next.allotmentDate || addClearingDays(close, 1);
-            const credit = addClearingDays(allot, 1);
+          // Always recalculate allotment and listing from close date
+          if (close) {
+            next.allotmentDate = addClearingDays(close, 1);
+            const credit = addClearingDays(next.allotmentDate, 1);
             next.listingDate = addTradingDays(credit, 1);
+          } else {
+            next.allotmentDate = "";
+            next.listingDate = "";
           }
           setF(next);
           if (errors.closeDate) setErrors((prev) => ({ ...prev, closeDate: "" }));
         }} /></Field>
-        <Field label="Allotment (auto)"><Input type="date" value={f.allotmentDate || (f.closeDate ? addClearingDays(f.closeDate, 1) : "")} disabled style={{ background: COLORS.bg, color: COLORS.inkSoft }} /></Field>
-        <Field label="Listing (auto)"><Input type="date" value={f.listingDate || (f.closeDate ? addTradingDays(addClearingDays(addClearingDays(f.closeDate, 1), 1), 1) : "")} disabled style={{ background: COLORS.bg, color: COLORS.inkSoft }} /></Field>
+        <Field label="Allotment (auto)"><Input type="date" value={f.closeDate ? addClearingDays(f.closeDate, 1) : ""} disabled style={{ background: COLORS.bg, color: COLORS.inkSoft }} /></Field>
+        <Field label="Listing (auto)"><Input type="date" value={f.closeDate ? addTradingDays(addClearingDays(addClearingDays(f.closeDate, 1), 1), 1) : ""} disabled style={{ background: COLORS.bg, color: COLORS.inkSoft }} /></Field>
       </div>
       <Field label={f.listingPriceSource === "bse-open" ? "Listing Price - day-one open (from exchange, ₹)" : f.listingPriceSource === "bse-close" ? "Listing Day Close (from exchange, ₹)" : "Listing Price (optional, ₹)"}>
         <Input
