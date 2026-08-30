@@ -1535,9 +1535,9 @@ function AppInner() {
         if (hit.openDate) patch.openDate = hit.openDate;
         if (hit.closeDate) {
           patch.closeDate = hit.closeDate;
-          // The last day to bid is the day an application had to be in by.
           patch.applicationDate = hit.closeDate;
         }
+        if (hit.allotmentDate) patch.allotmentDate = hit.allotmentDate;
         // The top of the band: what a cut-off application is priced at.
         if (hit.priceMax != null) patch.priceBand = String(hit.priceMax);
         if (hit.priceMin != null) patch.priceBandLow = String(hit.priceMin);
@@ -2246,7 +2246,7 @@ function Dashboard({ stats, ipos, accounts, onOpenIpo }) {
     (ipo.applications || []).some((a) =>
       (a.allotmentStatus === "Allotted" || a.allotmentStatus === "Partial") && !a.sold
     )
-  );
+  ).sort((a, b) => (b.listingDate || b.closeDate || b.applicationDate || "").localeCompare(a.listingDate || a.closeDate || a.applicationDate || ""));
   // Figures below are derived from price and lot size; say so when some are absent
   // rather than quietly reporting a total that leaves money out.
   const incomplete = ipos.filter((i) => (i.applications || []).length && missingIpoFields(i).length);
@@ -2359,6 +2359,10 @@ function Dashboard({ stats, ipos, accounts, onOpenIpo }) {
           {holding.map((ipo) => {
             const entryPrice = Number(ipo.priceBand) || 0;
             const currentPrice = Number(ipo.currentPrice) || Number(ipo.listingPrice) || 0;
+            const lotSize = Number(ipo.lotSize) || 1;
+            const totalLots = (ipo.applications || []).reduce((s, a) =>
+              (a.allotmentStatus === "Allotted" || a.allotmentStatus === "Partial") && !a.sold
+                ? s + (Math.round((Number(a.sharesAllotted) || 0) / lotSize) || 1) : s, 0);
             const totalShares = (ipo.applications || []).reduce((s, a) =>
               (a.allotmentStatus === "Allotted" || a.allotmentStatus === "Partial") && !a.sold
                 ? s + (Number(a.sharesAllotted) || 0) : s, 0);
@@ -2376,14 +2380,18 @@ function Dashboard({ stats, ipos, accounts, onOpenIpo }) {
                   <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 600, fontSize: 14, color: COLORS.heading, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                     {ipo.company}
                   </div>
-                  {currentPrice > 0 && (
+                  {currentPrice > 0 ? (
                     <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 13, fontWeight: 700, color: isUp ? COLORS.green : COLORS.red, flexShrink: 0 }}>
                       {isUp ? "+" : ""}{inr(pnl)}
+                    </span>
+                  ) : (
+                    <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: COLORS.inkSoft, flexShrink: 0 }}>
+                      {inr(investedValue)}
                     </span>
                   )}
                 </div>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 4, fontFamily: "'JetBrains Mono', monospace", fontSize: 11.5, color: COLORS.inkSoft }}>
-                  <span>₹{entryPrice} → {currentPrice > 0 ? `₹${currentPrice}` : "--"} · {totalShares} sh</span>
+                  <span>₹{entryPrice} {currentPrice > 0 ? `→ ₹${currentPrice}` : ""} · {totalLots} lot{totalLots === 1 ? "" : "s"}</span>
                   {pnlPct !== null && (
                     <span style={{ color: isUp ? COLORS.green : COLORS.red, fontWeight: 600 }}>
                       {isUp ? "+" : ""}{pnlPct.toFixed(1)}%
