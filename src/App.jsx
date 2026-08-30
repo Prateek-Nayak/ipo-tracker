@@ -928,7 +928,7 @@ function Sheet({ title, onClose, children }) {
     <div style={{
       position: "fixed", inset: 0, background: "rgba(24, 27, 32, 0.45)", zIndex: 50,
       display: "flex", alignItems: "flex-end", justifyContent: "center",
-      animation: closing ? "sheetFadeOut 180ms ease-in forwards" : "sheetFadeIn 200ms ease-out",
+      animation: closing ? "sheetFadeOut 180ms ease-in forwards" : "none",
     }} onClick={animateClose}>
       <div
         onClick={(e) => e.stopPropagation()}
@@ -1313,8 +1313,8 @@ function AppInner() {
     const v = backRef.current;
     // Innermost first: child sheets close before the parent beneath them.
     if (v.appSheet) { setAppSheet(null); return true; }
-    if (v.bulkApplyFor) { setBulkApplyFor(null); return true; }
-    if (v.bulkStatusFor) { setBulkStatusFor(null); return true; }
+    if (v.bulkApplyFor) { setBulkApplyFor(null); setIpoDetail(v.bulkApplyFor); return true; }
+    if (v.bulkStatusFor) { setBulkStatusFor(null); setIpoDetail(v.bulkStatusFor); return true; }
     if (v.ipoSheet) { setIpoSheet(null); return true; }
     if (v.acctSheet) { setAcctSheet(null); return true; }
     if (v.acctDetail) { setAcctDetail(null); return true; }
@@ -1342,17 +1342,6 @@ function AppInner() {
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, [closeTopLayer]);
-
-  /* Ensure the history buffer is always in place when a sheet is open.
-     Without this, closing a sheet via X/swipe (which doesn't touch history)
-     can leave the buffer consumed, and the next back press exits the app. */
-  useEffect(() => {
-    if (!sheetIsOpen) return;
-    // Push a buffer if the current state isn't already our layer marker
-    if (!window.history.state?.ledger || window.history.state.ledger === "root") {
-      window.history.pushState({ ledger: "layer" }, "");
-    }
-  }, [sheetIsOpen]);
 
   /* ---------- writes ---------- */
   const persistAccounts = useCallback((next) => { setAccounts(next); saveTable("accounts", next); }, []);
@@ -1811,15 +1800,15 @@ function AppInner() {
 
       <BottomNav tab={tab} setTab={setTab} />
 
-      {ipoDetail && !bulkApplyFor && !bulkStatusFor && (
+      {ipoDetail && (
         <IpoDetailSheet
           ipo={ipos.find((i) => i.id === ipoDetail)}
           accounts={accounts}
           onClose={() => setIpoDetail(null)}
           onDeleteIpo={(id) => { const gone=ipos.find((x)=>x.id===id); if(!gone)return; discard("ipo",gone,gone.company||"Untitled IPO"); persistIpos(ipos.filter((x)=>x.id!==id)); setIpoDetail(null); }}
           onSaveNote={(id,noteValue)=>{ persistIpos(ipos.map((i)=>i.id===id?{...i,remarks:(noteValue||"").trimEnd()}:i)); }}
-          onBulkApply={(ipoId) => { setBulkApplyFor(ipoId); }}
-          onBulkStatus={(ipoId) => { setBulkStatusFor(ipoId); }}
+          onBulkApply={(ipoId) => { setIpoDetail(null); setBulkApplyFor(ipoId); }}
+          onBulkStatus={(ipoId) => { setIpoDetail(null); setBulkStatusFor(ipoId); }}
           onEditApplication={(ipoId, application) => setAppSheet({ ipoId, application })}
           onDeleteApplication={(ipoId, appId) => {
             const owner = ipos.find((i) => i.id === ipoId);
@@ -1885,12 +1874,13 @@ function AppInner() {
         <BulkApplySheet
           ipo={ipos.find((i) => i.id === bulkApplyFor)}
           accounts={accounts}
-          onClose={() => { setBulkApplyFor(null); }}
+          onClose={() => { setBulkApplyFor(null); setIpoDetail(bulkApplyFor); }}
           onSave={(newApps) => {
             persistIpos(ipos.map((i) => (i.id === bulkApplyFor
               ? { ...i, applications: [...(i.applications || []), ...newApps] }
               : i)));
             setBulkApplyFor(null);
+            setIpoDetail(bulkApplyFor);
           }}
         />
       )}
@@ -1899,7 +1889,7 @@ function AppInner() {
         <BulkStatusSheet
           ipo={ipos.find((i) => i.id === bulkStatusFor)}
           accounts={accounts}
-          onClose={() => { setBulkStatusFor(null); }}
+          onClose={() => { setBulkStatusFor(null); setIpoDetail(bulkStatusFor); }}
           onSave={(draft) => {
             persistIpos(ipos.map((i) => (i.id === bulkStatusFor
               ? {
@@ -1909,6 +1899,7 @@ function AppInner() {
                 }
               : i)));
             setBulkStatusFor(null);
+            setIpoDetail(bulkStatusFor);
           }}
         />
       )}
@@ -3623,13 +3614,13 @@ function IpoFormSheet({ initial, onClose, onSave }) {
       </Field>
       <div style={{ display: "flex", gap: 10 }}>
         <div style={{ flex: 1 }}><Field label="Price Band Low (₹)"><Input type="number" inputMode="numeric" value={f.priceBandLow || ""} onChange={set("priceBandLow")} placeholder="e.g. 270" /></Field></div>
-        <div style={{ flex: 1 }}><Field label="Cutoff Price (₹)"><Input type="number" inputMode="numeric" value={f.priceBand} onChange={set("priceBand")} placeholder="e.g. 285" /></Field></div>
+        <div style={{ flex: 1 }}><Field label="Cutoff Price (₹)" error={errors.priceBand}><Input type="number" inputMode="numeric" value={f.priceBand} onChange={set("priceBand")} placeholder="e.g. 285" /></Field></div>
       </div>
-      <Field label="Lot Size (shares)"><Input type="number" inputMode="numeric" value={f.lotSize} onChange={set("lotSize")} placeholder="e.g. 52" /></Field>
+      <Field label="Lot Size (shares)" error={errors.lotSize}><Input type="number" inputMode="numeric" value={f.lotSize} onChange={set("lotSize")} placeholder="e.g. 52" /></Field>
 
       {/* Dates are filled automatically when prices are refreshed.
           Manual entry is available for issues not yet on the exchange. */}
-      {!editDates ? (
+      {!editDates && !errors.openDate && !errors.closeDate ? (
         <div style={{
           background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 10,
           padding: "10px 12px", marginBottom: 14, fontSize: 12, color: COLORS.inkSoft,
@@ -3667,8 +3658,8 @@ function IpoFormSheet({ initial, onClose, onSave }) {
           <div style={{ fontSize: 11.5, color: COLORS.inkSoft, marginBottom: 10 }}>
             Dates update automatically when prices are refreshed.
           </div>
-          <Field label="Opens"><Input type="date" value={f.openDate || ""} onChange={set("openDate")} /></Field>
-          <Field label="Closes - last day to apply"><Input type="date" value={f.closeDate || ""} onChange={set("closeDate")} /></Field>
+          <Field label="Opens" error={errors.openDate}><Input type="date" value={f.openDate || ""} onChange={set("openDate")} /></Field>
+          <Field label="Closes - last day to apply" error={errors.closeDate}><Input type="date" value={f.closeDate || ""} onChange={set("closeDate")} /></Field>
           <Field label="Allotment date"><Input type="date" value={f.allotmentDate || ""} onChange={set("allotmentDate")} /></Field>
           <Field label="Listing date"><Input type="date" value={f.listingDate || ""} onChange={set("listingDate")} /></Field>
         </>
@@ -3684,7 +3675,16 @@ function IpoFormSheet({ initial, onClose, onSave }) {
       <Field label="Remarks">
         <textarea value={f.remarks} onChange={set("remarks")} rows={3} style={{ ...inputStyle, resize: "vertical" }} placeholder="Any notes about this IPO" />
       </Field>
-      <PrimaryButton onClick={() => { if (!f.company) return setErrors({ company: "Company name is required" }); onSave(trimFields({ ...f, id: f.id || uid() })); }}>
+      <PrimaryButton onClick={() => {
+        const e = {};
+        if (!f.company) e.company = "Required";
+        if (!f.priceBand) e.priceBand = "Required";
+        if (!f.lotSize) e.lotSize = "Required";
+        if (!f.openDate) e.openDate = "Required";
+        if (!f.closeDate) e.closeDate = "Required";
+        if (Object.keys(e).length) return setErrors(e);
+        onSave(trimFields({ ...f, id: f.id || uid() }));
+      }}>
         {initial ? "Save Changes" : "Add IPO"}
       </PrimaryButton>
     </Sheet>
@@ -3696,7 +3696,8 @@ function ApplicationFormSheet({ initial, ipo, accounts, onClose, onSave }) {
     id: undefined, accountId: accounts[0]?.id || "", appliedFor: "", lots: "1", amountBlocked: "",
     allotmentStatus: "Pending", sharesAllotted: "", sold: false, sellPrice: "", sellDate: "", remarks: "",
   });
-  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  const [errors, setErrors] = useState({});
+  const set = (k) => (e) => { setF({ ...f, [k]: e.target.value }); if (errors[k]) setErrors((prev) => ({ ...prev, [k]: "" })); };
   const setBool = (k) => (e) => setF({ ...f, [k]: e.target.checked });
   const lotSize = Number(ipo?.lotSize) || 0;
 
@@ -3730,7 +3731,7 @@ function ApplicationFormSheet({ initial, ipo, accounts, onClose, onSave }) {
 
   return (
     <Sheet title={initial ? "Edit Application" : "New Application"} onClose={onClose}>
-      <Field label="Applied From Account">
+      <Field label="Applied From Account" error={errors.accountId}>
         <Select value={f.accountId} onChange={set("accountId")}>
           {accounts.length === 0 && <option value="">Add an account first</option>}
           {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
@@ -3779,7 +3780,7 @@ function ApplicationFormSheet({ initial, ipo, accounts, onClose, onSave }) {
       <Field label="Remarks">
         <textarea value={f.remarks} onChange={set("remarks")} rows={2} style={{ ...inputStyle, resize: "vertical" }} placeholder="e.g. Funds sent by dad, to be returned after listing" />
       </Field>
-      <PrimaryButton onClick={() => { if (!f.accountId) return alert("Select an account"); onSave(trimFields({ ...f, id: f.id || uid() })); }}>
+      <PrimaryButton onClick={() => { if (!f.accountId) return setErrors({ accountId: "Select an account" }); onSave(trimFields({ ...f, id: f.id || uid() })); }}>
         {initial ? "Save Changes" : "Add Application"}
       </PrimaryButton>
     </Sheet>
@@ -3790,7 +3791,8 @@ const PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 
 function AccountFormSheet({ initial, accounts = [], onClose, onSave }) {
   const [f, setF] = useState(initial || { id: undefined, name: "", relation: "", bank: "", pan: "", notes: "" });
-  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  const [errors, setErrors] = useState({});
+  const set = (k) => (e) => { setF({ ...f, [k]: e.target.value }); if (errors[k]) setErrors((prev) => ({ ...prev, [k]: "" })); };
 
   const pan = (f.pan || "").trim().toUpperCase();
   const panShapeBad = pan.length > 0 && !PAN_RE.test(pan);
@@ -3800,7 +3802,7 @@ function AccountFormSheet({ initial, accounts = [], onClose, onSave }) {
 
   return (
     <Sheet title={initial ? "Edit Account" : "New Account"} onClose={onClose}>
-      <Field label="Name"><Input value={f.name} onChange={set("name")} placeholder="e.g. Mom, Dad, Priya Aunty" /></Field>
+      <Field label="Name" error={errors.name}><Input value={f.name} onChange={set("name")} placeholder="e.g. Mom, Dad, Priya Aunty" /></Field>
       <Field label="Relation"><Input value={f.relation} onChange={set("relation")} placeholder="e.g. Mother, Self, Brother-in-law" /></Field>
       <Field label="Bank / Broker (optional)"><Input value={f.bank} onChange={set("bank")} placeholder="e.g. HDFC / Zerodha" /></Field>
       <Field label="PAN">
@@ -3827,7 +3829,7 @@ function AccountFormSheet({ initial, accounts = [], onClose, onSave }) {
       )}
       <Field label="Notes"><textarea value={f.notes} onChange={set("notes")} rows={2} style={{ ...inputStyle, resize: "vertical" }} /></Field>
       <PrimaryButton onClick={() => {
-        if (!f.name) return alert("Name is required");
+        if (!f.name) return setErrors({ name: "Name is required" });
         onSave(trimFields({ ...f, pan, id: f.id || uid() }));
       }}>
         {initial ? "Save Changes" : "Add Account"}
@@ -3849,7 +3851,8 @@ function TransferFormSheet({ initial, accounts, ipos, onClose, onSave, onDelete 
     }),
     relatedIpoIds: initIds,
   });
-  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  const set = (k) => (e) => { setF({ ...f, [k]: e.target.value }); if (errors[k]) setErrors((prev) => ({ ...prev, [k]: "" })); };
+  const [errors, setErrors] = useState({});
   const [ipoSearch, setIpoSearch] = useState("");
 
   const ipoMatches = useMemo(() => {
@@ -3857,14 +3860,13 @@ function TransferFormSheet({ initial, accounts, ipos, onClose, onSave, onDelete 
     const selected = new Set(f.relatedIpoIds);
     const pool = ipos.filter((i) => !selected.has(i.id));
     if (!q) {
-      // Show currently open/recent IPOs by default
+      // Show only currently open IPOs by default
       const today = todayISO();
-      const active = pool.filter((i) => {
+      return pool.filter((i) => {
         const open = i.openDate || "";
         const close = i.closeDate || "";
-        return (open && open <= today && (!close || close >= today)) || (close && close >= today);
-      });
-      return active.length ? active.slice(0, 6) : pool.slice(0, 6);
+        return open && open <= today && close && close >= today;
+      }).slice(0, 6);
     }
     return pool.filter((i) => (i.company || "").toLowerCase().includes(q)).slice(0, 6);
   }, [ipoSearch, ipos, f.relatedIpoIds]);
@@ -3886,8 +3888,8 @@ function TransferFormSheet({ initial, accounts, ipos, onClose, onSave, onDelete 
         </Select>
       </Field>
       <div style={{ display: "flex", gap: 10 }}>
-        <div style={{ flex: 1 }}><Field label="Amount (₹)"><Input type="number" inputMode="numeric" value={f.amount} onChange={set("amount")} /></Field></div>
-        <div style={{ flex: 1 }}><Field label="Date"><Input type="date" value={f.date} onChange={set("date")} /></Field></div>
+        <div style={{ flex: 1 }}><Field label="Amount (₹)" error={errors.amount}><Input type="number" inputMode="numeric" value={f.amount} onChange={set("amount")} /></Field></div>
+        <div style={{ flex: 1 }}><Field label="Date" error={errors.date}><Input type="date" value={f.date} onChange={set("date")} /></Field></div>
       </div>
       <Field label="Related IPOs (optional)">
         {f.relatedIpoIds.length > 0 && (
@@ -3937,7 +3939,14 @@ function TransferFormSheet({ initial, accounts, ipos, onClose, onSave, onDelete 
       <Field label="Remarks">
         <textarea value={f.remarks} onChange={set("remarks")} rows={2} style={{ ...inputStyle, resize: "vertical" }} placeholder="e.g. Sent for application, to be returned" />
       </Field>
-      <PrimaryButton onClick={() => { if (!f.fromAccountId || !f.toAccountId) return alert("Select both accounts"); if (!f.amount) return alert("Enter an amount"); if (!f.date) return alert("Enter a date"); onSave(trimFields({ ...f, relatedIpoId: f.relatedIpoIds[0] || "", id: f.id || uid() })); }}>
+      <PrimaryButton onClick={() => {
+        const e = {};
+        if (!f.fromAccountId || !f.toAccountId) e.fromAccountId = "Select both accounts";
+        if (!f.amount) e.amount = "Required";
+        if (!f.date) e.date = "Required";
+        if (Object.keys(e).length) return setErrors(e);
+        onSave(trimFields({ ...f, relatedIpoId: f.relatedIpoIds[0] || "", id: f.id || uid() }));
+      }}>
         {initial ? "Save Changes" : "Add Transfer"}
       </PrimaryButton>
       {initial && onDelete && (
