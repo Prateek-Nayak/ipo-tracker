@@ -1384,9 +1384,8 @@ function AppInner() {
     try {
       const state = { accounts, ipos, transfers, trash };
       // Never let a device that has nothing wipe a cloud that has something.
-      // Without this, opening the app somewhere new and hitting Sync now would
-      // overwrite the real ledger with three empty arrays.
-      if (isEmptyState(state)) {
+      // But if trash has entries, the user intentionally deleted everything.
+      if (isEmptyState(state) && !(trash || []).length) {
         const remote = await cloudLoad();
         if (!isEmptyState(remote)) {
           setSyncError("This device is empty but your cloud ledger is not. Nothing was overwritten - reload to pull it down.");
