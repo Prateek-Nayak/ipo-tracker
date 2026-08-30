@@ -222,6 +222,15 @@ const isBlank = (v) => v === "" || v == null || !Number.isFinite(Number(v));
 const inrOrDash = (v) => (isBlank(v) ? "--" : inr(v));
 const trimFields = (obj) => { const out = { ...obj }; for (const k in out) { if (typeof out[k] === "string") out[k] = out[k].trimEnd(); } return out; };
 
+function isNonTradingDay(iso) {
+  if (!iso) return false;
+  const d = new Date(iso + "T00:00:00");
+  const day = d.getDay();
+  if (day === 0 || day === 6) return "Weekend";
+  if (tradingHolidays.has(iso)) return "Market holiday";
+  return false;
+}
+
 /* The same normalisation the price API uses, so a company matches across
    sources: "Lumino Industries Limited" here, "LUMINO INDUSTRIES LTD" there. */
 function nameKey(s) {
@@ -1997,8 +2006,10 @@ function AppInner() {
           onRefreshPrices={refreshPrices}
           onSignOut={async () => {
             setDataSheetOpen(false);
-            // Clear local data to prevent it leaking to the next account
+            // Clear local data and React state to prevent leaking to next account
             TABLES.forEach((k) => saveTable(k, []));
+            setAccounts([]); setIpos([]); setTransfers([]); setTrash([]);
+            try { localStorage.removeItem(STORAGE_PREFIX + "owner"); } catch {}
             await cloudSignOut();
           }}
         />
@@ -2989,7 +3000,7 @@ function IpoDetailSheet({ ipo, accounts, onClose, onDeleteIpo, onEditIpo, onSave
           </Badge>
         )}
         </div>
-        <button onClick={onEditIpo} aria-label="Edit IPO" style={{ ...roundIconBtn, display: ipo.source ? "none" : "flex" }}>
+        <button onClick={onEditIpo} aria-label="Edit IPO" style={{ ...roundIconBtn, display: (ipo.fromExchange || ipo.upstoxId || ipo.isin) ? "none" : "flex" }}>
           <Pencil size={14} color={COLORS.inkSoft} />
         </button>
       </div>
@@ -3636,11 +3647,18 @@ function IpoFormSheet({ initial, onClose, onSave }) {
       <Field label="Lot Size (shares)" error={errors.lotSize}><Input type="number" inputMode="numeric" value={f.lotSize} onChange={set("lotSize")} placeholder="e.g. 52" /></Field>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }}>
-        <Field label="Open Date" error={errors.openDate}><Input type="date" value={f.openDate || ""} onChange={set("openDate")} /></Field>
+        <Field label="Open Date" error={errors.openDate}><Input type="date" value={f.openDate || ""} onChange={(e) => {
+          const v = e.target.value;
+          const bad = isNonTradingDay(v);
+          if (bad) return setErrors((prev) => ({ ...prev, openDate: bad }));
+          setF({ ...f, openDate: v });
+          if (errors.openDate) setErrors((prev) => ({ ...prev, openDate: "" }));
+        }} /></Field>
         <Field label="Close Date" error={errors.closeDate}><Input type="date" value={f.closeDate || ""} onChange={(e) => {
           const close = e.target.value;
+          const bad = isNonTradingDay(close);
+          if (bad) return setErrors((prev) => ({ ...prev, closeDate: bad }));
           const next = { ...f, closeDate: close, applicationDate: close };
-          // Always recalculate allotment and listing from close date
           if (close) {
             next.allotmentDate = addClearingDays(close, 1);
             const credit = addClearingDays(next.allotmentDate, 1);
@@ -4708,6 +4726,7 @@ function LiveIposSheet({ existing, onClose, onImport }) {
     }
     onImport(rows.map((r) => ({
       id: uid(),
+      fromExchange: true,
       symbol: r.symbol || "",
       company: r.company,
       category: r.category || "Mainboard",
