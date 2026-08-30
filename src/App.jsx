@@ -787,15 +787,15 @@ function Badge({ children, color, bg, strong }) {
 
 function Field({ label, children, error }) {
   return (
-    <label style={{ display: "block", marginBottom: 14 }}>
-      <span style={{
+    <div style={{ display: "block", marginBottom: 14 }}>
+      <div style={{
         display: "block", fontSize: 11, fontWeight: 600, color: error ? COLORS.red : COLORS.inkSoft,
         textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 6,
         fontFamily: "Inter, sans-serif",
-      }}>{label}</span>
+      }}>{label}</div>
       {children}
       {error && <span style={{ display: "block", fontSize: 11, color: COLORS.red, marginTop: 4, fontFamily: "Inter, sans-serif" }}>{error}</span>}
-    </label>
+    </div>
   );
 }
 
@@ -1811,7 +1811,7 @@ function AppInner() {
 
       <BottomNav tab={tab} setTab={setTab} />
 
-      {ipoDetail && (
+      {ipoDetail && !bulkApplyFor && !bulkStatusFor && (
         <IpoDetailSheet
           ipo={ipos.find((i) => i.id === ipoDetail)}
           accounts={accounts}
@@ -3601,7 +3601,8 @@ function IpoFormSheet({ initial, onClose, onSave }) {
     priceBandLow: "", lotSize: "", listingDate: "", listingPrice: "", remarks: "",
   });
   const [editDates, setEditDates] = useState(false);
-  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  const [errors, setErrors] = useState({});
+  const set = (k) => (e) => { setF({ ...f, [k]: e.target.value }); if (errors[k]) setErrors((e) => ({ ...e, [k]: "" })); };
   return (
     <Sheet title={initial ? "Edit IPO" : "New IPO"} onClose={onClose}>
       {!initial && (
@@ -3614,7 +3615,7 @@ function IpoFormSheet({ initial, onClose, onSave }) {
           <span>Market prices can only sync for IPOs added from the exchange. Use <strong>Add from exchange</strong> in the IPO list header when possible.</span>
         </div>
       )}
-      <Field label="Company Name"><Input value={f.company} onChange={set("company")} placeholder="e.g. Vishal Mega Mart" /></Field>
+      <Field label="Company Name" error={errors.company}><Input value={f.company} onChange={set("company")} placeholder="e.g. Vishal Mega Mart" /></Field>
       <Field label="Category">
         <Select value={f.category} onChange={set("category")}>
           <option>Mainboard</option><option>SME</option>
@@ -3683,7 +3684,7 @@ function IpoFormSheet({ initial, onClose, onSave }) {
       <Field label="Remarks">
         <textarea value={f.remarks} onChange={set("remarks")} rows={3} style={{ ...inputStyle, resize: "vertical" }} placeholder="Any notes about this IPO" />
       </Field>
-      <PrimaryButton onClick={() => { if (!f.company) return alert("Company name is required"); onSave(trimFields({ ...f, id: f.id || uid() })); }}>
+      <PrimaryButton onClick={() => { if (!f.company) return setErrors({ company: "Company name is required" }); onSave(trimFields({ ...f, id: f.id || uid() })); }}>
         {initial ? "Save Changes" : "Add IPO"}
       </PrimaryButton>
     </Sheet>
@@ -3853,9 +3854,19 @@ function TransferFormSheet({ initial, accounts, ipos, onClose, onSave, onDelete 
 
   const ipoMatches = useMemo(() => {
     const q = ipoSearch.trim().toLowerCase();
-    if (!q) return [];
     const selected = new Set(f.relatedIpoIds);
-    return ipos.filter((i) => !selected.has(i.id) && (i.company || "").toLowerCase().includes(q)).slice(0, 6);
+    const pool = ipos.filter((i) => !selected.has(i.id));
+    if (!q) {
+      // Show currently open/recent IPOs by default
+      const today = todayISO();
+      const active = pool.filter((i) => {
+        const open = i.openDate || "";
+        const close = i.closeDate || "";
+        return (open && open <= today && (!close || close >= today)) || (close && close >= today);
+      });
+      return active.length ? active.slice(0, 6) : pool.slice(0, 6);
+    }
+    return pool.filter((i) => (i.company || "").toLowerCase().includes(q)).slice(0, 6);
   }, [ipoSearch, ipos, f.relatedIpoIds]);
 
   const addIpo = (id) => { setF((prev) => ({ ...prev, relatedIpoIds: [...prev.relatedIpoIds, id] })); setIpoSearch(""); };
@@ -3905,29 +3916,28 @@ function TransferFormSheet({ initial, accounts, ipos, onClose, onSave, onDelete 
             }}><X size={14} color={COLORS.inkSoft} /></button>
           )}
         </div>
-        {ipoSearch && (
+        {ipoMatches.length > 0 && (
           <div style={{
             border: `1px solid ${COLORS.border}`, borderRadius: 8, marginTop: 4,
             background: COLORS.surface, maxHeight: 160, overflowY: "auto",
           }}>
-            {ipoMatches.length === 0 ? (
-              <div style={{ padding: "10px 12px", fontSize: 12, color: COLORS.inkSoft, fontFamily: "Inter, sans-serif" }}>No matching IPOs</div>
-            ) : (
-              ipoMatches.map((i) => (
+            {ipoMatches.map((i) => (
                 <button key={i.id} onClick={() => addIpo(i.id)} style={{
                   display: "block", width: "100%", textAlign: "left", padding: "8px 12px",
                   background: "transparent", border: "none", borderBottom: `1px solid ${COLORS.border}`,
                   fontSize: 13, color: COLORS.ink, fontFamily: "Inter, sans-serif", cursor: "pointer",
                 }}>{i.company}</button>
-              ))
-            )}
+              ))}
           </div>
+        )}
+        {ipoSearch && ipoMatches.length === 0 && (
+          <div style={{ padding: "10px 12px", fontSize: 12, color: COLORS.inkSoft, fontFamily: "Inter, sans-serif" }}>No matching IPOs</div>
         )}
       </Field>
       <Field label="Remarks">
         <textarea value={f.remarks} onChange={set("remarks")} rows={2} style={{ ...inputStyle, resize: "vertical" }} placeholder="e.g. Sent for application, to be returned" />
       </Field>
-      <PrimaryButton onClick={() => { if (!f.fromAccountId || !f.toAccountId) return alert("Select both accounts"); onSave(trimFields({ ...f, relatedIpoId: f.relatedIpoIds[0] || "", id: f.id || uid() })); }}>
+      <PrimaryButton onClick={() => { if (!f.fromAccountId || !f.toAccountId) return alert("Select both accounts"); if (!f.amount) return alert("Enter an amount"); if (!f.date) return alert("Enter a date"); onSave(trimFields({ ...f, relatedIpoId: f.relatedIpoIds[0] || "", id: f.id || uid() })); }}>
         {initial ? "Save Changes" : "Add Transfer"}
       </PrimaryButton>
       {initial && onDelete && (
