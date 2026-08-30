@@ -810,24 +810,21 @@ function Select(props) {
 const SheetFooterSlot = React.createContext(null);
 
 function Sheet({ title, onClose, children }) {
-  /* The panel is a column: a title that stays put, a body that scrolls, and a
-     footer slot below both. The footer used to sit inside the scroll area,
-     stuck to its bottom edge, which left rows sliding underneath it. */
   const [footerEl, setFooterEl] = useState(null);
   const bodyRef = useRef(null);
   const touch = useRef({ active: false, startY: 0, lastY: 0 });
   const [dragY, setDragY] = useState(0);
   const [dragging, setDragging] = useState(false);
+  const [closing, setClosing] = useState(false);
 
-  /* Swipe-down-to-dismiss lives here, on the sheet itself, so every sheet in
-     the app gets it for free rather than each one needing its own gesture
-     code. It only arms when the body is scrolled to the very top - anywhere
-     else the gesture is just scrolling - and never on a touch that starts on
-     something interactive, so editing a field can never be mistaken for a
-     dismiss swipe. Because it is driven by React state (dragY) rather than a
-     CSS variable poked from outside, a short sheet with nothing to scroll
-     still gets the same treatment as a long one. */
+  const animateClose = useCallback(() => {
+    if (closing) return;
+    setClosing(true);
+    setTimeout(() => { window.scrollTo(0, window.scrollY); onClose(); }, 250);
+  }, [closing, onClose]);
+
   const onTouchStart = (e) => {
+    if (closing) return;
     const body = bodyRef.current;
     if (!body || body.scrollTop > 0) return;
     const y = e.touches[0].clientY;
@@ -835,7 +832,7 @@ function Sheet({ title, onClose, children }) {
   };
   const onTouchMove = (e) => {
     const t = touch.current;
-    if (!t.active) return;
+    if (!t.active || closing) return;
     const body = bodyRef.current;
     if (body && body.scrollTop > 0) { t.active = false; setDragging(false); setDragY(0); return; }
     const y = e.touches[0].clientY;
@@ -845,7 +842,7 @@ function Sheet({ title, onClose, children }) {
     if (!t.committed && delta < 8) return;
     t.committed = true;
     setDragging(true);
-    setDragY(Math.min(delta, 240));
+    setDragY(Math.min(delta, 400));
     if (e.cancelable) e.preventDefault();
   };
   const onTouchEnd = () => {
@@ -853,10 +850,12 @@ function Sheet({ title, onClose, children }) {
     if (!t.active) return;
     const delta = t.lastY - t.startY;
     touch.current.active = false;
-    setDragging(false);
-    setDragY(0);
     if (t.committed && delta > 80 && bodyRef.current && bodyRef.current.scrollTop === 0) {
-      requestAnimationFrame(() => { window.scrollTo(0, window.scrollY); onClose(); });
+      setDragging(false);
+      animateClose();
+    } else {
+      setDragging(false);
+      setDragY(0);
     }
   };
 
@@ -864,8 +863,8 @@ function Sheet({ title, onClose, children }) {
     <div style={{
       position: "fixed", inset: 0, background: "rgba(24, 27, 32, 0.45)", zIndex: 50,
       display: "flex", alignItems: "flex-end", justifyContent: "center",
-      animation: "sheetFadeIn 200ms ease-out",
-    }} onClick={onClose}>
+      animation: closing ? "sheetFadeOut 250ms ease-in forwards" : "sheetFadeIn 200ms ease-out",
+    }} onClick={animateClose}>
       <div
         onClick={(e) => e.stopPropagation()}
         onTouchStart={onTouchStart}
@@ -877,9 +876,9 @@ function Sheet({ title, onClose, children }) {
           maxHeight: "92vh", borderRadius: "18px 18px 0 0",
           display: "flex", flexDirection: "column", minHeight: 0,
           boxShadow: "0 -8px 30px rgba(0,0,0,0.2)",
-          transform: dragY ? `translateY(${dragY}px)` : undefined,
+          transform: closing ? "translateY(100%)" : dragY ? `translateY(${dragY}px)` : undefined,
           transition: dragging ? "none" : "transform 280ms ease-out",
-          animation: "sheetSlideUp 280ms ease-out",
+          animation: closing ? "none" : "sheetSlideUp 280ms ease-out",
         }}
       >
         <div style={{
@@ -904,10 +903,10 @@ function Sheet({ title, onClose, children }) {
               {isDark() ? <Sun size={16} color={COLORS.gold} /> : <Moon size={16} color={COLORS.navy} />}
               {/* {isDark() ? "Light" : "Dark"} */}
             </button>  
-          <button onClick={onClose} aria-label="Close" style={{
+          <button onClick={animateClose} aria-label="Close" style={{
             background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 20,
             width: 36, height: 36, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer",
-          }}><X size={16} color={COLORS.inkSoft} /></button></div> : <button onClick={onClose} aria-label="Close" style={{
+          }}><X size={16} color={COLORS.inkSoft} /></button></div> : <button onClick={animateClose} aria-label="Close" style={{
             background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 20,
             width: 36, height: 36, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer",
           }}><X size={16} color={COLORS.inkSoft} /></button>}
@@ -1632,7 +1631,7 @@ export default function App() {
 
   /* ---------- derived numbers ---------- */
   const stats = useMemo(() => {
-    let invested = 0, realized = 0, unrealized = 0, pendingCount = 0, activeCount = 0;
+    let invested = 0, realized = 0, unrealized = 0, pendingCount = 0, activeCount = 0, missingLtp = 0;
     ipos.forEach((ipo) => {
       (ipo.applications || []).forEach((app) => {
         if (app.allotmentStatus === "Pending") pendingCount++;
@@ -1646,11 +1645,12 @@ export default function App() {
           } else {
             const mark = valuationPrice(ipo);
             if (mark) unrealized += shares * (mark - price);
+            else if (hasListed(ipo) && shares > 0) missingLtp++;
           }
         }
       });
     });
-    return { invested, realized, unrealized, pendingCount, activeCount };
+    return { invested, realized, unrealized, pendingCount, activeCount, missingLtp };
   }, [ipos]);
 
   /* ---------- gates ---------- */
@@ -1735,7 +1735,7 @@ export default function App() {
           accounts={accounts}
           onClose={() => setIpoDetail(null)}
           onDeleteIpo={(id) => { const gone=ipos.find((x)=>x.id===id); if(!gone)return; discard("ipo",gone,gone.company||"Untitled IPO"); persistIpos(ipos.filter((x)=>x.id!==id)); setIpoDetail(null); }}
-          onSaveNote={(id,noteValue)=>{ persistIpos(ipos.map((i)=>i.id===id?{...i,remarks:noteValue}:i)); }}
+          onSaveNote={(id,noteValue)=>{ persistIpos(ipos.map((i)=>i.id===id?{...i,remarks:(noteValue||"").trimEnd()}:i)); }}
           onBulkApply={(ipoId) => { setBulkApplyFor(ipoId); }}
           onBulkStatus={(ipoId) => { setBulkStatusFor(ipoId); }}
           onEditApplication={(ipoId, application) => setAppSheet({ ipoId, application })}
@@ -2195,7 +2195,7 @@ function Dashboard({ stats, ipos, accounts, onOpenIpo }) {
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
         <StatCard label="Capital Deployed" value={inr(stats.invested)} icon={Landmark} tone="navy" />
         <StatCard label="Realized Gain" value={inr(stats.realized)} icon={stats.realized >= 0 ? TrendingUp : TrendingDown} tone={stats.realized >= 0 ? "green" : "red"} />
-        <StatCard label={marked ? "Unrealized (at today's price)" : "Unrealized (at listing)"} value={inr(stats.unrealized)} icon={stats.unrealized >= 0 ? TrendingUp : TrendingDown} tone={stats.unrealized >= 0 ? "green" : "red"} />
+        <StatCard label={marked ? "Unrealized (at today's price)" : "Unrealized (at listing)"} value={inr(stats.unrealized)} icon={stats.unrealized >= 0 ? TrendingUp : TrendingDown} tone={stats.unrealized >= 0 ? "green" : "red"} warning={stats.missingLtp > 0 ? `${stats.missingLtp} listed holding${stats.missingLtp === 1 ? "" : "s"} without a current price -- refresh to update` : ""} />
         <StatCard label="Pending Allotment" value={stats.pendingCount} icon={Clock} tone="gold" />
       </div>
 
@@ -2265,7 +2265,7 @@ function Dashboard({ stats, ipos, accounts, onOpenIpo }) {
   );
 }
 
-function StatCard({ label, value, icon: Icon, tone }) {
+function StatCard({ label, value, icon: Icon, tone, warning }) {
   const toneColor = { navy: COLORS.navy, green: COLORS.green, red: COLORS.red, gold: COLORS.gold }[tone];
   return (
     <div style={{
@@ -2274,7 +2274,10 @@ function StatCard({ label, value, icon: Icon, tone }) {
     }}>
       <div style={{ position: "absolute", top: 0, left: 0, width: 4, height: "100%", background: toneColor }} />
       <Icon size={16} color={toneColor} style={{ marginBottom: 8 }} />
-      <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 18, fontWeight: 700, color: COLORS.ink }}>{value}</div>
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 18, fontWeight: 700, color: COLORS.ink }}>{value}</span>
+        {warning && <span title={warning} style={{ cursor: "help", fontSize: 14 }}>&#9888;</span>}
+      </div>
       <div style={{ fontSize: 11, color: COLORS.inkSoft, marginTop: 2 }}>{label}</div>
     </div>
   );
@@ -2803,7 +2806,7 @@ function IpoCard({ ipo, accounts, onClick }) {
               fontSize: 11, color: COLORS.inkSoft, marginTop: 2, fontFamily: "'JetBrains Mono', monospace",
               whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
             }}>
-              {ipo.category || "Mainboard"} · ₹{ipo.priceBand || "--"}/sh · {totalLots} lot{totalLots === 1 ? "" : "s"} · {apps.length} app{apps.length === 1 ? "" : "s"}
+              {ipo.category || "Mainboard"} · {ipo.priceBandLow ? `₹${ipo.priceBandLow}-₹${ipo.priceBand}` : `₹${ipo.priceBand || "--"}`}/sh · {totalLots} lot{totalLots === 1 ? "" : "s"} · {apps.length} app{apps.length === 1 ? "" : "s"}
             </div>
             <div style={{ marginTop: 5, display: "flex", gap: 6, flexWrap: "wrap" }}>
               {stage && <Badge color={stage.color} bg={stage.bg}>{stage.label}</Badge>}
@@ -4092,7 +4095,7 @@ function BulkApplySheet({ ipo, accounts, onClose, onSave }) {
       }}>
         <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 600, fontSize: 15, color: COLORS.heading }}>{ipo.company}</div>
         <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11.5, color: COLORS.inkSoft, marginTop: 3 }}>
-          ₹{ipo.priceBand || "--"}/sh * lot {ipo.lotSize || "--"} sh
+          {ipo.priceBandLow ? `₹${ipo.priceBandLow}-₹${ipo.priceBand}` : `₹${ipo.priceBand || "--"}`}/sh · lot {ipo.lotSize || "--"} sh
           {lotSizeKnown ? ` · ₹${(Number(ipo.lotSize) * Number(ipo.priceBand)).toLocaleString("en-IN")} per lot` : ""}
         </div>
       </div>
@@ -4556,6 +4559,7 @@ function LiveIposSheet({ existing, onClose, onImport }) {
       category: r.category || "Mainboard",
       applicationDate: r.closeDate || "",
       priceBand: r.priceMax != null ? String(r.priceMax) : "",
+      priceBandLow: r.priceMin != null ? String(r.priceMin) : "",
       lotSize: r.lotSize != null ? String(r.lotSize) : "",
       openDate: r.openDate || "",
       closeDate: r.closeDate || "",
