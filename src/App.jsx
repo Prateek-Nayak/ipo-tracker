@@ -1632,6 +1632,40 @@ function AppInner() {
     refreshPrices({ silent: true });
   }, [reconciled, ipos, refreshPrices]);
 
+  /* Fill in missing allotment/listing dates for open/upcoming IPOs from the
+     ipos API. The listings API only has listed+closed ones, so active IPOs
+     imported before the fix need this one-time enrichment. */
+  const enrichedDatesOnce = useRef(false);
+  useEffect(() => {
+    if (!reconciled || enrichedDatesOnce.current) return;
+    const needDates = ipos.filter((i) => i.closeDate && (!i.allotmentDate || !i.listingDate) && !hasListed(i));
+    if (!needDates.length) return;
+    enrichedDatesOnce.current = true;
+    (async () => {
+      try {
+        const res = await fetch("/api/ipos");
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!Array.isArray(data.ipos)) return;
+        const byName = new Map(data.ipos.map((r) => [nameKey(r.company), r]));
+        let changed = false;
+        const next = ipos.map((ipo) => {
+          if (ipo.allotmentDate && ipo.listingDate) return ipo;
+          if (hasListed(ipo)) return ipo;
+          const hit = byName.get(nameKey(ipo.company));
+          if (!hit) return ipo;
+          const patch = {};
+          if (!ipo.allotmentDate && hit.allotmentDate) patch.allotmentDate = hit.allotmentDate;
+          if (!ipo.listingDate && hit.listingDate) patch.listingDate = hit.listingDate;
+          if (!Object.keys(patch).length) return ipo;
+          changed = true;
+          return { ...ipo, ...patch };
+        });
+        if (changed) persistIpos(next);
+      } catch { /* not worth failing over */ }
+    })();
+  }, [reconciled, ipos, persistIpos]);
+
   /* The figure on the cards is the last traded price, so it goes stale simply
      by being looked at later. Coming back to the app is the moment that shows,
      and it is also the only moment worth spending a request on - a tab sitting
@@ -4886,7 +4920,7 @@ function LiveIposSheet({ existing, onClose, onImport }) {
       openDate: r.openDate || "",
       closeDate: r.closeDate || "",
       allotmentDate: r.allotmentDate || "",
-      listingDate: r.listedOn || "",
+      listingDate: r.listedOn || r.listingDate || "",
       // Same rule as a refresh: no closing price until the day has closed.
       ...(() => {
         const listingToday = !!r.listedOn && r.listedOn >= todayISO();
