@@ -409,18 +409,18 @@ function issueStage(x) {
       ? { label: "LISTED TODAY", color: COLORS.green, bg: COLORS.greenSoft }
       : { label: "LISTS TODAY", color: COLORS.green, bg: COLORS.greenSoft };
   }
-  // Lists in the future (known date)
-  if (listed && listed > today) return { label: "LISTS " + fmtDate(listed).toUpperCase().slice(0, 6), color: COLORS.navy, bg: "#EAEFF5" };
 
-  // Allotment today
+  // Allotment takes priority over listing when it's the nearer event
   const allot = allotmentDateOf(x);
   if (allot.date && allot.date === today && close && close < today) {
-    return { label: allot.exact ? "ALLOTMENT TODAY" : "ALLOTMENT TODAY", color: COLORS.gold, bg: COLORS.goldSoft };
+    return { label: "ALLOTMENT TODAY", color: COLORS.gold, bg: COLORS.goldSoft };
   }
-  // Allotment in the future (between close and listing)
-  if (allot.date && allot.date > today && close && close < today) {
+  if (allot.date && allot.date > today && close && close < today && (!listed || allot.date < listed)) {
     return { label: "ALLOTMENT " + fmtDate(allot.date).toUpperCase().slice(0, 6), color: COLORS.gold, bg: COLORS.goldSoft };
   }
+
+  // Lists in the future (known date) - only after allotment checks
+  if (listed && listed > today) return { label: "LISTS " + fmtDate(listed).toUpperCase().slice(0, 6), color: COLORS.navy, bg: "#EAEFF5" };
 
   // Expected listing (no confirmed listing date)
   const expected = listingDateOf(x);
@@ -1193,7 +1193,7 @@ function AppInner() {
   // Keep React in step with the module-level session, which the token refresh
   // logic and any 401 response can also change.
   useEffect(() => {
-    const listener = (s) => setSessionState(s);
+    const listener = (s) => { setSessionState(s); if (!s) { setLinkNotice(""); setRecoveryToken(""); } };
     sessionListeners.add(listener);
     return () => { sessionListeners.delete(listener); };
   }, []);
@@ -1269,7 +1269,7 @@ function AppInner() {
       }
 
       const owner = localOwner();
-      const localIsOurs = !owner || owner === userId;
+      const localIsOurs = owner === userId;
       const empty = { accounts: [], ipos: [], transfers: [], trash: [] };
 
       apply(localIsOurs ? local : empty);
@@ -1875,7 +1875,7 @@ function AppInner() {
           s.dx = dx;
           setSwipeDx(dx);
         }}
-        onTouchEnd={(e) => {
+        onTouchEnd={() => {
           const s = swipeNav.current;
           if (!s || !s.committed || sheetIsOpen) { swipeNav.current = null; setSwipeDx(0); return; }
           swipeNav.current = null;
@@ -1887,9 +1887,10 @@ function AppInner() {
         }}
         style={{
           padding: "14px 14px 0",
-          transform: swipeDx ? `translateX(${swipeDx * 0.4}px)` : undefined,
-          transition: swipeDx ? "none" : "transform 200ms ease-out",
-          willChange: swipeDx ? "transform" : undefined,
+          minHeight: "60vh",
+          transform: swipeDx ? `translateX(${swipeDx * 0.3}px)` : undefined,
+          transition: swipeDx ? "none" : "transform 300ms ease-out",
+          opacity: swipeDx ? Math.max(0.7, 1 - Math.abs(swipeDx) / 600) : 1,
         }}>
         {tab === "dashboard" && (
           <Dashboard stats={stats} ipos={ipos} accounts={accounts} onOpenIpo={(id) => setIpoDetail(id)} onOpenHolding={(id) => setHoldingDetail(id)} />
