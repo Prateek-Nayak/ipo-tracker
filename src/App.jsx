@@ -1386,8 +1386,7 @@ function AppInner() {
     try {
       const state = { accounts, ipos, transfers, trash };
       // Never let a device that has nothing wipe a cloud that has something.
-      // But if trash has entries, the user intentionally deleted everything.
-      if (isEmptyState(state) && !(trash || []).length) {
+      if (isEmptyState(state)) {
         const remote = await cloudLoad();
         if (!isEmptyState(remote)) {
           setSyncError("This device is empty but your cloud ledger is not. Nothing was overwritten - reload to pull it down.");
@@ -1444,7 +1443,6 @@ function AppInner() {
       const incomplete = (list) =>
         list.filter((i) =>
           !i.lotSize || !i.closeDate || !i.openDate || isBlank(i.priceBand) ||
-          !i.allotmentDate ||
           (hasListed(i) && isBlank(i.listingPrice)));
       const asking = incomplete(list);
       const keys = asking
