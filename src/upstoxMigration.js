@@ -185,5 +185,9 @@ async function pullCloudLedger() {
 
 export async function bootstrapUpstoxMigration() {
   installApiGuard();
+  // Skip migration when cloud sync is active — React's own refresh handles enrichment
+  // and the migration races with React's state management, causing stale data.
+  const { url, anon } = cloudConfig();
+  if (url && anon) return;
   await migrateLocalAndCloud();
 }
