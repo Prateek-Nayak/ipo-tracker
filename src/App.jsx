@@ -1463,7 +1463,10 @@ function AppInner() {
       const bust = opts.silent
         ? `&at=${Math.floor(Date.now() / 30000)}`
         : `&at=${Date.now()}`;
-      const res = await fetch(`/api/listings?from=${from}${bust}&keys=${encodeURIComponent(keys)}`);
+      // Send ISINs from listed IPOs in ledger that have an ISIN, so the API can fetch their LTP
+      const extraIsins = list.filter((i) => i.isin && hasListed(i)).map((i) => i.isin).join(",");
+      const isinsParam = extraIsins ? `&isins=${encodeURIComponent(extraIsins)}` : "";
+      const res = await fetch(`/api/listings?from=${from}${bust}&keys=${encodeURIComponent(keys)}${isinsParam}`);
       const text = await res.text();
       let data = {};
       try { data = JSON.parse(text); } catch { /* handled next */ }
@@ -1480,7 +1483,16 @@ function AppInner() {
 
       const next = list.map((ipo) => {
         const hit = byKey.get(nameKey(ipo.company));
-        if (!hit) return ipo;
+        // If no name match, check if we got an extra LTP for this IPO's ISIN
+        if (!hit) {
+          const extraPrice = ipo.isin && data.extraLtp ? data.extraLtp[ipo.isin] : null;
+          if (extraPrice != null) {
+            matched++;
+            updated++;
+            return { ...ipo, currentPrice: String(extraPrice), priceAsOf: asOf };
+          }
+          return ipo;
+        }
         matched++;
         /* BSE is authoritative here, so its values replace what is on record
            rather than only filling gaps. */
@@ -2014,12 +2026,14 @@ function AppInner() {
           onRefreshPrices={refreshPrices}
           onSignOut={async () => {
             setDataSheetOpen(false);
-            // Sign out first so userId becomes null — prevents auto-sync from pushing empty data
             await cloudSignOut();
-            // Then clear local data
+            // Batch all clearing into one update, skip the resulting auto-sync
+            skipNextAutoSync.current = true;
             TABLES.forEach((k) => saveTable(k, []));
-            setAccounts([]); setIpos([]); setTransfers([]); setTrash([]);
             try { localStorage.removeItem(STORAGE_PREFIX + "owner"); } catch {}
+            // Don't clear React state — cloudSignOut sets userId to null which
+            // triggers the initial load effect to re-run with empty local data.
+            // Clearing state here races with auto-sync.
           }}
         />
       )}

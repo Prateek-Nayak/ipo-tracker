@@ -102,6 +102,9 @@ export default async function handler(req, res) {
     const listedIsins = [...new Set(
       filtered.filter((item) => item.status === "listed" && item.isin).map((item) => item.isin)
     )];
+    // Also fetch LTPs for extra ISINs sent by the client (IPOs not in Upstox feed)
+    const extraIsins = String(req.query?.isins || "").split(",").map((s) => s.trim()).filter(Boolean);
+    extraIsins.forEach((isin) => { if (!listedIsins.includes(isin)) listedIsins.push(isin); });
     const ltpData = await fetchLtp(token, listedIsins);
     const listings = filtered.map((item) => {
       const detail = detailMap.get(item.id), key = nameKey(item.name), instKey = item.isin ? `NSE_EQ|${item.isin}` : "", ltp = item.isin ? ltpData[item.isin] : null;
@@ -110,8 +113,11 @@ export default async function handler(req, res) {
       const gainSinceIssue = currentPrice != null && issuePrice != null ? ((currentPrice - issuePrice) / issuePrice) * 100 : null;
       return { source: "Upstox", upstoxId: item.id || "", company: (item.name || "").replace(/\s*ipo\s*$/i, "").trim(), key, shortName: item.symbol || "", symbol: item.symbol || "", category: item.issue_type === "sme" ? "SME" : "Mainboard", issuePrice, listedOn: detail?.timeline?.listing_date || "", listingClose: null, listingOpen: listingPrice, lotSize: detail ? num(detail.lot_size) : null, priceMin: num(item.minimum_price), priceMax: num(item.maximum_price), listingDayGain, currentPrice, gainSinceIssue, openDate: item.bidding_start_date || "", closeDate: item.bidding_end_date || "", ipoNo: "", isin: item.isin || "", instrumentKey: instKey, allotmentDate: detail?.timeline?.allotment_start_date || detail?.timeline?.allotment_date || "", listingDate: detail?.timeline?.listing_date || "", industry: item.industry || "", subscription: num(item.total_subscription) };
     });
+    // Build extra LTP map for ISINs not in the Upstox feed
+    const extraLtpMap = {};
+    extraIsins.forEach((isin) => { const ltp = ltpData[isin]; if (ltp && ltp.last_price != null) extraLtpMap[isin] = price(ltp.last_price); });
     listings.sort((a, b) => (b.listedOn || b.closeDate || "").localeCompare(a.listedOn || a.closeDate || ""));
     res.setHeader("Cache-Control", "s-maxage=60, stale-while-revalidate=300");
-    return res.status(200).json({ source: "Upstox", fetchedAt: new Date().toISOString(), from: requestedYear || null, categoryKnown: true, listingsKnown: true, listings });
+    return res.status(200).json({ source: "Upstox", fetchedAt: new Date().toISOString(), from: requestedYear || null, categoryKnown: true, listingsKnown: true, listings, extraLtp: extraLtpMap });
   } catch (error) { return res.status(502).json({ error: error.message || "Could not reach Upstox" }); }
 }
