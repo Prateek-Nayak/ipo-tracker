@@ -1519,18 +1519,14 @@ function AppInner() {
            actually loaded; a failed fetch must not wipe every listing date. */
         if (hit.listedOn) {
           patch.listingDate = hit.listedOn;
-        } else if (listingsLoaded) {
-          /* BSE's listings feed records completed listings only, so an issue
-             missing from it has not listed yet. Prices therefore cannot exist
-             for it, whatever is on record. */
+        } else if (listingsLoaded && !ipo.listingDate) {
+          // Only clear prices when the exchange has no listing record AND
+          // the local record doesn't have a listing date either.
+          // If the local record has a listing date, keep existing prices.
           patch.listingPrice = "";
           patch.listingPriceSource = "";
           patch.listingClosePrice = "";
           patch.currentPrice = "";
-          /* The date is different: one in the future is a scheduled listing BSE
-             has no row for yet, and clearing it would throw away the most useful
-             thing known about the issue. Only a date in the past contradicts the
-             exchange having no record, so only that is cleared. */
           if (ipo.listingDate && ipo.listingDate < todayISO()) patch.listingDate = "";
         }
         if (hit.openDate) patch.openDate = hit.openDate;
