@@ -394,50 +394,62 @@ function awaitingAllotmentEntry(ipo) {
    the exchange still files it. */
 function issueStage(x) {
   const today = todayISO();
+  const now = new Date();
   const listed = x?.listingDate || x?.listedOn || "";
   const open = x?.openDate || "";
   const close = x?.closeDate || "";
+  const isPast5pm = now.getHours() >= 17;
 
+  // Listed in the past
   if (listed && listed < today) return { label: "LISTED", color: COLORS.navy, bg: "#EAEFF5" };
+  // Lists today
   if (listed && listed === today) {
-    // Scheduled to list today is not the same as actually trading: until a
-    // real, positive last-traded price shows up there is nothing to show yet.
     const hasLtp = Number(x?.currentPrice) > 0;
     return hasLtp
       ? { label: "LISTED TODAY", color: COLORS.green, bg: COLORS.greenSoft }
       : { label: "LISTS TODAY", color: COLORS.green, bg: COLORS.greenSoft };
   }
-
-  /* Allotment day sits between the close and the listing, and on the day itself
-     it is the nearer event - so it outranks a listing still days away. */
-  const allot = allotmentDateOf(x);
-  if (allot.date && allot.date === today) {
-    return {
-      label: allot.exact ? "ALLOTMENT TODAY" : "ALLOTMENT LIKELY TODAY",
-      color: COLORS.gold, bg: COLORS.goldSoft,
-    };
-  }
-
+  // Lists in the future (known date)
   if (listed && listed > today) return { label: "LISTS " + fmtDate(listed).toUpperCase().slice(0, 6), color: COLORS.navy, bg: "#EAEFF5" };
 
-  /* With no listing date on record, T+3 from the close says when to expect one.
-     Never treated as proof it has listed - only as what is coming. */
+  // Allotment today
+  const allot = allotmentDateOf(x);
+  if (allot.date && allot.date === today && close && close < today) {
+    return { label: allot.exact ? "ALLOTMENT TODAY" : "ALLOTMENT TODAY", color: COLORS.gold, bg: COLORS.goldSoft };
+  }
+  // Allotment in the future (between close and listing)
+  if (allot.date && allot.date > today && close && close < today) {
+    return { label: "ALLOTMENT " + fmtDate(allot.date).toUpperCase().slice(0, 6), color: COLORS.gold, bg: COLORS.goldSoft };
+  }
+
+  // Expected listing (no confirmed listing date)
   const expected = listingDateOf(x);
-  // Strictly past: on the closing day itself the close is the immediate event,
-  // and saying when it might list instead would bury the deadline.
   if (!listed && expected.date && close && close < today) {
-    if (expected.date === today) return { label: "LISTS LIKELY TODAY", color: COLORS.green, bg: COLORS.greenSoft };
+    if (expected.date === today) return { label: "LISTS TODAY", color: COLORS.green, bg: COLORS.greenSoft };
     if (expected.date > today) return { label: "LISTS ~" + fmtDate(expected.date).toUpperCase().slice(0, 6), color: COLORS.navy, bg: "#EAEFF5" };
     return { label: "LISTING DUE", color: COLORS.gold, bg: COLORS.goldSoft };
   }
 
-  if (allot.date && allot.date > today && close && close < today) {
-    return { label: "ALLOTMENT " + fmtDate(allot.date).toUpperCase().slice(0, 6), color: COLORS.gold, bg: COLORS.goldSoft };
-  }
+  // Closed (past close date)
   if (close && close < today) return { label: "CLOSED", color: COLORS.inkSoft, bg: "#EFEDE7" };
-  if (close && close === today) return { label: "CLOSES TODAY", color: COLORS.red, bg: COLORS.redSoft };
-  if (open && open <= today) return { label: "OPEN NOW", color: COLORS.green, bg: COLORS.greenSoft };
-  if (open && open > today) return { label: "UPCOMING", color: COLORS.gold, bg: COLORS.goldSoft };
+  // Closes today
+  if (close && close === today) {
+    return isPast5pm
+      ? { label: "CLOSED TODAY", color: COLORS.inkSoft, bg: "#EFEDE7" }
+      : { label: "CLOSES TODAY", color: COLORS.red, bg: COLORS.redSoft };
+  }
+  // Open (between open and close dates) - show when it closes
+  if (open && open <= today && close && close > today) {
+    const daysLeft = Math.ceil((new Date(close + "T00:00:00") - new Date(today + "T00:00:00")) / 86400000);
+    return daysLeft === 1
+      ? { label: "CLOSES TOMORROW", color: COLORS.red, bg: COLORS.redSoft }
+      : { label: "CLOSES " + fmtDate(close).toUpperCase().slice(0, 6), color: COLORS.green, bg: COLORS.greenSoft };
+  }
+  // Open today (first day)
+  if (open && open === today) return { label: "OPEN NOW", color: COLORS.green, bg: COLORS.greenSoft };
+  // Upcoming - show when it opens
+  if (open && open > today) return { label: "OPENS " + fmtDate(open).toUpperCase().slice(0, 6), color: COLORS.gold, bg: COLORS.goldSoft };
+
   return null;
 }
 const fmtDate = (d) => {
@@ -1128,6 +1140,7 @@ function AppInner() {
 
   const skipNextAutoSync = useRef(true);
   const pricedOnce = useRef(false);
+  const swipeNav = useRef(null);
   const [, bumpHolidays] = useState(0);
 
   // The palette is mutated in place, so a theme change needs a nudge to redraw.
@@ -1329,21 +1342,20 @@ function AppInner() {
 
   const closeTopLayer = useCallback(() => {
     const v = backRef.current;
-    // Innermost first: child sheets close before the parent beneath them.
-    // Dismiss confirm modal if open
+    const clear = (key, setter, val) => { setter(val !== undefined ? val : null); backRef.current = { ...backRef.current, [key]: val !== undefined ? val : null }; return true; };
     if (confirmDismissRef.current) { confirmDismissRef.current(); return true; }
-    if (v.appSheet) { setAppSheet(null); return true; }
-    if (v.bulkApplyFor) { setBulkApplyFor(null); return true; }
-    if (v.bulkStatusFor) { setBulkStatusFor(null); return true; }
-    if (v.ipoSheet) { setIpoSheet(null); return true; }
-    if (v.acctSheet) { setAcctSheet(null); return true; }
-    if (v.acctDetail) { setAcctDetail(null); return true; }
-    if (v.holdingDetail) { setHoldingDetail(null); return true; }
-    if (v.transferSheet) { setTransferSheet(null); return true; }
-    if (v.liveOpen) { setLiveOpen(false); return true; }
-    if (v.dataSheetOpen) { setDataSheetOpen(false); return true; }
-    if (v.ipoDetail) { setIpoDetail(null); return true; }
-    if (v.tab !== "dashboard") { setTab("dashboard"); return true; }
+    if (v.appSheet) return clear("appSheet", setAppSheet);
+    if (v.bulkApplyFor) return clear("bulkApplyFor", setBulkApplyFor);
+    if (v.bulkStatusFor) return clear("bulkStatusFor", setBulkStatusFor);
+    if (v.ipoSheet) return clear("ipoSheet", setIpoSheet);
+    if (v.acctSheet) return clear("acctSheet", setAcctSheet);
+    if (v.acctDetail) return clear("acctDetail", setAcctDetail);
+    if (v.holdingDetail) return clear("holdingDetail", setHoldingDetail);
+    if (v.transferSheet) return clear("transferSheet", setTransferSheet);
+    if (v.liveOpen) return clear("liveOpen", setLiveOpen, false);
+    if (v.dataSheetOpen) return clear("dataSheetOpen", setDataSheetOpen, false);
+    if (v.ipoDetail) return clear("ipoDetail", setIpoDetail);
+    if (v.tab !== "dashboard") { setTab("dashboard"); backRef.current = { ...backRef.current, tab: "dashboard" }; return true; }
     return false;
   }, []);
 
@@ -1830,7 +1842,20 @@ function AppInner() {
         </div>
       )}
 
-      <div style={{ padding: "14px 14px 0" }}>
+      <div
+        onTouchStart={(e) => { if (!sheetIsOpen) swipeNav.current = { x: e.touches[0].clientX, y: e.touches[0].clientY }; }}
+        onTouchEnd={(e) => {
+          const s = swipeNav.current;
+          if (!s || sheetIsOpen) return;
+          swipeNav.current = null;
+          const dx = e.changedTouches[0].clientX - s.x;
+          const dy = e.changedTouches[0].clientY - s.y;
+          if (Math.abs(dx) < 60 || Math.abs(dy) > Math.abs(dx) * 0.6) return;
+          const idx = TABS.indexOf(tab);
+          if (dx < 0 && idx < TABS.length - 1) setTab(TABS[idx + 1]);
+          if (dx > 0 && idx > 0) setTab(TABS[idx - 1]);
+        }}
+        style={{ padding: "14px 14px 0" }}>
         {tab === "dashboard" && (
           <Dashboard stats={stats} ipos={ipos} accounts={accounts} onOpenIpo={(id) => setIpoDetail(id)} onOpenHolding={(id) => setHoldingDetail(id)} />
         )}
