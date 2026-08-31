@@ -3035,7 +3035,7 @@ function IpoDetailSheet({ ipo, accounts, onClose, onDeleteIpo, onEditIpo, onSave
   const saveNote = () => { onSaveNote(ipo.id, note); setSavedNote(note); };
 
   const allot = allotmentDateOf(ipo);
-  const allotValue = (!hasListed(ipo) && !allotmentSettled(ipo) && allot.date)
+  const allotValue = allot.date
     ? `${fmtDate(allot.date)}${allot.exact ? "" : " (expected)"}`
     : "--";
   const listExpected = listingDateOf(ipo);
