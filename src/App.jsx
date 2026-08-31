@@ -1980,7 +1980,7 @@ function AppInner() {
         <BulkApplySheet
           ipo={ipos.find((i) => i.id === bulkApplyFor)}
           accounts={accounts}
-          onClose={() => { setBulkApplyFor(null); }}
+          onClose={() => { setBulkApplyFor(null); backRef.current = { ...backRef.current, bulkApplyFor: null }; }}
           onSave={(newApps) => {
             persistIpos(ipos.map((i) => (i.id === bulkApplyFor
               ? { ...i, applications: [...(i.applications || []), ...newApps] }
@@ -1994,7 +1994,7 @@ function AppInner() {
         <BulkStatusSheet
           ipo={ipos.find((i) => i.id === bulkStatusFor)}
           accounts={accounts}
-          onClose={() => { setBulkStatusFor(null); }}
+          onClose={() => { setBulkStatusFor(null); backRef.current = { ...backRef.current, bulkStatusFor: null }; }}
           onSave={(draft) => {
             persistIpos(ipos.map((i) => (i.id === bulkStatusFor
               ? {
@@ -3572,7 +3572,7 @@ function AccountDetailSheet({ account, ipos, transfers, accounts, onClose, onEdi
       </div>
       <SectionLabel>IPO Applications ({apps.length})</SectionLabel>
       {apps.length === 0 ? (
-        <EmptyState text="No applications from this account yet." />
+        <div style={{ marginBottom: 14 }}><EmptyState text="No applications from this account yet." /></div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
           {apps.map((app) => {
@@ -4334,24 +4334,36 @@ function DataSheet({ state, session, cloudOn, syncing, syncError, lastSync, onCl
 function AuthScreen({ mode, setMode, notice, recoveryToken }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPw, setConfirmPw] = useState("");
   const [newPassword, setNewPassword] = useState("");
+  const [confirmNewPw, setConfirmNewPw] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(notice || "");
   const [info, setInfo] = useState("");
 
-  // Recovery mode: user arrived via password reset link
-  const isRecovery = !!recoveryToken;
+  const [recoveryDone, setRecoveryDone] = useState(false);
+  const isRecovery = !!recoveryToken && !recoveryDone;
+
+  const validatePassword = (pw) => {
+    if (pw.length < 8) return "At least 8 characters";
+    if (!/[A-Z]/.test(pw)) return "Include an uppercase letter";
+    if (!/[0-9]/.test(pw)) return "Include a number";
+    return null;
+  };
 
   const submit = async () => {
     setError(""); setInfo("");
     const trimmed = email.trim();
 
     if (isRecovery) {
-      if (!newPassword || newPassword.length < 6) return setError("Password must be at least 6 characters.");
+      const pwErr = validatePassword(newPassword);
+      if (pwErr) return setError(pwErr);
+      if (newPassword !== confirmNewPw) return setError("Passwords don't match.");
       setBusy(true);
       try {
         await cloudUpdatePassword(recoveryToken, newPassword);
-        setInfo("Password updated. You can now sign in with your new password.");
+        setRecoveryDone(true);
+        setInfo("Password updated successfully. Sign in with your new password.");
         setMode("login");
       } catch (e) {
         setError(e.message || "Could not update password.");
@@ -4373,6 +4385,11 @@ function AuthScreen({ mode, setMode, notice, recoveryToken }) {
     }
 
     if (!trimmed || !password) return setError("Enter your email and password.");
+    if (mode === "signup") {
+      const pwErr = validatePassword(password);
+      if (pwErr) return setError(pwErr);
+      if (password !== confirmPw) return setError("Passwords don't match.");
+    }
     if (password.length < 6) return setError("Password must be at least 6 characters.");
 
     setBusy(true);
@@ -4420,12 +4437,35 @@ function AuthScreen({ mode, setMode, notice, recoveryToken }) {
             : "Sign in to sync your IPOs, applications, accounts and transfers across devices."}
         </div>
 
+        {notice && !isRecovery && (
+          <div style={{
+            background: COLORS.redSoft, border: `1px solid ${COLORS.red}`, borderRadius: 10,
+            padding: "12px 14px", marginBottom: 16, display: "flex", gap: 8, alignItems: "flex-start",
+          }}>
+            <AlertTriangle size={16} color={COLORS.red} style={{ flexShrink: 0, marginTop: 1 }} />
+            <div>
+              <div style={{ fontWeight: 600, fontSize: 13, color: COLORS.red, marginBottom: 4 }}>Link expired or invalid</div>
+              <div style={{ fontSize: 12, color: COLORS.ink }}>{notice}</div>
+              <button onClick={() => { setMode("forgot"); setError(""); }} style={{
+                marginTop: 8, background: "none", border: 0, padding: 0, color: COLORS.navy,
+                fontWeight: 600, fontSize: 12.5, cursor: "pointer", fontFamily: "Inter, sans-serif",
+              }}>Request a new reset link</button>
+            </div>
+          </div>
+        )}
+
         {isRecovery ? (
-          <Field label="New Password">
-            <Input type="password" autoComplete="new-password" value={newPassword}
-              onChange={(e) => setNewPassword(e.target.value)} placeholder="At least 6 characters"
-              onKeyDown={(e) => { if (e.key === "Enter") submit(); }} />
-          </Field>
+          <>
+            <Field label="New Password">
+              <Input type="password" autoComplete="new-password" value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)} placeholder="At least 8 characters, 1 uppercase, 1 number" />
+            </Field>
+            <Field label="Confirm New Password">
+              <Input type="password" autoComplete="new-password" value={confirmNewPw}
+                onChange={(e) => setConfirmNewPw(e.target.value)} placeholder="Re-enter your password"
+                onKeyDown={(e) => { if (e.key === "Enter") submit(); }} />
+            </Field>
+          </>
         ) : mode === "forgot" ? (
           <Field label="Email">
             <Input type="email" autoComplete="email" inputMode="email" value={email}
@@ -4440,9 +4480,17 @@ function AuthScreen({ mode, setMode, notice, recoveryToken }) {
             </Field>
             <Field label="Password">
               <Input type="password" autoComplete={mode === "signup" ? "new-password" : "current-password"}
-                value={password} onChange={(e) => setPassword(e.target.value)} placeholder="At least 6 characters"
-                onKeyDown={(e) => { if (e.key === "Enter") submit(); }} />
+                value={password} onChange={(e) => setPassword(e.target.value)}
+                placeholder={mode === "signup" ? "At least 8 chars, 1 uppercase, 1 number" : "Enter your password"}
+                onKeyDown={(e) => { if (e.key === "Enter" && mode !== "signup") submit(); }} />
             </Field>
+            {mode === "signup" && (
+              <Field label="Confirm Password">
+                <Input type="password" autoComplete="new-password" value={confirmPw}
+                  onChange={(e) => setConfirmPw(e.target.value)} placeholder="Re-enter your password"
+                  onKeyDown={(e) => { if (e.key === "Enter") submit(); }} />
+              </Field>
+            )}
           </>
         )}
 
