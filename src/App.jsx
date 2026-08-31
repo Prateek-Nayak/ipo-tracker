@@ -4876,6 +4876,7 @@ function LiveIposSheet({ existing, onClose, onImport }) {
       id: uid(),
       fromExchange: true,
       symbol: r.symbol || "",
+      isin: r.isin || "",
       company: r.company,
       category: r.category || "Mainboard",
       applicationDate: r.closeDate || "",
@@ -4884,6 +4885,7 @@ function LiveIposSheet({ existing, onClose, onImport }) {
       lotSize: r.lotSize != null ? String(r.lotSize) : "",
       openDate: r.openDate || "",
       closeDate: r.closeDate || "",
+      allotmentDate: r.allotmentDate || "",
       listingDate: r.listedOn || "",
       // Same rule as a refresh: no closing price until the day has closed.
       ...(() => {
