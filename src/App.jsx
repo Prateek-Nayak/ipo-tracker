@@ -596,6 +596,12 @@ async function gotrue(path, options = {}) {
 async function cloudSignUp(email, password) {
   return gotrue("signup", { method: "POST", body: JSON.stringify({ email, password }) });
 }
+async function cloudResetPassword(email) {
+  return gotrue("recover", { method: "POST", body: JSON.stringify({ email }) });
+}
+async function cloudUpdatePassword(accessToken, password) {
+  return gotrue("user", { method: "PUT", headers: { Authorization: `Bearer ${accessToken}` }, body: JSON.stringify({ password }) });
+}
 async function cloudGetUser(accessToken) {
   return gotrue("user", { headers: { Authorization: `Bearer ${accessToken}` } });
 }
@@ -1077,6 +1083,7 @@ function AppInner() {
   const [authMode, setAuthMode] = useState("login");
   const [linkBusy, setLinkBusy] = useState(() => cloudEnabled() && !!readAuthHash());
   const [linkNotice, setLinkNotice] = useState("");
+  const [recoveryToken, setRecoveryToken] = useState("");
 
   /* Which tab you were on survives a reload. The app is a single screen with no
      routing, so without this every refresh - and every return from the home
@@ -1198,9 +1205,18 @@ function AppInner() {
     if (!params) { setLinkBusy(false); return; }
 
     const token = params.get("access_token");
+    const type = params.get("type");
     if (!token) {
       const err = params.get("error_description") || params.get("error");
       setLinkNotice((err || "That link is no longer valid.").replace(/\+/g, " "));
+      setLinkBusy(false);
+      return;
+    }
+
+    // Password recovery: don't auto-sign-in, show the reset form instead
+    if (type === "recovery") {
+      setRecoveryToken(token);
+      setAuthMode("login");
       setLinkBusy(false);
       return;
     }
@@ -1804,7 +1820,7 @@ function AppInner() {
   if (linkBusy) return <LedgerSkeleton text="SIGNING YOU IN" tab={tab} />;
 
   if (cloudEnabled() && !session) {
-    return <AuthScreen mode={authMode} setMode={setAuthMode} notice={linkNotice} />;
+    return <AuthScreen mode={authMode} setMode={setAuthMode} notice={linkNotice} recoveryToken={recoveryToken} />;
   }
 
   if (!loaded) return <LedgerSkeleton text="LOADING YOUR LEDGER" tab={tab} />;
@@ -4315,16 +4331,47 @@ function DataSheet({ state, session, cloudOn, syncing, syncError, lastSync, onCl
 /* ---------------------------------------------------------
    AUTH
 ---------------------------------------------------------- */
-function AuthScreen({ mode, setMode, notice }) {
+function AuthScreen({ mode, setMode, notice, recoveryToken }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(notice || "");
   const [info, setInfo] = useState("");
 
+  // Recovery mode: user arrived via password reset link
+  const isRecovery = !!recoveryToken;
+
   const submit = async () => {
     setError(""); setInfo("");
     const trimmed = email.trim();
+
+    if (isRecovery) {
+      if (!newPassword || newPassword.length < 6) return setError("Password must be at least 6 characters.");
+      setBusy(true);
+      try {
+        await cloudUpdatePassword(recoveryToken, newPassword);
+        setInfo("Password updated. You can now sign in with your new password.");
+        setMode("login");
+      } catch (e) {
+        setError(e.message || "Could not update password.");
+      } finally { setBusy(false); }
+      return;
+    }
+
+    if (mode === "forgot") {
+      if (!trimmed) return setError("Enter your email address.");
+      setBusy(true);
+      try {
+        await cloudResetPassword(trimmed);
+        setInfo("Check your email for a password reset link.");
+        setMode("login");
+      } catch (e) {
+        setError(e.message || "Could not send reset email.");
+      } finally { setBusy(false); }
+      return;
+    }
+
     if (!trimmed || !password) return setError("Enter your email and password.");
     if (password.length < 6) return setError("Password must be at least 6 characters.");
 
@@ -4335,9 +4382,8 @@ function AuthScreen({ mode, setMode, notice }) {
         : await cloudSignIn(trimmed, password);
 
       if (!data.access_token) {
-        // Sign-up with email confirmation enabled returns a user but no session.
         setMode("login");
-        setInfo("Account created. Confirm your email if asked, then sign in.");
+        setInfo("Account created. Check your email to confirm, then sign in.");
         return;
       }
       setSession(normalizeSession(data));
@@ -4347,6 +4393,8 @@ function AuthScreen({ mode, setMode, notice }) {
       setBusy(false);
     }
   };
+
+  const title = isRecovery ? "Set New Password" : mode === "forgot" ? "Reset Password" : mode === "signup" ? "Create Account" : "Sign In";
 
   return (
     <div style={{
@@ -4367,18 +4415,36 @@ function AuthScreen({ mode, setMode, notice }) {
         }}>FAMILY IPO REGISTER</div>
 
         <div style={{ color: COLORS.inkSoft, fontSize: 13.5, marginBottom: 20 }}>
-          Sign in to sync your IPOs, applications, accounts and transfers across devices.
+          {isRecovery ? "Enter your new password below."
+            : mode === "forgot" ? "Enter your email and we'll send you a reset link."
+            : "Sign in to sync your IPOs, applications, accounts and transfers across devices."}
         </div>
 
-        <Field label="Email">
-          <Input type="email" autoComplete="email" inputMode="email" value={email}
-            onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" />
-        </Field>
-        <Field label="Password">
-          <Input type="password" autoComplete={mode === "signup" ? "new-password" : "current-password"}
-            value={password} onChange={(e) => setPassword(e.target.value)} placeholder="At least 6 characters"
-            onKeyDown={(e) => { if (e.key === "Enter") submit(); }} />
-        </Field>
+        {isRecovery ? (
+          <Field label="New Password">
+            <Input type="password" autoComplete="new-password" value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)} placeholder="At least 6 characters"
+              onKeyDown={(e) => { if (e.key === "Enter") submit(); }} />
+          </Field>
+        ) : mode === "forgot" ? (
+          <Field label="Email">
+            <Input type="email" autoComplete="email" inputMode="email" value={email}
+              onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com"
+              onKeyDown={(e) => { if (e.key === "Enter") submit(); }} />
+          </Field>
+        ) : (
+          <>
+            <Field label="Email">
+              <Input type="email" autoComplete="email" inputMode="email" value={email}
+                onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" />
+            </Field>
+            <Field label="Password">
+              <Input type="password" autoComplete={mode === "signup" ? "new-password" : "current-password"}
+                value={password} onChange={(e) => setPassword(e.target.value)} placeholder="At least 6 characters"
+                onKeyDown={(e) => { if (e.key === "Enter") submit(); }} />
+            </Field>
+          </>
+        )}
 
         {error && (
           <div style={{ background: COLORS.redSoft, color: COLORS.red, borderRadius: 10, padding: 10, marginBottom: 10, fontSize: 13 }}>{error}</div>
@@ -4388,17 +4454,23 @@ function AuthScreen({ mode, setMode, notice }) {
         )}
 
         <PrimaryButton onClick={submit} disabled={busy}>
-          {busy ? "Please wait..." : mode === "signup" ? "Create Account" : "Sign In"}
+          {busy ? "Please wait..." : isRecovery ? "Update Password" : mode === "forgot" ? "Send Reset Link" : mode === "signup" ? "Create Account" : "Sign In"}
         </PrimaryButton>
-        <button
-          onClick={() => { setMode(mode === "signup" ? "login" : "signup"); setError(""); setInfo(""); }}
-          style={{
-            width: "100%", border: 0, background: "transparent", marginTop: 12, padding: 12,
-            color: COLORS.navy, fontWeight: 600, fontSize: 13.5, cursor: "pointer",
-          }}
-        >
-          {mode === "signup" ? "Already have an account? Sign in" : "New here? Create an account"}
-        </button>
+
+        {!isRecovery && mode !== "forgot" && (
+          <button onClick={() => { setMode("forgot"); setError(""); setInfo(""); }}
+            style={{ width: "100%", border: 0, background: "transparent", marginTop: 8, padding: 8, color: COLORS.inkSoft, fontSize: 12.5, cursor: "pointer" }}>
+            Forgot password?
+          </button>
+        )}
+
+        {!isRecovery && (
+          <button
+            onClick={() => { setMode(mode === "signup" ? "login" : mode === "forgot" ? "login" : "signup"); setError(""); setInfo(""); }}
+            style={{ width: "100%", border: 0, background: "transparent", marginTop: 4, padding: 12, color: COLORS.navy, fontWeight: 600, fontSize: 13.5, cursor: "pointer" }}>
+            {mode === "signup" ? "Already have an account? Sign in" : mode === "forgot" ? "Back to sign in" : "New here? Create an account"}
+          </button>
+        )}
       </div>
     </div>
   );
