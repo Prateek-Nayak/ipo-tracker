@@ -1148,6 +1148,7 @@ function AppInner() {
   const skipNextAutoSync = useRef(true);
   const pricedOnce = useRef(false);
   const swipeNav = useRef(null);
+  const [swipeDx, setSwipeDx] = useState(0);
   const [, bumpHolidays] = useState(0);
 
   // The palette is mutated in place, so a theme change needs a nudge to redraw.
@@ -1859,19 +1860,37 @@ function AppInner() {
       )}
 
       <div
-        onTouchStart={(e) => { if (!sheetIsOpen) swipeNav.current = { x: e.touches[0].clientX, y: e.touches[0].clientY }; }}
-        onTouchEnd={(e) => {
+        onTouchStart={(e) => {
+          if (sheetIsOpen) return;
+          swipeNav.current = { x: e.touches[0].clientX, y: e.touches[0].clientY, dx: 0, committed: false };
+        }}
+        onTouchMove={(e) => {
           const s = swipeNav.current;
           if (!s || sheetIsOpen) return;
-          swipeNav.current = null;
-          const dx = e.changedTouches[0].clientX - s.x;
-          const dy = e.changedTouches[0].clientY - s.y;
-          if (Math.abs(dx) < 60 || Math.abs(dy) > Math.abs(dx) * 0.6) return;
-          const idx = TABS.indexOf(tab);
-          if (dx < 0 && idx < TABS.length - 1) setTab(TABS[idx + 1]);
-          if (dx > 0 && idx > 0) setTab(TABS[idx - 1]);
+          const dx = e.touches[0].clientX - s.x;
+          const dy = e.touches[0].clientY - s.y;
+          if (!s.committed && Math.abs(dy) > Math.abs(dx)) { swipeNav.current = null; return; }
+          if (!s.committed && Math.abs(dx) < 15) return;
+          s.committed = true;
+          s.dx = dx;
+          setSwipeDx(dx);
         }}
-        style={{ padding: "14px 14px 0" }}>
+        onTouchEnd={(e) => {
+          const s = swipeNav.current;
+          if (!s || !s.committed || sheetIsOpen) { swipeNav.current = null; setSwipeDx(0); return; }
+          swipeNav.current = null;
+          const dx = s.dx;
+          const idx = TABS.indexOf(tab);
+          if (dx < -60 && idx < TABS.length - 1) { setTab(TABS[idx + 1]); }
+          else if (dx > 60 && idx > 0) { setTab(TABS[idx - 1]); }
+          setSwipeDx(0);
+        }}
+        style={{
+          padding: "14px 14px 0",
+          transform: swipeDx ? `translateX(${swipeDx * 0.4}px)` : undefined,
+          transition: swipeDx ? "none" : "transform 200ms ease-out",
+          willChange: swipeDx ? "transform" : undefined,
+        }}>
         {tab === "dashboard" && (
           <Dashboard stats={stats} ipos={ipos} accounts={accounts} onOpenIpo={(id) => setIpoDetail(id)} onOpenHolding={(id) => setHoldingDetail(id)} />
         )}
@@ -4340,6 +4359,7 @@ function AuthScreen({ mode, setMode, notice, recoveryToken }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(notice || "");
   const [info, setInfo] = useState("");
+  const [noticeCleared, setNoticeCleared] = useState(false);
 
   const [recoveryDone, setRecoveryDone] = useState(false);
   const isRecovery = !!recoveryToken && !recoveryDone;
@@ -4437,7 +4457,7 @@ function AuthScreen({ mode, setMode, notice, recoveryToken }) {
             : "Sign in to sync your IPOs, applications, accounts and transfers across devices."}
         </div>
 
-        {notice && !isRecovery && (
+        {notice && !isRecovery && !noticeCleared && (
           <div style={{
             background: COLORS.redSoft, border: `1px solid ${COLORS.red}`, borderRadius: 10,
             padding: "12px 14px", marginBottom: 16, display: "flex", gap: 8, alignItems: "flex-start",
@@ -4446,7 +4466,7 @@ function AuthScreen({ mode, setMode, notice, recoveryToken }) {
             <div>
               <div style={{ fontWeight: 600, fontSize: 13, color: COLORS.red, marginBottom: 4 }}>Link expired or invalid</div>
               <div style={{ fontSize: 12, color: COLORS.ink }}>{notice}</div>
-              <button onClick={() => { setMode("forgot"); setError(""); }} style={{
+              <button onClick={() => { setMode("forgot"); setError(""); setNoticeCleared(true); }} style={{
                 marginTop: 8, background: "none", border: 0, padding: 0, color: COLORS.navy,
                 fontWeight: 600, fontSize: 12.5, cursor: "pointer", fontFamily: "Inter, sans-serif",
               }}>Request a new reset link</button>
@@ -4506,7 +4526,7 @@ function AuthScreen({ mode, setMode, notice, recoveryToken }) {
         </PrimaryButton>
 
         {!isRecovery && mode !== "forgot" && (
-          <button onClick={() => { setMode("forgot"); setError(""); setInfo(""); }}
+          <button onClick={() => { setMode("forgot"); setError(""); setInfo(""); setNoticeCleared(true); }}
             style={{ width: "100%", border: 0, background: "transparent", marginTop: 8, padding: 8, color: COLORS.inkSoft, fontSize: 12.5, cursor: "pointer" }}>
             Forgot password?
           </button>
@@ -4514,7 +4534,7 @@ function AuthScreen({ mode, setMode, notice, recoveryToken }) {
 
         {!isRecovery && (
           <button
-            onClick={() => { setMode(mode === "signup" ? "login" : mode === "forgot" ? "login" : "signup"); setError(""); setInfo(""); }}
+            onClick={() => { setMode(mode === "signup" ? "login" : mode === "forgot" ? "login" : "signup"); setError(""); setInfo(""); setNoticeCleared(true); }}
             style={{ width: "100%", border: 0, background: "transparent", marginTop: 4, padding: 12, color: COLORS.navy, fontWeight: 600, fontSize: 13.5, cursor: "pointer" }}>
             {mode === "signup" ? "Already have an account? Sign in" : mode === "forgot" ? "Back to sign in" : "New here? Create an account"}
           </button>
