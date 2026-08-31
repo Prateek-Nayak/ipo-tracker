@@ -2015,10 +2015,10 @@ function AppInner() {
           onRefreshPrices={refreshPrices}
           onSignOut={async () => {
             setDataSheetOpen(false);
-            // Clear local storage to prevent leaking to next account
             TABLES.forEach((k) => saveTable(k, []));
-            setLocalOwner(null);
-            skipNextAutoSync.current = true;
+            setAccounts([]); setIpos([]); setTransfers([]); setTrash([]);
+            try { localStorage.removeItem(STORAGE_PREFIX + "owner"); } catch {}
+            try { localStorage.removeItem(STORAGE_PREFIX + "session"); } catch {}
             await cloudSignOut();
           }}
         />
