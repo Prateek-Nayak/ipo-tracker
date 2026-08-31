@@ -2017,12 +2017,10 @@ function AppInner() {
           onRefreshPrices={refreshPrices}
           onSignOut={async () => {
             setDataSheetOpen(false);
-            // Clear ALL local data and React state to prevent leaking to next account
+            // Clear local storage to prevent leaking to next account
             TABLES.forEach((k) => saveTable(k, []));
-            setAccounts([]); setIpos([]); setTransfers([]); setTrash([]);
             setLocalOwner(null);
-            // Also clear session so migration script doesn't use stale credentials
-            try { localStorage.removeItem(STORAGE_PREFIX + "session"); } catch {}
+            skipNextAutoSync.current = true;
             await cloudSignOut();
           }}
         />
