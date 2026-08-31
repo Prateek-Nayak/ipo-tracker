@@ -1443,6 +1443,7 @@ function AppInner() {
       const incomplete = (list) =>
         list.filter((i) =>
           !i.lotSize || !i.closeDate || !i.openDate || isBlank(i.priceBand) ||
+          (!i.allotmentDate && i.closeDate) ||
           (hasListed(i) && isBlank(i.listingPrice)));
       const asking = incomplete(list);
       const keys = asking
@@ -1539,6 +1540,8 @@ function AppInner() {
         if (hit.priceMax != null) patch.priceBand = String(hit.priceMax);
         if (hit.priceMin != null) patch.priceBandLow = String(hit.priceMin);
         if (hit.lotSize != null) patch.lotSize = String(hit.lotSize);
+        if (hit.isin) patch.isin = hit.isin;
+        if (hit.shortName || hit.symbol) patch.symbol = hit.shortName || hit.symbol;
 
         const merged = { ...ipo, ...patch };
 
@@ -2011,11 +2014,12 @@ function AppInner() {
           onRefreshPrices={refreshPrices}
           onSignOut={async () => {
             setDataSheetOpen(false);
+            // Sign out first so userId becomes null — prevents auto-sync from pushing empty data
+            await cloudSignOut();
+            // Then clear local data
             TABLES.forEach((k) => saveTable(k, []));
             setAccounts([]); setIpos([]); setTransfers([]); setTrash([]);
             try { localStorage.removeItem(STORAGE_PREFIX + "owner"); } catch {}
-            try { localStorage.removeItem(STORAGE_PREFIX + "session"); } catch {}
-            await cloudSignOut();
           }}
         />
       )}
