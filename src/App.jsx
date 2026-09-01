@@ -400,9 +400,8 @@ function issueStage(x) {
   const close = x?.closeDate || "";
   const isPast5pm = now.getHours() >= 17;
 
-  // Listed in the past
+  // PRIORITY 1: Already listed
   if (listed && listed < today) return { label: "LISTED", color: COLORS.navy, bg: "#EAEFF5" };
-  // Lists today
   if (listed && listed === today) {
     const hasLtp = Number(x?.currentPrice) > 0;
     return hasLtp
@@ -410,45 +409,45 @@ function issueStage(x) {
       : { label: "LISTS TODAY", color: COLORS.green, bg: COLORS.greenSoft };
   }
 
-  // Allotment takes priority over listing when it's the nearer event
-  const allot = allotmentDateOf(x);
-  if (allot.date && allot.date === today && close && close < today) {
-    return { label: "ALLOTMENT TODAY", color: COLORS.gold, bg: COLORS.goldSoft };
-  }
-  if (allot.date && allot.date > today && close && close < today && (!listed || allot.date < listed)) {
-    return { label: "ALLOTMENT " + fmtDate(allot.date).toUpperCase().slice(0, 6), color: COLORS.gold, bg: COLORS.goldSoft };
-  }
-
-  // Lists in the future (known date) - only after allotment checks
-  if (listed && listed > today) return { label: "LISTS " + fmtDate(listed).toUpperCase().slice(0, 6), color: COLORS.navy, bg: "#EAEFF5" };
-
-  // Expected listing (no confirmed listing date)
-  const expected = listingDateOf(x);
-  if (!listed && expected.date && close && close < today) {
-    if (expected.date === today) return { label: "LISTS TODAY", color: COLORS.green, bg: COLORS.greenSoft };
-    if (expected.date > today) return { label: "LISTS ~" + fmtDate(expected.date).toUpperCase().slice(0, 6), color: COLORS.navy, bg: "#EAEFF5" };
-    return { label: "LISTING DUE", color: COLORS.gold, bg: COLORS.goldSoft };
-  }
-
-  // Closed (past close date)
-  if (close && close < today) return { label: "CLOSED", color: COLORS.inkSoft, bg: "#EFEDE7" };
-  // Closes today
+  // PRIORITY 2: Open/closing (IPO is accepting applications)
   if (close && close === today) {
     return isPast5pm
       ? { label: "CLOSED TODAY", color: COLORS.inkSoft, bg: "#EFEDE7" }
       : { label: "CLOSES TODAY", color: COLORS.red, bg: COLORS.redSoft };
   }
-  // Open (between open and close dates) - show when it closes
   if (open && open <= today && close && close > today) {
     const daysLeft = Math.ceil((new Date(close + "T00:00:00") - new Date(today + "T00:00:00")) / 86400000);
     return daysLeft === 1
       ? { label: "CLOSES TOMORROW", color: COLORS.red, bg: COLORS.redSoft }
       : { label: "CLOSES " + fmtDate(close).toUpperCase().slice(0, 6), color: COLORS.green, bg: COLORS.greenSoft };
   }
-  // Open today (first day)
   if (open && open === today) return { label: "OPEN NOW", color: COLORS.green, bg: COLORS.greenSoft };
-  // Upcoming - show when it opens
-  if (open && open > today) return { label: "OPENS " + fmtDate(open).toUpperCase().slice(0, 6), color: COLORS.gold, bg: COLORS.goldSoft };
+
+  // PRIORITY 3: Upcoming (not yet open)
+  if (open && open > today && (!close || close >= today)) {
+    return { label: "OPENS " + fmtDate(open).toUpperCase().slice(0, 6), color: COLORS.gold, bg: COLORS.goldSoft };
+  }
+
+  // PRIORITY 4: Closed, awaiting allotment/listing
+  const allot = allotmentDateOf(x);
+  if (close && close < today) {
+    if (allot.date && allot.date === today) {
+      return { label: "ALLOTMENT TODAY", color: COLORS.gold, bg: COLORS.goldSoft };
+    }
+    if (allot.date && allot.date > today && (!listed || allot.date <= listed)) {
+      return { label: "ALLOTMENT " + fmtDate(allot.date).toUpperCase().slice(0, 6), color: COLORS.gold, bg: COLORS.goldSoft };
+    }
+    if (listed && listed > today) {
+      return { label: "LISTS " + fmtDate(listed).toUpperCase().slice(0, 6), color: COLORS.navy, bg: "#EAEFF5" };
+    }
+    const expected = listingDateOf(x);
+    if (expected.date) {
+      if (expected.date === today) return { label: "LISTS TODAY", color: COLORS.green, bg: COLORS.greenSoft };
+      if (expected.date > today) return { label: "LISTS ~" + fmtDate(expected.date).toUpperCase().slice(0, 6), color: COLORS.navy, bg: "#EAEFF5" };
+      return { label: "LISTING DUE", color: COLORS.gold, bg: COLORS.goldSoft };
+    }
+    return { label: "CLOSED", color: COLORS.inkSoft, bg: "#EFEDE7" };
+  }
 
   return null;
 }
@@ -1415,7 +1414,8 @@ function AppInner() {
     try {
       const state = { accounts, ipos, transfers, trash };
       // Never let a device that has nothing wipe a cloud that has something.
-      if (isEmptyState(state)) {
+      // But if trash has entries, the user intentionally deleted their data.
+      if (isEmptyState(state) && !(trash || []).length) {
         const remote = await cloudLoad();
         if (!isEmptyState(remote)) {
           setSyncError("This device is empty but your cloud ledger is not. Nothing was overwritten - reload to pull it down.");
