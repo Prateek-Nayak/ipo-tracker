@@ -793,13 +793,10 @@ function Badge({ children, color, bg, strong }) {
      colours look washed - so give them a light tinted fill, exactly as the
      bar itself is a solid block of colour. */
   const emphasis = strong && !isDark();
-  const badgeBg = emphasis
-    ? (color === COLORS.green ? COLORS.greenSoft : color === COLORS.red ? COLORS.redSoft : "transparent")
-    : "transparent";
   return (
     <span
       style={{
-        color, background: badgeBg,
+        color, background: emphasis ? (bg || "transparent") : "transparent",
         border: `1px solid ${color}`,
         fontFamily: "'JetBrains Mono', monospace",
         fontSize: 8, fontWeight: emphasis ? 700 : 600, letterSpacing: 0.3,
@@ -1106,7 +1103,7 @@ function AppInner() {
      the bottom of the transfers - a list you had never scrolled. Each screen
      now starts where a screen should. */
   useEffect(() => {
-    if (contentRef.current) contentRef.current.scrollTop = 0;
+    window.scrollTo(0, 0);
   }, [tab]);
   const [accounts, setAccounts] = useState([]);
   const [ipos, setIpos] = useState([]);
@@ -1828,9 +1825,9 @@ function AppInner() {
 
   return (
     <div style={{
-      height: "100dvh", background: COLORS.bg, fontFamily: "Inter, sans-serif",
+      minHeight: "100dvh", background: COLORS.bg, fontFamily: "Inter, sans-serif",
       color: COLORS.ink, maxWidth: 520, margin: "0 auto", position: "relative",
-      display: "flex", flexDirection: "column",
+      paddingBottom: "calc(78px + env(safe-area-inset-bottom))",
     }}>
       <style>{FONT_IMPORT}</style>
 
@@ -1861,7 +1858,6 @@ function AppInner() {
 
       <div
         ref={contentRef}
-        className="ledger-scroll"
         onTouchStart={(e) => {
           if (sheetIsOpen) return;
           swipeNav.current = { x: e.touches[0].clientX, y: e.touches[0].clientY, committed: false };
@@ -1877,7 +1873,7 @@ function AppInner() {
           if (dx < 0 && idx < TABS.length - 1) setTab(TABS[idx + 1]);
           if (dx > 0 && idx > 0) setTab(TABS[idx - 1]);
         }}
-        style={{ padding: "14px 14px 14px", flex: "1 1 auto", overflowY: "auto", WebkitOverflowScrolling: "touch", overscrollBehaviorY: "auto" }}>
+        style={{ padding: "14px 14px 14px" }}>
         {tab === "dashboard" && (
           <Dashboard stats={stats} ipos={ipos} accounts={accounts} onOpenIpo={(id) => setIpoDetail(id)} onOpenHolding={(id) => setHoldingDetail(id)} />
         )}
@@ -2249,7 +2245,7 @@ function Header({ tab, onAdd, onOpenData, onFetchLive, syncing, syncError, cloud
     <div style={{
       background: COLORS.navyDeep,
       padding: "calc(18px + env(safe-area-inset-top)) 14px 14px",
-      position: "relative", zIndex: 10, flexShrink: 0,
+      position: "sticky", top: 0, zIndex: 10,
       display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap",
       rowGap: 10, columnGap: 8, borderBottom: `3px double ${COLORS.gold}`,
     }}>
@@ -2309,7 +2305,7 @@ function BottomNav({ tab, setTab }) {
   ];
   return (
     <div style={{
-      position: "relative", flexShrink: 0,
+      position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)",
       width: "100%", maxWidth: 520, background: COLORS.navyDeep,
       display: "flex", justifyContent: "space-around",
       padding: "10px 6px calc(14px + env(safe-area-inset-bottom))",
