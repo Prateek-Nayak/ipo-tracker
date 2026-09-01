@@ -788,20 +788,20 @@ function mergeIpos(current, incoming) {
    hairline, on a background barely off the card - a filled block of colour on
    every row is what made a list of IPOs read as a colour chart. */
 function Badge({ children, color, bg, strong }) {
-  /* Strong badges (Allotted / Not Allotted) use the same green/red as the
-     allotment progress bar. At 8px font on a transparent background, those
-     colours look washed - so give them a light tinted fill, exactly as the
-     bar itself is a solid block of colour. */
-  const emphasis = strong && !isDark();
+  const dark = isDark();
+  const emphasis = strong && !dark;
+  /* In light mode every badge gets its tinted fill so the colour reads as
+     clearly as the allotment bar it sits beside. In dark mode the soft fills
+     are too close to the surface to help, so badges stay transparent. */
+  const fill = dark ? "transparent" : (bg || "transparent");
   return (
     <span
       style={{
-        color, background: emphasis ? (bg || "transparent") : "transparent",
+        color, background: fill,
         border: `1px solid ${color}`,
         fontFamily: "'JetBrains Mono', monospace",
-        fontSize: 8, fontWeight: emphasis ? 700 : 600, letterSpacing: 0.3,
+        fontSize: 8, fontWeight: emphasis ? 700 : 650, letterSpacing: 0.3,
         padding: "2px 7px", borderRadius: 5, whiteSpace: "nowrap",
-        opacity: emphasis ? 1 : 0.9,
       }}
     >
       {children}
