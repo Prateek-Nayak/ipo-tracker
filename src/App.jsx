@@ -1876,7 +1876,7 @@ function AppInner() {
           if (dx < 0 && idx < TABS.length - 1) setTab(TABS[idx + 1]);
           if (dx > 0 && idx > 0) setTab(TABS[idx - 1]);
         }}
-        style={{ padding: "14px 14px 14px", flex: "1 1 auto", overflowY: "auto", WebkitOverflowScrolling: "touch" }}>
+        style={{ padding: "14px 14px 14px", flex: "1 1 auto", overflowY: "auto", WebkitOverflowScrolling: "touch", overscrollBehaviorY: "auto" }}>
         {tab === "dashboard" && (
           <Dashboard stats={stats} ipos={ipos} accounts={accounts} onOpenIpo={(id) => setIpoDetail(id)} onOpenHolding={(id) => setHoldingDetail(id)} />
         )}
