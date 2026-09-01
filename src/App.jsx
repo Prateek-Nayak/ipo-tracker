@@ -85,6 +85,7 @@ function applyTheme(next) {
   themeName = next === "dark" ? "dark" : "light";
   Object.assign(COLORS, themeName === "dark" ? COLORS_DARK : COLORS_LIGHT);
   buildStyles();
+  buildStatusMeta();
   paintDocument();
   try { localStorage.setItem(THEME_KEY, themeName); } catch { /* it still applies for this session */ }
   themeListeners.forEach((fn) => fn());
@@ -133,6 +134,7 @@ function buildStyles() {
   };
 }
 buildStyles();
+buildStatusMeta();
 paintDocument();
 
 /* The page behind React, which is painted before any of it runs and shows
@@ -463,12 +465,15 @@ const fmtDate = (d) => {
 const fmtTime = (d) => (d ? d.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }) : "");
 
 const ALLOTMENT_STATUSES = ["Pending", "Allotted", "Partial", "Not Allotted"];
-const STATUS_META = {
-  Pending: { color: COLORS.gold, bg: COLORS.goldSoft, icon: Clock },
-  Allotted: { color: COLORS.green, bg: COLORS.greenSoft, icon: CheckCircle2 },
-  Partial: { color: COLORS.gold, bg: COLORS.goldSoft, icon: CheckCircle2 },
-  "Not Allotted": { color: COLORS.red, bg: COLORS.redSoft, icon: XCircle },
-};
+let STATUS_META = {};
+function buildStatusMeta() {
+  STATUS_META = {
+    Pending:        { color: COLORS.gold,  bg: COLORS.goldSoft,  icon: Clock },
+    Allotted:       { color: COLORS.green, bg: COLORS.greenSoft, icon: CheckCircle2 },
+    Partial:        { color: COLORS.gold,  bg: COLORS.goldSoft,  icon: CheckCircle2 },
+    "Not Allotted": { color: COLORS.red,   bg: COLORS.redSoft,   icon: XCircle },
+  };
+}
 
 /* "trash" is a table like the others so it syncs, exports and merges without
    special handling. Nothing is ever removed from the ledger outright: a delete
