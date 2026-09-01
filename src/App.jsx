@@ -1103,7 +1103,7 @@ function AppInner() {
      the bottom of the transfers - a list you had never scrolled. Each screen
      now starts where a screen should. */
   useEffect(() => {
-    window.scrollTo(0, 0);
+    if (contentRef.current) contentRef.current.scrollTop = 0;
   }, [tab]);
   const [accounts, setAccounts] = useState([]);
   const [ipos, setIpos] = useState([]);
@@ -1145,19 +1145,7 @@ function AppInner() {
   const swipeNav = useRef(null);
   const [swipeDx, setSwipeDx] = useState(0);
   const contentRef = useRef(null);
-  const headerRef = useRef(null);
-  const [headerH, setHeaderH] = useState(0);
   const [, bumpHolidays] = useState(0);
-
-  // Track header height so the content can be pushed below the fixed header.
-  useEffect(() => {
-    const el = headerRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(([entry]) => setHeaderH(entry.contentRect.height));
-    ro.observe(el);
-    setHeaderH(el.offsetHeight);
-    return () => ro.disconnect();
-  }, []);
 
   // The palette is mutated in place, so a theme change needs a nudge to redraw.
   const [, bumpTheme] = useState(0);
@@ -1837,47 +1825,40 @@ function AppInner() {
 
   return (
     <div style={{
-      minHeight: "100dvh", background: COLORS.bg, fontFamily: "Inter, sans-serif",
+      height: "100dvh", background: COLORS.bg, fontFamily: "Inter, sans-serif",
       color: COLORS.ink, maxWidth: 520, margin: "0 auto", position: "relative",
-      paddingBottom: "calc(78px + env(safe-area-inset-bottom))",
+      display: "flex", flexDirection: "column",
     }}>
       <style>{FONT_IMPORT}</style>
 
-      <div ref={headerRef} style={{
-        position: "fixed", top: 0, left: "50%", transform: "translateX(-50%)",
-        width: "100%", maxWidth: 520, zIndex: 10,
-      }}>
-        <Header
-          tab={tab}
-          syncing={syncing}
-          syncError={syncError}
-          cloudOn={cloudEnabled()}
-          onOpenData={() => setDataSheetOpen(true)}
-          onFetchLive={() => setLiveOpen(true)}
-          onAdd={() => {
-            if (tab === "ipos") setIpoSheet({ ipo: null });
-            else if (tab === "accounts") setAcctSheet({ account: null });
-            else if (tab === "transfers") setTransferSheet({ transfer: null });
-          }}
-        />
+      <Header
+        tab={tab}
+        syncing={syncing}
+        syncError={syncError}
+        cloudOn={cloudEnabled()}
+        onOpenData={() => setDataSheetOpen(true)}
+        onFetchLive={() => setLiveOpen(true)}
+        onAdd={() => {
+          if (tab === "ipos") setIpoSheet({ ipo: null });
+          else if (tab === "accounts") setAcctSheet({ account: null });
+          else if (tab === "transfers") setTransferSheet({ transfer: null });
+        }}
+      />
 
-        {isOffline && (
-          <div style={{
-            background: COLORS.goldSoft, display: "flex", alignItems: "center", justifyContent: "center",
-            gap: 6, padding: "6px 14px", fontSize: 11.5, fontWeight: 600, color: COLORS.ink,
-            fontFamily: "Inter, sans-serif",
-          }}>
-            <CloudOff size={13} color={COLORS.gold} />
-            <span>You're offline - showing cached data</span>
-          </div>
-        )}
-      </div>
-
-      {/* Spacer to push content below the fixed header */}
-      {headerH > 0 && <div style={{ height: headerH }} />}
+      {isOffline && (
+        <div style={{
+          background: COLORS.goldSoft, display: "flex", alignItems: "center", justifyContent: "center",
+          gap: 6, padding: "6px 14px", fontSize: 11.5, fontWeight: 600, color: COLORS.ink,
+          fontFamily: "Inter, sans-serif", flexShrink: 0,
+        }}>
+          <CloudOff size={13} color={COLORS.gold} />
+          <span>You're offline - showing cached data</span>
+        </div>
+      )}
 
       <div
         ref={contentRef}
+        className="ledger-scroll"
         onTouchStart={(e) => {
           if (sheetIsOpen) return;
           swipeNav.current = { x: e.touches[0].clientX, y: e.touches[0].clientY, committed: false };
@@ -1893,7 +1874,7 @@ function AppInner() {
           if (dx < 0 && idx < TABS.length - 1) setTab(TABS[idx + 1]);
           if (dx > 0 && idx > 0) setTab(TABS[idx - 1]);
         }}
-        style={{ padding: "14px 14px 14px" }}>
+        style={{ padding: "14px 14px 14px", flex: "1 1 auto", overflowY: "auto", WebkitOverflowScrolling: "touch", overscrollBehaviorY: "auto" }}>
         {tab === "dashboard" && (
           <Dashboard stats={stats} ipos={ipos} accounts={accounts} onOpenIpo={(id) => setIpoDetail(id)} onOpenHolding={(id) => setHoldingDetail(id)} />
         )}
@@ -2265,7 +2246,7 @@ function Header({ tab, onAdd, onOpenData, onFetchLive, syncing, syncError, cloud
     <div style={{
       background: COLORS.navyDeep,
       padding: "calc(18px + env(safe-area-inset-top)) 14px 14px",
-      position: "relative", zIndex: 10,
+      position: "relative", zIndex: 10, flexShrink: 0,
       display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap",
       rowGap: 10, columnGap: 8, borderBottom: `3px double ${COLORS.gold}`,
     }}>
@@ -2325,7 +2306,7 @@ function BottomNav({ tab, setTab }) {
   ];
   return (
     <div style={{
-      position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)",
+      position: "relative", flexShrink: 0,
       width: "100%", maxWidth: 520, background: COLORS.navyDeep,
       display: "flex", justifyContent: "space-around",
       padding: "10px 6px calc(14px + env(safe-area-inset-bottom))",
