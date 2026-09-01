@@ -386,7 +386,11 @@ function awaitingAllotmentEntry(ipo) {
   const apps = ipo?.applications || [];
   if (!apps.some((a) => (a.allotmentStatus || "Pending") === "Pending")) return false;
   const { date } = allotmentDateOf(ipo);
-  return !!date && date <= todayISO();
+  if (!date) return false;
+  // Show starting from the day after allotment, not on allotment day itself
+  // (results typically arrive late on allotment day).
+  const dayAfter = addClearingDays(date, 1);
+  return dayAfter <= todayISO();
 }
 
 /* Where an issue is in its life, worked out from its own dates rather than from
@@ -3839,7 +3843,53 @@ function IpoFormSheet({ initial, onClose, onSave }) {
     priceBandLow: "", lotSize: "", listingDate: "", listingPrice: "", remarks: "",
   });
   const [errors, setErrors] = useState({});
-  const set = (k) => (e) => { setF({ ...f, [k]: e.target.value }); if (errors[k]) setErrors((e) => ({ ...e, [k]: "" })); };
+
+  /* Instant validation: runs on every keystroke, clears errors as the user
+     fixes them, and shows new ones immediately. The submit handler repeats
+     the same checks as a fallback for edge cases (paste, autofill). */
+  const validate = (field, value, all) => {
+    const v = value; const a = all;
+    switch (field) {
+      case "company": return !v.trim() ? "Required" : "";
+      case "priceBand": {
+        if (v === "") return "";
+        if (Number(v) <= 0) return "Must be greater than 0";
+        if (a.priceBandLow && Number(a.priceBandLow) >= Number(v)) return "Must be greater than low price";
+        return "";
+      }
+      case "priceBandLow": {
+        if (v === "") return "";
+        if (Number(v) <= 0) return "Must be greater than 0";
+        if (a.priceBand && Number(v) >= Number(a.priceBand)) return "Must be less than cutoff price";
+        return "";
+      }
+      case "lotSize": {
+        if (v === "") return "";
+        if (Number(v) <= 0) return "Must be greater than 0";
+        if (!Number.isInteger(Number(v))) return "Must be a whole number";
+        return "";
+      }
+      case "listingPrice": {
+        if (v === "") return "";
+        if (Number(v) <= 0) return "Must be greater than 0";
+        return "";
+      }
+      default: return "";
+    }
+  };
+
+  const change = (k) => (e) => {
+    const v = e.target.value;
+    const next = { ...f, [k]: v };
+    setF(next);
+    const err = validate(k, v, next);
+    // For price fields, cross-validate the counterpart too
+    const cross = {};
+    if (k === "priceBandLow" && next.priceBand) cross.priceBand = validate("priceBand", next.priceBand, next);
+    if (k === "priceBand" && next.priceBandLow) cross.priceBandLow = validate("priceBandLow", next.priceBandLow, next);
+    setErrors((prev) => ({ ...prev, [k]: err, ...cross }));
+  };
+
   return (
     <Sheet title={initial ? "Edit IPO" : "New IPO"} onClose={onClose}>
       {!initial && (
@@ -3852,25 +3902,27 @@ function IpoFormSheet({ initial, onClose, onSave }) {
           <span>Market prices can only sync for IPOs added from the exchange. Use <strong>Add from exchange</strong> in the IPO list header when possible.</span>
         </div>
       )}
-      <Field label="Company Name" error={errors.company}><Input value={f.company} onChange={set("company")} placeholder="e.g. Vishal Mega Mart" /></Field>
+      <Field label="Company Name" error={errors.company}><Input value={f.company} onChange={change("company")} placeholder="e.g. Vishal Mega Mart" /></Field>
       <Field label="Category">
-        <Select value={f.category} onChange={set("category")}>
+        <Select value={f.category} onChange={change("category")}>
           <option>Mainboard</option><option>SME</option>
         </Select>
       </Field>
       <div style={{ display: "flex", gap: 10 }}>
-        <div style={{ flex: 1 }}><Field label="Price Band Low (₹)"><Input type="number" inputMode="numeric" value={f.priceBandLow || ""} onChange={set("priceBandLow")} placeholder="e.g. 270" /></Field></div>
-        <div style={{ flex: 1 }}><Field label="Cutoff Price (₹)" error={errors.priceBand}><Input type="number" inputMode="numeric" value={f.priceBand} onChange={set("priceBand")} placeholder="e.g. 285" /></Field></div>
+        <div style={{ flex: 1 }}><Field label="Price Band Low (₹)" error={errors.priceBandLow}><Input type="number" inputMode="numeric" value={f.priceBandLow || ""} onChange={change("priceBandLow")} placeholder="e.g. 270" /></Field></div>
+        <div style={{ flex: 1 }}><Field label="Cutoff Price (₹)" error={errors.priceBand}><Input type="number" inputMode="numeric" value={f.priceBand} onChange={change("priceBand")} placeholder="e.g. 285" /></Field></div>
       </div>
-      <Field label="Lot Size (shares)" error={errors.lotSize}><Input type="number" inputMode="numeric" value={f.lotSize} onChange={set("lotSize")} placeholder="e.g. 52" /></Field>
+      <Field label="Lot Size (shares)" error={errors.lotSize}><Input type="number" inputMode="numeric" value={f.lotSize} onChange={change("lotSize")} placeholder="e.g. 52" /></Field>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }}>
         <Field label="Open Date" error={errors.openDate}><Input type="date" value={f.openDate || ""} onChange={(e) => {
           const v = e.target.value;
           const bad = v ? isNonTradingDay(v) : false;
-          if (bad) { setErrors((prev) => ({ ...prev, openDate: bad })); setF({ ...f, openDate: v }); return; }
-          setF({ ...f, openDate: v });
-          if (errors.openDate) setErrors((prev) => ({ ...prev, openDate: "" }));
+          const next = { ...f, openDate: v };
+          setF(next);
+          const dateErr = bad || "";
+          const closeErr = (!bad && v && f.closeDate && f.closeDate < v) ? "Must be on or after open date" : (errors.closeDate === "Must be on or after open date" ? "" : errors.closeDate || "");
+          setErrors((prev) => ({ ...prev, openDate: dateErr, closeDate: closeErr }));
         }} /></Field>
         <Field label="Close Date" error={errors.closeDate}><Input type="date" value={f.closeDate || ""} onChange={(e) => {
           const close = e.target.value;
@@ -3886,30 +3938,38 @@ function IpoFormSheet({ initial, onClose, onSave }) {
             next.listingDate = "";
           }
           setF(next);
-          if (errors.closeDate) setErrors((prev) => ({ ...prev, closeDate: "" }));
+          const closeErr = (f.openDate && close && close < f.openDate) ? "Must be on or after open date" : "";
+          setErrors((prev) => ({ ...prev, closeDate: closeErr }));
         }} /></Field>
         <Field label="Allotment (auto)"><Input type="date" value={f.closeDate ? addClearingDays(f.closeDate, 1) : ""} disabled style={{ background: COLORS.bg, color: COLORS.inkSoft }} /></Field>
         <Field label="Listing (auto)"><Input type="date" value={f.closeDate ? addTradingDays(addClearingDays(addClearingDays(f.closeDate, 1), 1), 1) : ""} disabled style={{ background: COLORS.bg, color: COLORS.inkSoft }} /></Field>
       </div>
-      <Field label={f.listingPriceSource === "bse-open" ? "Listing Price - day-one open (from exchange, ₹)" : f.listingPriceSource === "bse-close" ? "Listing Day Close (from exchange, ₹)" : "Listing Price (optional, ₹)"}>
+      <Field label={f.listingPriceSource === "bse-open" ? "Listing Price - day-one open (from exchange, ₹)" : f.listingPriceSource === "bse-close" ? "Listing Day Close (from exchange, ₹)" : "Listing Price (optional, ₹)"} error={errors.listingPrice}>
         <Input
           type="number" inputMode="numeric" value={f.listingPrice}
-          onChange={(e) => setF({ ...f, listingPrice: e.target.value, listingPriceSource: "" })}
+          onChange={(e) => { const v = e.target.value; setF({ ...f, listingPrice: v, listingPriceSource: "" }); setErrors((prev) => ({ ...prev, listingPrice: validate("listingPrice", v, f) })); }}
           placeholder="e.g. 340"
         />
       </Field>
       <Field label="Remarks">
-        <textarea value={f.remarks} onChange={set("remarks")} rows={3} style={{ ...inputStyle, resize: "vertical" }} placeholder="Any notes about this IPO" />
+        <textarea value={f.remarks} onChange={change("remarks")} rows={3} style={{ ...inputStyle, resize: "vertical" }} placeholder="Any notes about this IPO" />
       </Field>
       <PrimaryButton onClick={() => {
         const e = {};
-        if (!f.company) e.company = "Required";
-        if (!f.priceBand) e.priceBand = "Required";
-        if (!f.lotSize) e.lotSize = "Required";
+        if (!f.company.trim()) e.company = "Required";
+        if (!f.priceBand || Number(f.priceBand) <= 0) e.priceBand = "Must be greater than 0";
+        if (f.priceBandLow && Number(f.priceBandLow) <= 0) e.priceBandLow = "Must be greater than 0";
+        if (f.priceBandLow && f.priceBand && Number(f.priceBandLow) >= Number(f.priceBand)) e.priceBandLow = "Must be less than cutoff price";
+        if (!f.lotSize || Number(f.lotSize) <= 0) e.lotSize = "Must be greater than 0";
+        if (f.lotSize && !Number.isInteger(Number(f.lotSize))) e.lotSize = "Must be a whole number";
         if (!f.openDate) e.openDate = "Required";
         else { const bad = isNonTradingDay(f.openDate); if (bad) e.openDate = bad; }
         if (!f.closeDate) e.closeDate = "Required";
-        else { const bad = isNonTradingDay(f.closeDate); if (bad) e.closeDate = bad; }
+        else {
+          const bad = isNonTradingDay(f.closeDate); if (bad) e.closeDate = bad;
+          if (!bad && f.openDate && f.closeDate < f.openDate) e.closeDate = "Must be on or after open date";
+        }
+        if (f.listingPrice && Number(f.listingPrice) <= 0) e.listingPrice = "Must be greater than 0";
         if (Object.keys(e).length) return setErrors(e);
         onSave(trimFields({ ...f, id: f.id || uid() }));
       }}>
@@ -3969,11 +4029,13 @@ function ApplicationFormSheet({ initial, ipo, accounts, onClose, onSave }) {
         <Input value={f.appliedFor} onChange={set("appliedFor")} placeholder="Leave blank if same as account holder" />
       </Field>
       <div style={{ display: "flex", gap: 10 }}>
-        <div style={{ flex: 1 }}><Field label="Lots"><Input type="number" inputMode="numeric" value={f.lots} onChange={(e) => {
+        <div style={{ flex: 1 }}><Field label="Lots" error={errors.lots}><Input type="number" inputMode="numeric" value={f.lots} onChange={(e) => {
           const lots = e.target.value;
           const next = { ...f, lots };
           if (lotSize > 0 && Number(ipo?.priceBand) > 0) next.amountBlocked = String((Number(lots) || 0) * lotSize * Number(ipo.priceBand));
           setF(next);
+          const err = lots === "" ? "" : Number(lots) <= 0 ? "Must be at least 1" : !Number.isInteger(Number(lots)) ? "Must be a whole number" : "";
+          setErrors((prev) => ({ ...prev, lots: err }));
         }} /></Field></div>
         <div style={{ flex: 1 }}><Field label="Amount Blocked (₹)">
           <div style={{ ...inputStyle, background: COLORS.bg, color: COLORS.inkSoft, display: "flex", alignItems: "center" }}>
@@ -4001,14 +4063,24 @@ function ApplicationFormSheet({ initial, ipo, accounts, onClose, onSave }) {
       </Field>
       {f.sold && (
         <div style={{ display: "flex", gap: 10 }}>
-          <div style={{ flex: 1 }}><Field label="Sell Price (₹)"><Input type="number" inputMode="numeric" value={f.sellPrice} onChange={set("sellPrice")} /></Field></div>
+          <div style={{ flex: 1 }}><Field label="Sell Price (₹)" error={errors.sellPrice}><Input type="number" inputMode="numeric" value={f.sellPrice} onChange={(e) => {
+            const v = e.target.value; setF({ ...f, sellPrice: v });
+            setErrors((prev) => ({ ...prev, sellPrice: v && Number(v) <= 0 ? "Must be greater than 0" : "" }));
+          }} /></Field></div>
           <div style={{ flex: 1 }}><Field label="Sell Date"><Input type="date" value={f.sellDate} onChange={set("sellDate")} /></Field></div>
         </div>
       )}
       <Field label="Remarks">
         <textarea value={f.remarks} onChange={set("remarks")} rows={2} style={{ ...inputStyle, resize: "vertical" }} placeholder="e.g. Funds sent by dad, to be returned after listing" />
       </Field>
-      <PrimaryButton onClick={() => { if (!f.accountId) return setErrors({ accountId: "Select an account" }); onSave(trimFields({ ...f, id: f.id || uid() })); }}>
+      <PrimaryButton onClick={() => {
+        const e = {};
+        if (!f.accountId) e.accountId = "Select an account";
+        if (!f.lots || Number(f.lots) <= 0) e.lots = "Must be at least 1";
+        if (f.sold && f.sellPrice && Number(f.sellPrice) <= 0) e.sellPrice = "Must be greater than 0";
+        if (Object.keys(e).length) return setErrors(e);
+        onSave(trimFields({ ...f, id: f.id || uid() }));
+      }}>
         {initial ? "Save Changes" : "Add Application"}
       </PrimaryButton>
     </Sheet>
@@ -4079,7 +4151,21 @@ function TransferFormSheet({ initial, accounts, ipos, onClose, onSave, onDelete 
     }),
     relatedIpoIds: initIds,
   });
-  const set = (k) => (e) => { setF({ ...f, [k]: e.target.value }); if (errors[k]) setErrors((prev) => ({ ...prev, [k]: "" })); };
+  const change = (k) => (e) => {
+    const v = e.target.value;
+    const next = { ...f, [k]: v };
+    setF(next);
+    const errs = {};
+    if (k === "fromAccountId" || k === "toAccountId") {
+      const from = k === "fromAccountId" ? v : f.fromAccountId;
+      const to = k === "toAccountId" ? v : f.toAccountId;
+      errs.toAccountId = (from && to && from === to) ? "Must differ from source" : "";
+      if (k === "fromAccountId") errs.fromAccountId = "";
+    }
+    if (k === "amount") errs.amount = (v && Number(v) <= 0) ? "Must be greater than 0" : "";
+    if (k === "date") errs.date = "";
+    setErrors((prev) => ({ ...prev, ...errs }));
+  };
   const [errors, setErrors] = useState({});
   const [ipoSearch, setIpoSearch] = useState("");
 
@@ -4106,18 +4192,18 @@ function TransferFormSheet({ initial, accounts, ipos, onClose, onSave, onDelete 
   return (
     <Sheet title={initial ? "Edit Transfer" : "New Transfer"} onClose={onClose}>
       <Field label="From Account">
-        <Select value={f.fromAccountId} onChange={set("fromAccountId")}>
+        <Select value={f.fromAccountId} onChange={change("fromAccountId")}>
           {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
         </Select>
       </Field>
-      <Field label="To Account">
-        <Select value={f.toAccountId} onChange={set("toAccountId")}>
+      <Field label="To Account" error={errors.toAccountId}>
+        <Select value={f.toAccountId} onChange={change("toAccountId")}>
           {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
         </Select>
       </Field>
       <div style={{ display: "flex", gap: 10 }}>
-        <div style={{ flex: 1 }}><Field label="Amount (₹)" error={errors.amount}><Input type="number" inputMode="numeric" value={f.amount} onChange={set("amount")} /></Field></div>
-        <div style={{ flex: 1 }}><Field label="Date" error={errors.date}><Input type="date" value={f.date} onChange={set("date")} /></Field></div>
+        <div style={{ flex: 1 }}><Field label="Amount (₹)" error={errors.amount}><Input type="number" inputMode="numeric" value={f.amount} onChange={change("amount")} /></Field></div>
+        <div style={{ flex: 1 }}><Field label="Date" error={errors.date}><Input type="date" value={f.date} onChange={change("date")} /></Field></div>
       </div>
       <Field label="Related IPOs (optional)">
         {f.relatedIpoIds.length > 0 && (
@@ -4165,12 +4251,13 @@ function TransferFormSheet({ initial, accounts, ipos, onClose, onSave, onDelete 
         )}
       </Field>
       <Field label="Remarks">
-        <textarea value={f.remarks} onChange={set("remarks")} rows={2} style={{ ...inputStyle, resize: "vertical" }} placeholder="e.g. Sent for application, to be returned" />
+        <textarea value={f.remarks} onChange={change("remarks")} rows={2} style={{ ...inputStyle, resize: "vertical" }} placeholder="e.g. Sent for application, to be returned" />
       </Field>
       <PrimaryButton onClick={() => {
         const e = {};
         if (!f.fromAccountId || !f.toAccountId) e.fromAccountId = "Select both accounts";
-        if (!f.amount) e.amount = "Required";
+        else if (f.fromAccountId === f.toAccountId) e.toAccountId = "Must differ from source";
+        if (!f.amount || Number(f.amount) <= 0) e.amount = "Must be greater than 0";
         if (!f.date) e.date = "Required";
         if (Object.keys(e).length) return setErrors(e);
         onSave(trimFields({ ...f, relatedIpoId: f.relatedIpoIds[0] || "", id: f.id || uid() }));
