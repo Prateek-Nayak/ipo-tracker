@@ -1861,6 +1861,7 @@ function AppInner() {
 
       <div
         ref={contentRef}
+        className="ledger-scroll"
         onTouchStart={(e) => {
           if (sheetIsOpen) return;
           swipeNav.current = { x: e.touches[0].clientX, y: e.touches[0].clientY, committed: false };
@@ -1876,7 +1877,7 @@ function AppInner() {
           if (dx < 0 && idx < TABS.length - 1) setTab(TABS[idx + 1]);
           if (dx > 0 && idx > 0) setTab(TABS[idx - 1]);
         }}
-        style={{ padding: "14px 14px 14px", flex: "1 1 0", minHeight: 0, overflowY: "auto", WebkitOverflowScrolling: "touch", overscrollBehaviorY: "auto" }}>
+        style={{ padding: "14px 14px 14px", flex: "1 1 auto", overflowY: "auto", WebkitOverflowScrolling: "touch", overscrollBehaviorY: "auto" }}>
         {tab === "dashboard" && (
           <Dashboard stats={stats} ipos={ipos} accounts={accounts} onOpenIpo={(id) => setIpoDetail(id)} onOpenHolding={(id) => setHoldingDetail(id)} />
         )}
