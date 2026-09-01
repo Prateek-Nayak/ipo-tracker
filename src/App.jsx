@@ -418,8 +418,8 @@ function issueStage(x) {
   if (open && open <= today && close && close > today) {
     const daysLeft = Math.ceil((new Date(close + "T00:00:00") - new Date(today + "T00:00:00")) / 86400000);
     return daysLeft === 1
-      ? { label: "CLOSES TOMORROW", color: COLORS.red, bg: COLORS.redSoft }
-      : { label: "CLOSES " + fmtDate(close).toUpperCase().slice(0, 6), color: COLORS.green, bg: COLORS.greenSoft };
+      ? { label: "CLOSES TOMORROW", color: COLORS.gold, bg: COLORS.goldSoft }
+      : { label: "CLOSES " + fmtDate(close).toUpperCase().slice(0, 6), color: COLORS.gold, bg: COLORS.goldSoft };
   }
   if (open && open === today) return { label: "OPEN NOW", color: COLORS.green, bg: COLORS.greenSoft };
 
@@ -1887,7 +1887,7 @@ function AppInner() {
         }}
         style={{
           padding: "14px 14px 0",
-          minHeight: "60vh",
+          minHeight: "calc(100dvh - 140px)",
           transform: swipeDx ? `translateX(${swipeDx * 0.3}px)` : undefined,
           transition: swipeDx ? "none" : "transform 300ms ease-out",
           opacity: swipeDx ? Math.max(0.7, 1 - Math.abs(swipeDx) / 600) : 1,
@@ -3040,6 +3040,7 @@ function IpoCard({ ipo, accounts, onClick }) {
   const conflicts = panConflicts(ipo, accounts);
   const missing = missingIpoFields(ipo);
   const stage = issueStage(ipo);
+  const priceStale = ipo.priceAsOf && hasListed(ipo) && (Date.now() - Date.parse(ipo.priceAsOf)) > 24 * 3600 * 1000;
   // Spine colour reflects where the IPO is overall, without claiming an outcome.
   const spine = tally.pending ? COLORS.gold : tally.won ? COLORS.green : tally.total ? COLORS.red : COLORS.border;
 
@@ -3098,6 +3099,7 @@ function IpoCard({ ipo, accounts, onClick }) {
                 }}>
                   {gainPct >= 0 ? <TrendingUp size={13} color={COLORS.green} /> : <TrendingDown size={13} color={COLORS.red} />}
                   {gainPct.toFixed(1)}% {isMarkedToMarket(ipo) ? "now" : "listing"}
+                  {priceStale && <span title="Price is over a day old" style={{ opacity: 0.6 }}> !</span>}
                 </span>
               )}
             </div>
@@ -5214,6 +5216,7 @@ function LiveIposSheet({ existing, onClose, onImport }) {
                       <div style={{ display: "flex", justifyContent: "space-between", gap: 6, alignItems: "flex-start" }}>
                         <span style={{ fontWeight: 600, fontSize: 14, color: COLORS.ink }}>{r.company}</span>
                         {r.category && <Badge color={COLORS.navy} bg={COLORS.chip}>{r.category}</Badge>}
+                        {stage && <Badge color={stage.color} bg={stage.bg}>{stage.label}</Badge>}
                       </div>
 
                       <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: COLORS.inkSoft, marginTop: 4 }}>
