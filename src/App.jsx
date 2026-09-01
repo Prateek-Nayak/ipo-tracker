@@ -134,7 +134,6 @@ function buildStyles() {
   };
 }
 buildStyles();
-buildStatusMeta();
 paintDocument();
 
 /* The page behind React, which is painted before any of it runs and shows
@@ -474,6 +473,11 @@ function buildStatusMeta() {
     "Not Allotted": { color: COLORS.red,   bg: COLORS.redSoft,   icon: XCircle },
   };
 }
+// The icons it quotes (Clock, CheckCircle2, XCircle) and its own `let`
+// binding both have to have actually run first — this is the earliest point
+// in the file where that's true. applyTheme() rebuilds it again later for
+// the same reason it rebuilds buildStyles(): both quote the live palette.
+buildStatusMeta();
 
 /* "trash" is a table like the others so it syncs, exports and merges without
    special handling. Nothing is ever removed from the ledger outright: a delete
