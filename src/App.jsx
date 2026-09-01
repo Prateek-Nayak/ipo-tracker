@@ -1830,7 +1830,7 @@ function AppInner() {
     <div style={{
       height: "100dvh", background: COLORS.bg, fontFamily: "Inter, sans-serif",
       color: COLORS.ink, maxWidth: 520, margin: "0 auto", position: "relative",
-      display: "flex", flexDirection: "column", overflow: "clip",
+      display: "flex", flexDirection: "column",
     }}>
       <style>{FONT_IMPORT}</style>
 
@@ -1876,7 +1876,7 @@ function AppInner() {
           if (dx < 0 && idx < TABS.length - 1) setTab(TABS[idx + 1]);
           if (dx > 0 && idx > 0) setTab(TABS[idx - 1]);
         }}
-        style={{ padding: "14px 14px 14px", flex: "1 1 auto", overflowY: "auto", WebkitOverflowScrolling: "touch", overscrollBehaviorY: "auto" }}>
+        style={{ padding: "14px 14px 14px", flex: "1 1 0", minHeight: 0, overflowY: "auto", WebkitOverflowScrolling: "touch", overscrollBehaviorY: "auto" }}>
         {tab === "dashboard" && (
           <Dashboard stats={stats} ipos={ipos} accounts={accounts} onOpenIpo={(id) => setIpoDetail(id)} onOpenHolding={(id) => setHoldingDetail(id)} />
         )}
