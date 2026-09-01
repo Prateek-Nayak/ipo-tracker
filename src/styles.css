@@ -13,6 +13,7 @@ html {
 body {
   overscroll-behavior-y: none;
   -webkit-tap-highlight-color: transparent;
+  overflow: hidden;
 }
 button, input, select, textarea {
   touch-action: manipulation;

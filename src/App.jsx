@@ -1106,8 +1106,7 @@ function AppInner() {
      the bottom of the transfers - a list you had never scrolled. Each screen
      now starts where a screen should. */
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    window.scrollTo(0, 0);
+    if (contentRef.current) contentRef.current.scrollTop = 0;
   }, [tab]);
   const [accounts, setAccounts] = useState([]);
   const [ipos, setIpos] = useState([]);
@@ -1829,9 +1828,9 @@ function AppInner() {
 
   return (
     <div style={{
-      minHeight: "100dvh", background: COLORS.bg, fontFamily: "Inter, sans-serif",
-      color: COLORS.ink, paddingBottom: "calc(78px + env(safe-area-inset-bottom))",
-      maxWidth: 520, margin: "0 auto", position: "relative",
+      height: "100dvh", background: COLORS.bg, fontFamily: "Inter, sans-serif",
+      color: COLORS.ink, maxWidth: 520, margin: "0 auto", position: "relative",
+      display: "flex", flexDirection: "column", overflow: "hidden",
     }}>
       <style>{FONT_IMPORT}</style>
 
@@ -1877,7 +1876,7 @@ function AppInner() {
           if (dx < 0 && idx < TABS.length - 1) setTab(TABS[idx + 1]);
           if (dx > 0 && idx > 0) setTab(TABS[idx - 1]);
         }}
-        style={{ padding: "14px 14px 0" }}>
+        style={{ padding: "14px 14px 14px", flex: "1 1 auto", overflowY: "auto", WebkitOverflowScrolling: "touch" }}>
         {tab === "dashboard" && (
           <Dashboard stats={stats} ipos={ipos} accounts={accounts} onOpenIpo={(id) => setIpoDetail(id)} onOpenHolding={(id) => setHoldingDetail(id)} />
         )}
@@ -2249,7 +2248,7 @@ function Header({ tab, onAdd, onOpenData, onFetchLive, syncing, syncError, cloud
     <div style={{
       background: COLORS.navyDeep,
       padding: "calc(18px + env(safe-area-inset-top)) 14px 14px",
-      position: "sticky", top: 0, zIndex: 10,
+      position: "relative", zIndex: 10, flexShrink: 0,
       display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap",
       rowGap: 10, columnGap: 8, borderBottom: `3px double ${COLORS.gold}`,
     }}>
@@ -2309,7 +2308,7 @@ function BottomNav({ tab, setTab }) {
   ];
   return (
     <div style={{
-      position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)",
+      position: "relative", flexShrink: 0,
       width: "100%", maxWidth: 520, background: COLORS.navyDeep,
       display: "flex", justifyContent: "space-around",
       padding: "10px 6px calc(14px + env(safe-area-inset-bottom))",
