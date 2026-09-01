@@ -185,5 +185,10 @@ async function pullCloudLedger() {
 
 export async function bootstrapUpstoxMigration() {
   installApiGuard();
+  // When cloud sync is active, React handles all data enrichment via refreshPricesFrom.
+  // Running the migration alongside races with React's state management:
+  // migration writes to localStorage, React reads it, then cloud overwrites with stale data.
+  const { url, anon } = cloudConfig();
+  if (url && anon) return;
   await migrateLocalAndCloud();
 }

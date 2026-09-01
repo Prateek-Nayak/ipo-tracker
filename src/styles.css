@@ -11,7 +11,6 @@ html {
   text-size-adjust: 100%;
 }
 body {
-  overscroll-behavior-y: none;
   -webkit-tap-highlight-color: transparent;
 }
 button, input, select, textarea {
@@ -20,6 +19,12 @@ button, input, select, textarea {
 }
 * {
   box-sizing: border-box;
+}
+.ledger-scroll {
+  scrollbar-width: none;
+}
+.ledger-scroll::-webkit-scrollbar {
+  display: none;
 }
 @keyframes spin {
   from { transform: rotate(0deg); }

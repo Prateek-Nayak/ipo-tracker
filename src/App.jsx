@@ -12,11 +12,11 @@ const COLORS_LIGHT = {
   surface: "#FFFFFF",
   border: "#D4CFC3",
   ink: "#1C2333",
-  inkSoft: "#4B5563",
+  inkSoft: "#3D4654",
   navy: "#1F3A5F",
   navyDeep: "#152A44",
   gold: "#B08D57",
-  goldSoft: "#F1E6D2",
+  goldSoft: "#F7F0E3",
   green: "#266e43",
   greenSoft: "#E4F0E9",
   red: "#A13D3D",
@@ -85,6 +85,7 @@ function applyTheme(next) {
   themeName = next === "dark" ? "dark" : "light";
   Object.assign(COLORS, themeName === "dark" ? COLORS_DARK : COLORS_LIGHT);
   buildStyles();
+  buildStatusMeta();
   paintDocument();
   try { localStorage.setItem(THEME_KEY, themeName); } catch { /* it still applies for this session */ }
   themeListeners.forEach((fn) => fn());
@@ -386,7 +387,11 @@ function awaitingAllotmentEntry(ipo) {
   const apps = ipo?.applications || [];
   if (!apps.some((a) => (a.allotmentStatus || "Pending") === "Pending")) return false;
   const { date } = allotmentDateOf(ipo);
-  return !!date && date <= todayISO();
+  if (!date) return false;
+  // Show starting from the day after allotment, not on allotment day itself
+  // (results typically arrive late on allotment day).
+  const dayAfter = addClearingDays(date, 1);
+  return dayAfter <= todayISO();
 }
 
 /* Where an issue is in its life, worked out from its own dates rather than from
@@ -394,50 +399,61 @@ function awaitingAllotmentEntry(ipo) {
    the exchange still files it. */
 function issueStage(x) {
   const today = todayISO();
+  const now = new Date();
   const listed = x?.listingDate || x?.listedOn || "";
   const open = x?.openDate || "";
   const close = x?.closeDate || "";
+  const isPast5pm = now.getHours() >= 17;
 
+  // PRIORITY 1: Already listed
   if (listed && listed < today) return { label: "LISTED", color: COLORS.navy, bg: "#EAEFF5" };
   if (listed && listed === today) {
-    // Scheduled to list today is not the same as actually trading: until a
-    // real, positive last-traded price shows up there is nothing to show yet.
     const hasLtp = Number(x?.currentPrice) > 0;
     return hasLtp
       ? { label: "LISTED TODAY", color: COLORS.green, bg: COLORS.greenSoft }
       : { label: "LISTS TODAY", color: COLORS.green, bg: COLORS.greenSoft };
   }
 
-  /* Allotment day sits between the close and the listing, and on the day itself
-     it is the nearer event - so it outranks a listing still days away. */
+  // PRIORITY 2: Open/closing (IPO is accepting applications)
+  if (close && close === today) {
+    return isPast5pm
+      ? { label: "CLOSED TODAY", color: COLORS.inkSoft, bg: "#EFEDE7" }
+      : { label: "CLOSES TODAY", color: COLORS.red, bg: COLORS.redSoft };
+  }
+  if (open && open <= today && close && close > today) {
+    const daysLeft = Math.ceil((new Date(close + "T00:00:00") - new Date(today + "T00:00:00")) / 86400000);
+    return daysLeft === 1
+      ? { label: "CLOSES TOMORROW", color: COLORS.gold, bg: COLORS.goldSoft }
+      : { label: "CLOSES " + fmtDate(close).toUpperCase().slice(0, 6), color: COLORS.gold, bg: COLORS.goldSoft };
+  }
+  if (open && open === today) return { label: "OPEN NOW", color: COLORS.green, bg: COLORS.greenSoft };
+
+  // PRIORITY 3: Upcoming (not yet open)
+  if (open && open > today && (!close || close >= today)) {
+    return { label: "OPENS " + fmtDate(open).toUpperCase().slice(0, 6), color: COLORS.gold, bg: COLORS.goldSoft };
+  }
+
+  // PRIORITY 4: Closed, awaiting allotment/listing
   const allot = allotmentDateOf(x);
-  if (allot.date && allot.date === today) {
-    return {
-      label: allot.exact ? "ALLOTMENT TODAY" : "ALLOTMENT LIKELY TODAY",
-      color: COLORS.gold, bg: COLORS.goldSoft,
-    };
+  if (close && close < today) {
+    if (allot.date && allot.date === today) {
+      return { label: "ALLOTMENT TODAY", color: COLORS.gold, bg: COLORS.goldSoft };
+    }
+    if (allot.date && allot.date > today && (!listed || allot.date <= listed)) {
+      return { label: "ALLOTMENT " + fmtDate(allot.date).toUpperCase().slice(0, 6), color: COLORS.gold, bg: COLORS.goldSoft };
+    }
+    if (listed && listed > today) {
+      return { label: "LISTS " + fmtDate(listed).toUpperCase().slice(0, 6), color: COLORS.navy, bg: "#EAEFF5" };
+    }
+    const expected = listingDateOf(x);
+    if (expected.date) {
+      if (expected.date === today) return { label: "LISTS TODAY", color: COLORS.green, bg: COLORS.greenSoft };
+      if (expected.date > today) return { label: "LISTS ~" + fmtDate(expected.date).toUpperCase().slice(0, 6), color: COLORS.navy, bg: "#EAEFF5" };
+      return { label: "LISTING DUE", color: COLORS.gold, bg: COLORS.goldSoft };
+    }
+    return { label: "CLOSED", color: COLORS.inkSoft, bg: "#EFEDE7" };
   }
 
-  if (listed && listed > today) return { label: "LISTS " + fmtDate(listed).toUpperCase().slice(0, 6), color: COLORS.navy, bg: "#EAEFF5" };
-
-  /* With no listing date on record, T+3 from the close says when to expect one.
-     Never treated as proof it has listed - only as what is coming. */
-  const expected = listingDateOf(x);
-  // Strictly past: on the closing day itself the close is the immediate event,
-  // and saying when it might list instead would bury the deadline.
-  if (!listed && expected.date && close && close < today) {
-    if (expected.date === today) return { label: "LISTS LIKELY TODAY", color: COLORS.green, bg: COLORS.greenSoft };
-    if (expected.date > today) return { label: "LISTS ~" + fmtDate(expected.date).toUpperCase().slice(0, 6), color: COLORS.navy, bg: "#EAEFF5" };
-    return { label: "LISTING DUE", color: COLORS.gold, bg: COLORS.goldSoft };
-  }
-
-  if (allot.date && allot.date > today && close && close < today) {
-    return { label: "ALLOTMENT " + fmtDate(allot.date).toUpperCase().slice(0, 6), color: COLORS.gold, bg: COLORS.goldSoft };
-  }
-  if (close && close < today) return { label: "CLOSED", color: COLORS.inkSoft, bg: "#EFEDE7" };
-  if (close && close === today) return { label: "CLOSES TODAY", color: COLORS.red, bg: COLORS.redSoft };
-  if (open && open <= today) return { label: "OPEN NOW", color: COLORS.green, bg: COLORS.greenSoft };
-  if (open && open > today) return { label: "UPCOMING", color: COLORS.gold, bg: COLORS.goldSoft };
   return null;
 }
 const fmtDate = (d) => {
@@ -448,12 +464,20 @@ const fmtDate = (d) => {
 const fmtTime = (d) => (d ? d.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }) : "");
 
 const ALLOTMENT_STATUSES = ["Pending", "Allotted", "Partial", "Not Allotted"];
-const STATUS_META = {
-  Pending: { color: COLORS.gold, bg: COLORS.goldSoft, icon: Clock },
-  Allotted: { color: COLORS.green, bg: COLORS.greenSoft, icon: CheckCircle2 },
-  Partial: { color: COLORS.gold, bg: COLORS.goldSoft, icon: CheckCircle2 },
-  "Not Allotted": { color: COLORS.red, bg: COLORS.redSoft, icon: XCircle },
-};
+let STATUS_META = {};
+function buildStatusMeta() {
+  STATUS_META = {
+    Pending:        { color: COLORS.gold,  bg: COLORS.goldSoft,  icon: Clock },
+    Allotted:       { color: COLORS.green, bg: COLORS.greenSoft, icon: CheckCircle2 },
+    Partial:        { color: COLORS.gold,  bg: COLORS.goldSoft,  icon: CheckCircle2 },
+    "Not Allotted": { color: COLORS.red,   bg: COLORS.redSoft,   icon: XCircle },
+  };
+}
+// The icons it quotes (Clock, CheckCircle2, XCircle) and its own `let`
+// binding both have to have actually run first — this is the earliest point
+// in the file where that's true. applyTheme() rebuilds it again later for
+// the same reason it rebuilds buildStyles(): both quote the live palette.
+buildStatusMeta();
 
 /* "trash" is a table like the others so it syncs, exports and merges without
    special handling. Nothing is ever removed from the ledger outright: a delete
@@ -583,6 +607,12 @@ async function gotrue(path, options = {}) {
 
 async function cloudSignUp(email, password) {
   return gotrue("signup", { method: "POST", body: JSON.stringify({ email, password }) });
+}
+async function cloudResetPassword(email) {
+  return gotrue("recover", { method: "POST", body: JSON.stringify({ email }) });
+}
+async function cloudUpdatePassword(accessToken, password) {
+  return gotrue("user", { method: "PUT", headers: { Authorization: `Bearer ${accessToken}` }, body: JSON.stringify({ password }) });
 }
 async function cloudGetUser(accessToken) {
   return gotrue("user", { headers: { Authorization: `Bearer ${accessToken}` } });
@@ -771,23 +801,20 @@ function mergeIpos(current, incoming) {
    hairline, on a background barely off the card - a filled block of colour on
    every row is what made a list of IPOs read as a colour chart. */
 function Badge({ children, color, bg, strong }) {
-  /* Strong badges (Allotted / Not Allotted) use the same green/red as the
-     allotment progress bar. At 8px font on a transparent background, those
-     colours look washed - so give them a light tinted fill, exactly as the
-     bar itself is a solid block of colour. */
-  const emphasis = strong && !isDark();
-  const badgeBg = emphasis
-    ? (color === COLORS.green ? COLORS.greenSoft : color === COLORS.red ? COLORS.redSoft : "transparent")
-    : "transparent";
+  const dark = isDark();
+  const emphasis = strong && !dark;
+  /* In light mode every badge gets its tinted fill so the colour reads as
+     clearly as the allotment bar it sits beside. In dark mode the soft fills
+     are too close to the surface to help, so badges stay transparent. */
+  const fill = dark ? "transparent" : (bg || "transparent");
   return (
     <span
       style={{
-        color, background: badgeBg,
+        color, background: fill,
         border: `1px solid ${color}`,
         fontFamily: "'JetBrains Mono', monospace",
-        fontSize: 8, fontWeight: emphasis ? 700 : 600, letterSpacing: 0.3,
+        fontSize: 8, fontWeight: emphasis ? 700 : 650, letterSpacing: 0.3,
         padding: "2px 7px", borderRadius: 5, whiteSpace: "nowrap",
-        opacity: emphasis ? 1 : 0.9,
       }}
     >
       {children}
@@ -1065,6 +1092,7 @@ function AppInner() {
   const [authMode, setAuthMode] = useState("login");
   const [linkBusy, setLinkBusy] = useState(() => cloudEnabled() && !!readAuthHash());
   const [linkNotice, setLinkNotice] = useState("");
+  const [recoveryToken, setRecoveryToken] = useState("");
 
   /* Which tab you were on survives a reload. The app is a single screen with no
      routing, so without this every refresh - and every return from the home
@@ -1088,8 +1116,7 @@ function AppInner() {
      the bottom of the transfers - a list you had never scrolled. Each screen
      now starts where a screen should. */
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    window.scrollTo(0, 0);
+    if (contentRef.current) contentRef.current.scrollTop = 0;
   }, [tab]);
   const [accounts, setAccounts] = useState([]);
   const [ipos, setIpos] = useState([]);
@@ -1118,6 +1145,7 @@ function AppInner() {
   const [transferSheet, setTransferSheet] = useState(null); // { transfer }
   const [ipoDetail, setIpoDetail] = useState(null);         // ipo id
   const [acctDetail, setAcctDetail] = useState(null);       // account id
+  const [holdingDetail, setHoldingDetail] = useState(null); // ipo id (for holding view)
   const [dataSheetOpen, setDataSheetOpen] = useState(false);
   const [bulkApplyFor, setBulkApplyFor] = useState(null);   // ipo id
   const [bulkStatusFor, setBulkStatusFor] = useState(null); // ipo id
@@ -1127,6 +1155,9 @@ function AppInner() {
 
   const skipNextAutoSync = useRef(true);
   const pricedOnce = useRef(false);
+  const swipeNav = useRef(null);
+  const [swipeDx, setSwipeDx] = useState(0);
+  const contentRef = useRef(null);
   const [, bumpHolidays] = useState(0);
 
   // The palette is mutated in place, so a theme change needs a nudge to redraw.
@@ -1171,7 +1202,7 @@ function AppInner() {
   // Keep React in step with the module-level session, which the token refresh
   // logic and any 401 response can also change.
   useEffect(() => {
-    const listener = (s) => setSessionState(s);
+    const listener = (s) => { setSessionState(s); if (!s) { setLinkNotice(""); setRecoveryToken(""); } };
     sessionListeners.add(listener);
     return () => { sessionListeners.delete(listener); };
   }, []);
@@ -1184,9 +1215,18 @@ function AppInner() {
     if (!params) { setLinkBusy(false); return; }
 
     const token = params.get("access_token");
+    const type = params.get("type");
     if (!token) {
       const err = params.get("error_description") || params.get("error");
       setLinkNotice((err || "That link is no longer valid.").replace(/\+/g, " "));
+      setLinkBusy(false);
+      return;
+    }
+
+    // Password recovery: don't auto-sign-in, show the reset form instead
+    if (type === "recovery") {
+      setRecoveryToken(token);
+      setAuthMode("login");
       setLinkBusy(false);
       return;
     }
@@ -1238,7 +1278,7 @@ function AppInner() {
       }
 
       const owner = localOwner();
-      const localIsOurs = !owner || owner === userId;
+      const localIsOurs = owner === userId;
       const empty = { accounts: [], ipos: [], transfers: [], trash: [] };
 
       apply(localIsOurs ? local : empty);
@@ -1310,7 +1350,7 @@ function AppInner() {
      still see current state; re-registering on every state change would drop
      the buffered history entry. */
   const backLayers = { appSheet, bulkApplyFor, bulkStatusFor, ipoSheet, acctSheet,
-    transferSheet, liveOpen, dataSheetOpen, ipoDetail, acctDetail, tab };
+    transferSheet, liveOpen, dataSheetOpen, ipoDetail, acctDetail, holdingDetail, tab };
 
   /* A sheet covers the screen but the page behind it still scrolls, so dragging
      anywhere outside the panel moved the list underneath and you came back to
@@ -1328,20 +1368,20 @@ function AppInner() {
 
   const closeTopLayer = useCallback(() => {
     const v = backRef.current;
-    // Innermost first: child sheets close before the parent beneath them.
-    // Dismiss confirm modal if open
+    const clear = (key, setter, val) => { setter(val !== undefined ? val : null); backRef.current = { ...backRef.current, [key]: val !== undefined ? val : null }; return true; };
     if (confirmDismissRef.current) { confirmDismissRef.current(); return true; }
-    if (v.appSheet) { setAppSheet(null); return true; }
-    if (v.bulkApplyFor) { setBulkApplyFor(null); return true; }
-    if (v.bulkStatusFor) { setBulkStatusFor(null); return true; }
-    if (v.ipoSheet) { setIpoSheet(null); return true; }
-    if (v.acctSheet) { setAcctSheet(null); return true; }
-    if (v.acctDetail) { setAcctDetail(null); return true; }
-    if (v.transferSheet) { setTransferSheet(null); return true; }
-    if (v.liveOpen) { setLiveOpen(false); return true; }
-    if (v.dataSheetOpen) { setDataSheetOpen(false); return true; }
-    if (v.ipoDetail) { setIpoDetail(null); return true; }
-    if (v.tab !== "dashboard") { setTab("dashboard"); return true; }
+    if (v.appSheet) return clear("appSheet", setAppSheet);
+    if (v.bulkApplyFor) return clear("bulkApplyFor", setBulkApplyFor);
+    if (v.bulkStatusFor) return clear("bulkStatusFor", setBulkStatusFor);
+    if (v.ipoSheet) return clear("ipoSheet", setIpoSheet);
+    if (v.acctSheet) return clear("acctSheet", setAcctSheet);
+    if (v.acctDetail) return clear("acctDetail", setAcctDetail);
+    if (v.holdingDetail) return clear("holdingDetail", setHoldingDetail);
+    if (v.transferSheet) return clear("transferSheet", setTransferSheet);
+    if (v.liveOpen) return clear("liveOpen", setLiveOpen, false);
+    if (v.dataSheetOpen) return clear("dataSheetOpen", setDataSheetOpen, false);
+    if (v.ipoDetail) return clear("ipoDetail", setIpoDetail);
+    if (v.tab !== "dashboard") { setTab("dashboard"); backRef.current = { ...backRef.current, tab: "dashboard" }; return true; }
     return false;
   }, []);
 
@@ -1384,7 +1424,7 @@ function AppInner() {
     try {
       const state = { accounts, ipos, transfers, trash };
       // Never let a device that has nothing wipe a cloud that has something.
-      // But if trash has entries, the user intentionally deleted everything.
+      // But if trash has entries, the user intentionally deleted their data.
       if (isEmptyState(state) && !(trash || []).length) {
         const remote = await cloudLoad();
         if (!isEmptyState(remote)) {
@@ -1442,6 +1482,7 @@ function AppInner() {
       const incomplete = (list) =>
         list.filter((i) =>
           !i.lotSize || !i.closeDate || !i.openDate || isBlank(i.priceBand) ||
+          (!i.allotmentDate && i.closeDate) ||
           (hasListed(i) && isBlank(i.listingPrice)));
       const asking = incomplete(list);
       const keys = asking
@@ -1461,7 +1502,10 @@ function AppInner() {
       const bust = opts.silent
         ? `&at=${Math.floor(Date.now() / 30000)}`
         : `&at=${Date.now()}`;
-      const res = await fetch(`/api/listings?from=${from}${bust}&keys=${encodeURIComponent(keys)}`);
+      // Send ISINs from listed IPOs in ledger that have an ISIN, so the API can fetch their LTP
+      const extraIsins = list.filter((i) => i.isin && hasListed(i)).map((i) => i.isin).join(",");
+      const isinsParam = extraIsins ? `&isins=${encodeURIComponent(extraIsins)}` : "";
+      const res = await fetch(`/api/listings?from=${from}${bust}&keys=${encodeURIComponent(keys)}${isinsParam}`);
       const text = await res.text();
       let data = {};
       try { data = JSON.parse(text); } catch { /* handled next */ }
@@ -1478,7 +1522,16 @@ function AppInner() {
 
       const next = list.map((ipo) => {
         const hit = byKey.get(nameKey(ipo.company));
-        if (!hit) return ipo;
+        // If no name match, check if we got an extra LTP for this IPO's ISIN
+        if (!hit) {
+          const extraPrice = ipo.isin && data.extraLtp ? data.extraLtp[ipo.isin] : null;
+          if (extraPrice != null) {
+            matched++;
+            updated++;
+            return { ...ipo, currentPrice: String(extraPrice), priceAsOf: asOf };
+          }
+          return ipo;
+        }
         matched++;
         /* BSE is authoritative here, so its values replace what is on record
            rather than only filling gaps. */
@@ -1518,18 +1571,14 @@ function AppInner() {
            actually loaded; a failed fetch must not wipe every listing date. */
         if (hit.listedOn) {
           patch.listingDate = hit.listedOn;
-        } else if (listingsLoaded) {
-          /* BSE's listings feed records completed listings only, so an issue
-             missing from it has not listed yet. Prices therefore cannot exist
-             for it, whatever is on record. */
+        } else if (listingsLoaded && !ipo.listingDate) {
+          // Only clear prices when the exchange has no listing record AND
+          // the local record doesn't have a listing date either.
+          // If the local record has a listing date, keep existing prices.
           patch.listingPrice = "";
           patch.listingPriceSource = "";
           patch.listingClosePrice = "";
           patch.currentPrice = "";
-          /* The date is different: one in the future is a scheduled listing BSE
-             has no row for yet, and clearing it would throw away the most useful
-             thing known about the issue. Only a date in the past contradicts the
-             exchange having no record, so only that is cleared. */
           if (ipo.listingDate && ipo.listingDate < todayISO()) patch.listingDate = "";
         }
         if (hit.openDate) patch.openDate = hit.openDate;
@@ -1542,6 +1591,8 @@ function AppInner() {
         if (hit.priceMax != null) patch.priceBand = String(hit.priceMax);
         if (hit.priceMin != null) patch.priceBandLow = String(hit.priceMin);
         if (hit.lotSize != null) patch.lotSize = String(hit.lotSize);
+        if (hit.isin) patch.isin = hit.isin;
+        if (hit.shortName || hit.symbol) patch.symbol = hit.shortName || hit.symbol;
 
         const merged = { ...ipo, ...patch };
 
@@ -1619,6 +1670,40 @@ function AppInner() {
     pricedOnce.current = true;
     refreshPrices({ silent: true });
   }, [reconciled, ipos, refreshPrices]);
+
+  /* Fill in missing allotment/listing dates for open/upcoming IPOs from the
+     ipos API. The listings API only has listed+closed ones, so active IPOs
+     imported before the fix need this one-time enrichment. */
+  const enrichedDatesOnce = useRef(false);
+  useEffect(() => {
+    if (!reconciled || enrichedDatesOnce.current) return;
+    const needDates = ipos.filter((i) => i.closeDate && (!i.allotmentDate || !i.listingDate) && !hasListed(i));
+    if (!needDates.length) return;
+    enrichedDatesOnce.current = true;
+    (async () => {
+      try {
+        const res = await fetch("/api/ipos");
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!Array.isArray(data.ipos)) return;
+        const byName = new Map(data.ipos.map((r) => [nameKey(r.company), r]));
+        let changed = false;
+        const next = ipos.map((ipo) => {
+          if (ipo.allotmentDate && ipo.listingDate) return ipo;
+          if (hasListed(ipo)) return ipo;
+          const hit = byName.get(nameKey(ipo.company));
+          if (!hit) return ipo;
+          const patch = {};
+          if (!ipo.allotmentDate && hit.allotmentDate) patch.allotmentDate = hit.allotmentDate;
+          if (!ipo.listingDate && hit.listingDate) patch.listingDate = hit.listingDate;
+          if (!Object.keys(patch).length) return ipo;
+          changed = true;
+          return { ...ipo, ...patch };
+        });
+        if (changed) persistIpos(next);
+      } catch { /* not worth failing over */ }
+    })();
+  }, [reconciled, ipos, persistIpos]);
 
   /* The figure on the cards is the last traded price, so it goes stale simply
      by being looked at later. Coming back to the app is the moment that shows,
@@ -1746,16 +1831,16 @@ function AppInner() {
   if (linkBusy) return <LedgerSkeleton text="SIGNING YOU IN" tab={tab} />;
 
   if (cloudEnabled() && !session) {
-    return <AuthScreen mode={authMode} setMode={setAuthMode} notice={linkNotice} />;
+    return <AuthScreen mode={authMode} setMode={setAuthMode} notice={linkNotice} recoveryToken={recoveryToken} />;
   }
 
   if (!loaded) return <LedgerSkeleton text="LOADING YOUR LEDGER" tab={tab} />;
 
   return (
     <div style={{
-      minHeight: "100dvh", background: COLORS.bg, fontFamily: "Inter, sans-serif",
-      color: COLORS.ink, paddingBottom: "calc(78px + env(safe-area-inset-bottom))",
-      maxWidth: 520, margin: "0 auto", position: "relative",
+      height: "100dvh", background: COLORS.bg, fontFamily: "Inter, sans-serif",
+      color: COLORS.ink, maxWidth: 520, margin: "0 auto", position: "relative",
+      display: "flex", flexDirection: "column",
     }}>
       <style>{FONT_IMPORT}</style>
 
@@ -1777,33 +1862,43 @@ function AppInner() {
         <div style={{
           background: COLORS.goldSoft, display: "flex", alignItems: "center", justifyContent: "center",
           gap: 6, padding: "6px 14px", fontSize: 11.5, fontWeight: 600, color: COLORS.ink,
-          fontFamily: "Inter, sans-serif",
+          fontFamily: "Inter, sans-serif", flexShrink: 0,
         }}>
           <CloudOff size={13} color={COLORS.gold} />
           <span>You're offline - showing cached data</span>
         </div>
       )}
 
-      <div style={{ padding: "14px 14px 0" }}>
+      <div
+        ref={contentRef}
+        className="ledger-scroll"
+        onTouchStart={(e) => {
+          if (sheetIsOpen) return;
+          swipeNav.current = { x: e.touches[0].clientX, y: e.touches[0].clientY, committed: false };
+        }}
+        onTouchEnd={(e) => {
+          const s = swipeNav.current;
+          if (!s || sheetIsOpen) { swipeNav.current = null; return; }
+          swipeNav.current = null;
+          const dx = e.changedTouches[0].clientX - s.x;
+          const dy = e.changedTouches[0].clientY - s.y;
+          if (Math.abs(dx) < 60 || Math.abs(dy) > Math.abs(dx) * 0.5) return;
+          const idx = TABS.indexOf(tab);
+          if (dx < 0 && idx < TABS.length - 1) setTab(TABS[idx + 1]);
+          if (dx > 0 && idx > 0) setTab(TABS[idx - 1]);
+        }}
+        style={{ padding: "14px 14px 14px", flex: "1 1 auto", overflowY: "auto", WebkitOverflowScrolling: "touch", overscrollBehaviorY: "auto" }}>
         {tab === "dashboard" && (
-          <Dashboard stats={stats} ipos={ipos} accounts={accounts} onOpenIpo={(id) => setIpoDetail(id)} />
+          <Dashboard stats={stats} ipos={ipos} accounts={accounts} onOpenIpo={(id) => setIpoDetail(id)} onOpenHolding={(id) => setHoldingDetail(id)} />
         )}
         {tab === "ipos" && (
-          <IpoList
-            ipos={ipos} accounts={accounts}
-            onOpen={(id) => setIpoDetail(id)}
-          />
+          <IpoList ipos={ipos} accounts={accounts} onOpen={(id) => setIpoDetail(id)} />
         )}
         {tab === "accounts" && (
-          <AccountList
-            transfers={transfers}
-            accounts={accounts} ipos={ipos}
-            onOpen={(id) => setAcctDetail(id)}
-          />
+          <AccountList transfers={transfers} accounts={accounts} ipos={ipos} onOpen={(id) => setAcctDetail(id)} />
         )}
         {tab === "transfers" && (
-          <TransfersScreen
-            transfers={transfers} accounts={accounts} ipos={ipos}
+          <TransfersScreen transfers={transfers} accounts={accounts} ipos={ipos}
             onEdit={(transfer) => setTransferSheet({ transfer })}
             onDelete={(id) => {
               const gone = transfers.find((x) => x.id === id);
@@ -1893,7 +1988,7 @@ function AppInner() {
         <BulkApplySheet
           ipo={ipos.find((i) => i.id === bulkApplyFor)}
           accounts={accounts}
-          onClose={() => { setBulkApplyFor(null); }}
+          onClose={() => { setBulkApplyFor(null); backRef.current = { ...backRef.current, bulkApplyFor: null }; }}
           onSave={(newApps) => {
             persistIpos(ipos.map((i) => (i.id === bulkApplyFor
               ? { ...i, applications: [...(i.applications || []), ...newApps] }
@@ -1907,7 +2002,7 @@ function AppInner() {
         <BulkStatusSheet
           ipo={ipos.find((i) => i.id === bulkStatusFor)}
           accounts={accounts}
-          onClose={() => { setBulkStatusFor(null); }}
+          onClose={() => { setBulkStatusFor(null); backRef.current = { ...backRef.current, bulkStatusFor: null }; }}
           onSave={(draft) => {
             persistIpos(ipos.map((i) => (i.id === bulkStatusFor
               ? {
@@ -1930,6 +2025,14 @@ function AppInner() {
             setLiveOpen(false);
             setTab("ipos");
           }}
+        />
+      )}
+
+      {holdingDetail && (
+        <HoldingDetailSheet
+          ipo={ipos.find((i) => i.id === holdingDetail)}
+          accounts={accounts}
+          onClose={() => setHoldingDetail(null)}
         />
       )}
 
@@ -2006,13 +2109,14 @@ function AppInner() {
           onRefreshPrices={refreshPrices}
           onSignOut={async () => {
             setDataSheetOpen(false);
-            // Clear ALL local data and React state to prevent leaking to next account
-            TABLES.forEach((k) => saveTable(k, []));
-            setAccounts([]); setIpos([]); setTransfers([]); setTrash([]);
-            setLocalOwner(null);
-            // Also clear session so migration script doesn't use stale credentials
-            try { localStorage.removeItem(STORAGE_PREFIX + "session"); } catch {}
             await cloudSignOut();
+            // Batch all clearing into one update, skip the resulting auto-sync
+            skipNextAutoSync.current = true;
+            TABLES.forEach((k) => saveTable(k, []));
+            try { localStorage.removeItem(STORAGE_PREFIX + "owner"); } catch {}
+            // Don't clear React state — cloudSignOut sets userId to null which
+            // triggers the initial load effect to re-run with empty local data.
+            // Clearing state here races with auto-sync.
           }}
         />
       )}
@@ -2155,7 +2259,7 @@ function Header({ tab, onAdd, onOpenData, onFetchLive, syncing, syncError, cloud
     <div style={{
       background: COLORS.navyDeep,
       padding: "calc(18px + env(safe-area-inset-top)) 14px 14px",
-      position: "sticky", top: 0, zIndex: 10,
+      position: "relative", zIndex: 10, flexShrink: 0,
       display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap",
       rowGap: 10, columnGap: 8, borderBottom: `3px double ${COLORS.gold}`,
     }}>
@@ -2215,7 +2319,7 @@ function BottomNav({ tab, setTab }) {
   ];
   return (
     <div style={{
-      position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)",
+      position: "relative", flexShrink: 0,
       width: "100%", maxWidth: 520, background: COLORS.navyDeep,
       display: "flex", justifyContent: "space-around",
       padding: "10px 6px calc(14px + env(safe-area-inset-bottom))",
@@ -2241,7 +2345,7 @@ function BottomNav({ tab, setTab }) {
 /* ---------------------------------------------------------
    SCREENS
 ---------------------------------------------------------- */
-function Dashboard({ stats, ipos, accounts, onOpenIpo }) {
+function Dashboard({ stats, ipos, accounts, onOpenIpo, onOpenHolding }) {
   const holding = ipos.filter((ipo) =>
     (ipo.applications || []).some((a) =>
       (a.allotmentStatus === "Allotted" || a.allotmentStatus === "Partial") && !a.sold
@@ -2372,7 +2476,7 @@ function Dashboard({ stats, ipos, accounts, onOpenIpo }) {
             const pnlPct = investedValue > 0 && currentPrice > 0 ? ((currentPrice - entryPrice) / entryPrice) * 100 : null;
             const isUp = pnl >= 0;
             return (
-              <div key={ipo.id} onClick={() => onOpenIpo(ipo.id)} style={{
+              <div key={ipo.id} onClick={() => onOpenHolding(ipo.id)} style={{
                 background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 10,
                 padding: "10px 12px", cursor: "pointer",
               }}>
@@ -2924,6 +3028,7 @@ function IpoCard({ ipo, accounts, onClick }) {
   const conflicts = panConflicts(ipo, accounts);
   const missing = missingIpoFields(ipo);
   const stage = issueStage(ipo);
+  const priceStale = ipo.priceAsOf && hasListed(ipo) && (Date.now() - Date.parse(ipo.priceAsOf)) > 24 * 3600 * 1000;
   // Spine colour reflects where the IPO is overall, without claiming an outcome.
   const spine = tally.pending ? COLORS.gold : tally.won ? COLORS.green : tally.total ? COLORS.red : COLORS.border;
 
@@ -2982,6 +3087,7 @@ function IpoCard({ ipo, accounts, onClick }) {
                 }}>
                   {gainPct >= 0 ? <TrendingUp size={13} color={COLORS.green} /> : <TrendingDown size={13} color={COLORS.red} />}
                   {gainPct.toFixed(1)}% {isMarkedToMarket(ipo) ? "now" : "listing"}
+                  {priceStale && <span title="Price is over a day old" style={{ opacity: 0.6 }}> !</span>}
                 </span>
               )}
             </div>
@@ -3014,7 +3120,7 @@ function IpoDetailSheet({ ipo, accounts, onClose, onDeleteIpo, onEditIpo, onSave
   const saveNote = () => { onSaveNote(ipo.id, note); setSavedNote(note); };
 
   const allot = allotmentDateOf(ipo);
-  const allotValue = (!hasListed(ipo) && !allotmentSettled(ipo) && allot.date)
+  const allotValue = allot.date
     ? `${fmtDate(allot.date)}${allot.exact ? "" : " (expected)"}`
     : "--";
   const listExpected = listingDateOf(ipo);
@@ -3319,6 +3425,85 @@ function AccountList({ accounts, ipos, transfers = [], onOpen }) {
   );
 }
 
+function HoldingDetailSheet({ ipo, accounts, onClose }) {
+  if (!ipo) return null;
+  const entryPrice = Number(ipo.priceBand) || 0;
+  const currentPrice = Number(ipo.currentPrice) || Number(ipo.listingPrice) || 0;
+  const lotSize = Number(ipo.lotSize) || 1;
+  const holdingApps = (ipo.applications || []).filter((a) =>
+    (a.allotmentStatus === "Allotted" || a.allotmentStatus === "Partial") && !a.sold);
+  const totalShares = holdingApps.reduce((s, a) => s + (Number(a.sharesAllotted) || 0), 0);
+  const totalLots = holdingApps.reduce((s, a) => s + (Math.round((Number(a.sharesAllotted) || 0) / lotSize) || 1), 0);
+  const investedValue = totalShares * entryPrice;
+  const currentValue = currentPrice > 0 ? totalShares * currentPrice : 0;
+  const pnl = currentPrice > 0 ? currentValue - investedValue : 0;
+  const pnlPct = investedValue > 0 && currentPrice > 0 ? ((currentPrice - entryPrice) / entryPrice) * 100 : null;
+  const isUp = pnl >= 0;
+
+  return (
+    <Sheet title={ipo.company} onClose={onClose}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
+        <div style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: "10px 12px" }}>
+          <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 16, fontWeight: 700, color: COLORS.ink }}>₹{entryPrice}</div>
+          <div style={{ fontSize: 11, color: COLORS.inkSoft, fontFamily: "Inter, sans-serif" }}>Entry Price</div>
+        </div>
+        <div style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: "10px 12px" }}>
+          <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 16, fontWeight: 700, color: currentPrice > 0 ? COLORS.ink : COLORS.inkSoft }}>{currentPrice > 0 ? `₹${currentPrice}` : "--"}</div>
+          <div style={{ fontSize: 11, color: COLORS.inkSoft, fontFamily: "Inter, sans-serif" }}>Current Price</div>
+        </div>
+        <div style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: "10px 12px" }}>
+          <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 16, fontWeight: 700, color: COLORS.ink }}>{inr(investedValue)}</div>
+          <div style={{ fontSize: 11, color: COLORS.inkSoft, fontFamily: "Inter, sans-serif" }}>Invested</div>
+        </div>
+        <div style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: "10px 12px" }}>
+          <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 16, fontWeight: 700, color: currentPrice > 0 ? (isUp ? COLORS.green : COLORS.red) : COLORS.inkSoft }}>
+            {currentPrice > 0 ? `${isUp ? "+" : ""}${inr(pnl)}` : "--"}
+          </div>
+          <div style={{ fontSize: 11, color: COLORS.inkSoft, fontFamily: "Inter, sans-serif" }}>
+            P&L{pnlPct !== null ? ` (${isUp ? "+" : ""}${pnlPct.toFixed(1)}%)` : ""}
+          </div>
+        </div>
+      </div>
+
+      <div style={{
+        background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 10,
+        padding: "10px 12px", marginBottom: 16, fontFamily: "'JetBrains Mono', monospace", fontSize: 12,
+        display: "flex", justifyContent: "space-between", color: COLORS.inkSoft,
+      }}>
+        <span>{totalLots} lot{totalLots === 1 ? "" : "s"} · {totalShares} shares</span>
+        {currentPrice > 0 && <span style={{ color: COLORS.ink, fontWeight: 700 }}>{inr(currentValue)}</span>}
+      </div>
+
+      <SectionLabel>Holding Accounts ({holdingApps.length})</SectionLabel>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {holdingApps.map((app) => {
+          const accountName = accounts.find((a) => a.id === app.accountId)?.name || "Unknown";
+          const shares = Number(app.sharesAllotted) || 0;
+          const lots = Math.round(shares / lotSize) || 1;
+          const appPnl = currentPrice > 0 ? shares * (currentPrice - entryPrice) : 0;
+          return (
+            <div key={app.id} style={{
+              background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: "9px 10px",
+            }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span style={{ fontFamily: "Inter, sans-serif", fontWeight: 600, fontSize: 13.5, color: COLORS.ink }}>{accountName}</span>
+                {currentPrice > 0 && (
+                  <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, fontWeight: 700, color: appPnl >= 0 ? COLORS.green : COLORS.red }}>
+                    {appPnl >= 0 ? "+" : ""}{inr(appPnl)}
+                  </span>
+                )}
+              </div>
+              <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11.5, color: COLORS.inkSoft, marginTop: 3 }}>
+                {lots} lot{lots === 1 ? "" : "s"} · {inr(shares * entryPrice)} invested
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </Sheet>
+  );
+}
+
 function AccountDetailSheet({ account, ipos, transfers, accounts, onClose, onEdit, onDelete }) {
   const confirm = useConfirm();
   if (!account) return null;
@@ -3397,7 +3582,7 @@ function AccountDetailSheet({ account, ipos, transfers, accounts, onClose, onEdi
       </div>
       <SectionLabel>IPO Applications ({apps.length})</SectionLabel>
       {apps.length === 0 ? (
-        <EmptyState text="No applications from this account yet." />
+        <div style={{ marginBottom: 14 }}><EmptyState text="No applications from this account yet." /></div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
           {apps.map((app) => {
@@ -3667,7 +3852,53 @@ function IpoFormSheet({ initial, onClose, onSave }) {
     priceBandLow: "", lotSize: "", listingDate: "", listingPrice: "", remarks: "",
   });
   const [errors, setErrors] = useState({});
-  const set = (k) => (e) => { setF({ ...f, [k]: e.target.value }); if (errors[k]) setErrors((e) => ({ ...e, [k]: "" })); };
+
+  /* Instant validation: runs on every keystroke, clears errors as the user
+     fixes them, and shows new ones immediately. The submit handler repeats
+     the same checks as a fallback for edge cases (paste, autofill). */
+  const validate = (field, value, all) => {
+    const v = value; const a = all;
+    switch (field) {
+      case "company": return !v.trim() ? "Required" : "";
+      case "priceBand": {
+        if (v === "") return "";
+        if (Number(v) <= 0) return "Must be greater than 0";
+        if (a.priceBandLow && Number(a.priceBandLow) >= Number(v)) return "Must be greater than low price";
+        return "";
+      }
+      case "priceBandLow": {
+        if (v === "") return "";
+        if (Number(v) <= 0) return "Must be greater than 0";
+        if (a.priceBand && Number(v) >= Number(a.priceBand)) return "Must be less than cutoff price";
+        return "";
+      }
+      case "lotSize": {
+        if (v === "") return "";
+        if (Number(v) <= 0) return "Must be greater than 0";
+        if (!Number.isInteger(Number(v))) return "Must be a whole number";
+        return "";
+      }
+      case "listingPrice": {
+        if (v === "") return "";
+        if (Number(v) <= 0) return "Must be greater than 0";
+        return "";
+      }
+      default: return "";
+    }
+  };
+
+  const change = (k) => (e) => {
+    const v = e.target.value;
+    const next = { ...f, [k]: v };
+    setF(next);
+    const err = validate(k, v, next);
+    // For price fields, cross-validate the counterpart too
+    const cross = {};
+    if (k === "priceBandLow" && next.priceBand) cross.priceBand = validate("priceBand", next.priceBand, next);
+    if (k === "priceBand" && next.priceBandLow) cross.priceBandLow = validate("priceBandLow", next.priceBandLow, next);
+    setErrors((prev) => ({ ...prev, [k]: err, ...cross }));
+  };
+
   return (
     <Sheet title={initial ? "Edit IPO" : "New IPO"} onClose={onClose}>
       {!initial && (
@@ -3680,25 +3911,27 @@ function IpoFormSheet({ initial, onClose, onSave }) {
           <span>Market prices can only sync for IPOs added from the exchange. Use <strong>Add from exchange</strong> in the IPO list header when possible.</span>
         </div>
       )}
-      <Field label="Company Name" error={errors.company}><Input value={f.company} onChange={set("company")} placeholder="e.g. Vishal Mega Mart" /></Field>
+      <Field label="Company Name" error={errors.company}><Input value={f.company} onChange={change("company")} placeholder="e.g. Vishal Mega Mart" /></Field>
       <Field label="Category">
-        <Select value={f.category} onChange={set("category")}>
+        <Select value={f.category} onChange={change("category")}>
           <option>Mainboard</option><option>SME</option>
         </Select>
       </Field>
       <div style={{ display: "flex", gap: 10 }}>
-        <div style={{ flex: 1 }}><Field label="Price Band Low (₹)"><Input type="number" inputMode="numeric" value={f.priceBandLow || ""} onChange={set("priceBandLow")} placeholder="e.g. 270" /></Field></div>
-        <div style={{ flex: 1 }}><Field label="Cutoff Price (₹)" error={errors.priceBand}><Input type="number" inputMode="numeric" value={f.priceBand} onChange={set("priceBand")} placeholder="e.g. 285" /></Field></div>
+        <div style={{ flex: 1 }}><Field label="Price Band Low (₹)" error={errors.priceBandLow}><Input type="number" inputMode="numeric" value={f.priceBandLow || ""} onChange={change("priceBandLow")} placeholder="e.g. 270" /></Field></div>
+        <div style={{ flex: 1 }}><Field label="Cutoff Price (₹)" error={errors.priceBand}><Input type="number" inputMode="numeric" value={f.priceBand} onChange={change("priceBand")} placeholder="e.g. 285" /></Field></div>
       </div>
-      <Field label="Lot Size (shares)" error={errors.lotSize}><Input type="number" inputMode="numeric" value={f.lotSize} onChange={set("lotSize")} placeholder="e.g. 52" /></Field>
+      <Field label="Lot Size (shares)" error={errors.lotSize}><Input type="number" inputMode="numeric" value={f.lotSize} onChange={change("lotSize")} placeholder="e.g. 52" /></Field>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }}>
         <Field label="Open Date" error={errors.openDate}><Input type="date" value={f.openDate || ""} onChange={(e) => {
           const v = e.target.value;
           const bad = v ? isNonTradingDay(v) : false;
-          if (bad) { setErrors((prev) => ({ ...prev, openDate: bad })); setF({ ...f, openDate: v }); return; }
-          setF({ ...f, openDate: v });
-          if (errors.openDate) setErrors((prev) => ({ ...prev, openDate: "" }));
+          const next = { ...f, openDate: v };
+          setF(next);
+          const dateErr = bad || "";
+          const closeErr = (!bad && v && f.closeDate && f.closeDate < v) ? "Must be on or after open date" : (errors.closeDate === "Must be on or after open date" ? "" : errors.closeDate || "");
+          setErrors((prev) => ({ ...prev, openDate: dateErr, closeDate: closeErr }));
         }} /></Field>
         <Field label="Close Date" error={errors.closeDate}><Input type="date" value={f.closeDate || ""} onChange={(e) => {
           const close = e.target.value;
@@ -3714,30 +3947,38 @@ function IpoFormSheet({ initial, onClose, onSave }) {
             next.listingDate = "";
           }
           setF(next);
-          if (errors.closeDate) setErrors((prev) => ({ ...prev, closeDate: "" }));
+          const closeErr = (f.openDate && close && close < f.openDate) ? "Must be on or after open date" : "";
+          setErrors((prev) => ({ ...prev, closeDate: closeErr }));
         }} /></Field>
         <Field label="Allotment (auto)"><Input type="date" value={f.closeDate ? addClearingDays(f.closeDate, 1) : ""} disabled style={{ background: COLORS.bg, color: COLORS.inkSoft }} /></Field>
         <Field label="Listing (auto)"><Input type="date" value={f.closeDate ? addTradingDays(addClearingDays(addClearingDays(f.closeDate, 1), 1), 1) : ""} disabled style={{ background: COLORS.bg, color: COLORS.inkSoft }} /></Field>
       </div>
-      <Field label={f.listingPriceSource === "bse-open" ? "Listing Price - day-one open (from exchange, ₹)" : f.listingPriceSource === "bse-close" ? "Listing Day Close (from exchange, ₹)" : "Listing Price (optional, ₹)"}>
+      <Field label={f.listingPriceSource === "bse-open" ? "Listing Price - day-one open (from exchange, ₹)" : f.listingPriceSource === "bse-close" ? "Listing Day Close (from exchange, ₹)" : "Listing Price (optional, ₹)"} error={errors.listingPrice}>
         <Input
           type="number" inputMode="numeric" value={f.listingPrice}
-          onChange={(e) => setF({ ...f, listingPrice: e.target.value, listingPriceSource: "" })}
+          onChange={(e) => { const v = e.target.value; setF({ ...f, listingPrice: v, listingPriceSource: "" }); setErrors((prev) => ({ ...prev, listingPrice: validate("listingPrice", v, f) })); }}
           placeholder="e.g. 340"
         />
       </Field>
       <Field label="Remarks">
-        <textarea value={f.remarks} onChange={set("remarks")} rows={3} style={{ ...inputStyle, resize: "vertical" }} placeholder="Any notes about this IPO" />
+        <textarea value={f.remarks} onChange={change("remarks")} rows={3} style={{ ...inputStyle, resize: "vertical" }} placeholder="Any notes about this IPO" />
       </Field>
       <PrimaryButton onClick={() => {
         const e = {};
-        if (!f.company) e.company = "Required";
-        if (!f.priceBand) e.priceBand = "Required";
-        if (!f.lotSize) e.lotSize = "Required";
+        if (!f.company.trim()) e.company = "Required";
+        if (!f.priceBand || Number(f.priceBand) <= 0) e.priceBand = "Must be greater than 0";
+        if (f.priceBandLow && Number(f.priceBandLow) <= 0) e.priceBandLow = "Must be greater than 0";
+        if (f.priceBandLow && f.priceBand && Number(f.priceBandLow) >= Number(f.priceBand)) e.priceBandLow = "Must be less than cutoff price";
+        if (!f.lotSize || Number(f.lotSize) <= 0) e.lotSize = "Must be greater than 0";
+        if (f.lotSize && !Number.isInteger(Number(f.lotSize))) e.lotSize = "Must be a whole number";
         if (!f.openDate) e.openDate = "Required";
         else { const bad = isNonTradingDay(f.openDate); if (bad) e.openDate = bad; }
         if (!f.closeDate) e.closeDate = "Required";
-        else { const bad = isNonTradingDay(f.closeDate); if (bad) e.closeDate = bad; }
+        else {
+          const bad = isNonTradingDay(f.closeDate); if (bad) e.closeDate = bad;
+          if (!bad && f.openDate && f.closeDate < f.openDate) e.closeDate = "Must be on or after open date";
+        }
+        if (f.listingPrice && Number(f.listingPrice) <= 0) e.listingPrice = "Must be greater than 0";
         if (Object.keys(e).length) return setErrors(e);
         onSave(trimFields({ ...f, id: f.id || uid() }));
       }}>
@@ -3797,11 +4038,13 @@ function ApplicationFormSheet({ initial, ipo, accounts, onClose, onSave }) {
         <Input value={f.appliedFor} onChange={set("appliedFor")} placeholder="Leave blank if same as account holder" />
       </Field>
       <div style={{ display: "flex", gap: 10 }}>
-        <div style={{ flex: 1 }}><Field label="Lots"><Input type="number" inputMode="numeric" value={f.lots} onChange={(e) => {
+        <div style={{ flex: 1 }}><Field label="Lots" error={errors.lots}><Input type="number" inputMode="numeric" value={f.lots} onChange={(e) => {
           const lots = e.target.value;
           const next = { ...f, lots };
           if (lotSize > 0 && Number(ipo?.priceBand) > 0) next.amountBlocked = String((Number(lots) || 0) * lotSize * Number(ipo.priceBand));
           setF(next);
+          const err = lots === "" ? "" : Number(lots) <= 0 ? "Must be at least 1" : !Number.isInteger(Number(lots)) ? "Must be a whole number" : "";
+          setErrors((prev) => ({ ...prev, lots: err }));
         }} /></Field></div>
         <div style={{ flex: 1 }}><Field label="Amount Blocked (₹)">
           <div style={{ ...inputStyle, background: COLORS.bg, color: COLORS.inkSoft, display: "flex", alignItems: "center" }}>
@@ -3829,14 +4072,24 @@ function ApplicationFormSheet({ initial, ipo, accounts, onClose, onSave }) {
       </Field>
       {f.sold && (
         <div style={{ display: "flex", gap: 10 }}>
-          <div style={{ flex: 1 }}><Field label="Sell Price (₹)"><Input type="number" inputMode="numeric" value={f.sellPrice} onChange={set("sellPrice")} /></Field></div>
+          <div style={{ flex: 1 }}><Field label="Sell Price (₹)" error={errors.sellPrice}><Input type="number" inputMode="numeric" value={f.sellPrice} onChange={(e) => {
+            const v = e.target.value; setF({ ...f, sellPrice: v });
+            setErrors((prev) => ({ ...prev, sellPrice: v && Number(v) <= 0 ? "Must be greater than 0" : "" }));
+          }} /></Field></div>
           <div style={{ flex: 1 }}><Field label="Sell Date"><Input type="date" value={f.sellDate} onChange={set("sellDate")} /></Field></div>
         </div>
       )}
       <Field label="Remarks">
         <textarea value={f.remarks} onChange={set("remarks")} rows={2} style={{ ...inputStyle, resize: "vertical" }} placeholder="e.g. Funds sent by dad, to be returned after listing" />
       </Field>
-      <PrimaryButton onClick={() => { if (!f.accountId) return setErrors({ accountId: "Select an account" }); onSave(trimFields({ ...f, id: f.id || uid() })); }}>
+      <PrimaryButton onClick={() => {
+        const e = {};
+        if (!f.accountId) e.accountId = "Select an account";
+        if (!f.lots || Number(f.lots) <= 0) e.lots = "Must be at least 1";
+        if (f.sold && f.sellPrice && Number(f.sellPrice) <= 0) e.sellPrice = "Must be greater than 0";
+        if (Object.keys(e).length) return setErrors(e);
+        onSave(trimFields({ ...f, id: f.id || uid() }));
+      }}>
         {initial ? "Save Changes" : "Add Application"}
       </PrimaryButton>
     </Sheet>
@@ -3907,7 +4160,21 @@ function TransferFormSheet({ initial, accounts, ipos, onClose, onSave, onDelete 
     }),
     relatedIpoIds: initIds,
   });
-  const set = (k) => (e) => { setF({ ...f, [k]: e.target.value }); if (errors[k]) setErrors((prev) => ({ ...prev, [k]: "" })); };
+  const change = (k) => (e) => {
+    const v = e.target.value;
+    const next = { ...f, [k]: v };
+    setF(next);
+    const errs = {};
+    if (k === "fromAccountId" || k === "toAccountId") {
+      const from = k === "fromAccountId" ? v : f.fromAccountId;
+      const to = k === "toAccountId" ? v : f.toAccountId;
+      errs.toAccountId = (from && to && from === to) ? "Must differ from source" : "";
+      if (k === "fromAccountId") errs.fromAccountId = "";
+    }
+    if (k === "amount") errs.amount = (v && Number(v) <= 0) ? "Must be greater than 0" : "";
+    if (k === "date") errs.date = "";
+    setErrors((prev) => ({ ...prev, ...errs }));
+  };
   const [errors, setErrors] = useState({});
   const [ipoSearch, setIpoSearch] = useState("");
 
@@ -3934,18 +4201,18 @@ function TransferFormSheet({ initial, accounts, ipos, onClose, onSave, onDelete 
   return (
     <Sheet title={initial ? "Edit Transfer" : "New Transfer"} onClose={onClose}>
       <Field label="From Account">
-        <Select value={f.fromAccountId} onChange={set("fromAccountId")}>
+        <Select value={f.fromAccountId} onChange={change("fromAccountId")}>
           {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
         </Select>
       </Field>
-      <Field label="To Account">
-        <Select value={f.toAccountId} onChange={set("toAccountId")}>
+      <Field label="To Account" error={errors.toAccountId}>
+        <Select value={f.toAccountId} onChange={change("toAccountId")}>
           {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
         </Select>
       </Field>
       <div style={{ display: "flex", gap: 10 }}>
-        <div style={{ flex: 1 }}><Field label="Amount (₹)" error={errors.amount}><Input type="number" inputMode="numeric" value={f.amount} onChange={set("amount")} /></Field></div>
-        <div style={{ flex: 1 }}><Field label="Date" error={errors.date}><Input type="date" value={f.date} onChange={set("date")} /></Field></div>
+        <div style={{ flex: 1 }}><Field label="Amount (₹)" error={errors.amount}><Input type="number" inputMode="numeric" value={f.amount} onChange={change("amount")} /></Field></div>
+        <div style={{ flex: 1 }}><Field label="Date" error={errors.date}><Input type="date" value={f.date} onChange={change("date")} /></Field></div>
       </div>
       <Field label="Related IPOs (optional)">
         {f.relatedIpoIds.length > 0 && (
@@ -3993,12 +4260,13 @@ function TransferFormSheet({ initial, accounts, ipos, onClose, onSave, onDelete 
         )}
       </Field>
       <Field label="Remarks">
-        <textarea value={f.remarks} onChange={set("remarks")} rows={2} style={{ ...inputStyle, resize: "vertical" }} placeholder="e.g. Sent for application, to be returned" />
+        <textarea value={f.remarks} onChange={change("remarks")} rows={2} style={{ ...inputStyle, resize: "vertical" }} placeholder="e.g. Sent for application, to be returned" />
       </Field>
       <PrimaryButton onClick={() => {
         const e = {};
         if (!f.fromAccountId || !f.toAccountId) e.fromAccountId = "Select both accounts";
-        if (!f.amount) e.amount = "Required";
+        else if (f.fromAccountId === f.toAccountId) e.toAccountId = "Must differ from source";
+        if (!f.amount || Number(f.amount) <= 0) e.amount = "Must be greater than 0";
         if (!f.date) e.date = "Required";
         if (Object.keys(e).length) return setErrors(e);
         onSave(trimFields({ ...f, relatedIpoId: f.relatedIpoIds[0] || "", id: f.id || uid() }));
@@ -4156,17 +4424,66 @@ function DataSheet({ state, session, cloudOn, syncing, syncError, lastSync, onCl
 /* ---------------------------------------------------------
    AUTH
 ---------------------------------------------------------- */
-function AuthScreen({ mode, setMode, notice }) {
+function AuthScreen({ mode, setMode, notice, recoveryToken }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPw, setConfirmPw] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmNewPw, setConfirmNewPw] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(notice || "");
   const [info, setInfo] = useState("");
+  const [noticeCleared, setNoticeCleared] = useState(false);
+
+  const [recoveryDone, setRecoveryDone] = useState(false);
+  const isRecovery = !!recoveryToken && !recoveryDone;
+
+  const validatePassword = (pw) => {
+    if (pw.length < 8) return "At least 8 characters";
+    if (!/[A-Z]/.test(pw)) return "Include an uppercase letter";
+    if (!/[0-9]/.test(pw)) return "Include a number";
+    return null;
+  };
 
   const submit = async () => {
     setError(""); setInfo("");
     const trimmed = email.trim();
+
+    if (isRecovery) {
+      const pwErr = validatePassword(newPassword);
+      if (pwErr) return setError(pwErr);
+      if (newPassword !== confirmNewPw) return setError("Passwords don't match.");
+      setBusy(true);
+      try {
+        await cloudUpdatePassword(recoveryToken, newPassword);
+        setRecoveryDone(true);
+        setInfo("Password updated successfully. Sign in with your new password.");
+        setMode("login");
+      } catch (e) {
+        setError(e.message || "Could not update password.");
+      } finally { setBusy(false); }
+      return;
+    }
+
+    if (mode === "forgot") {
+      if (!trimmed) return setError("Enter your email address.");
+      setBusy(true);
+      try {
+        await cloudResetPassword(trimmed);
+        setInfo("Check your email for a password reset link.");
+        setMode("login");
+      } catch (e) {
+        setError(e.message || "Could not send reset email.");
+      } finally { setBusy(false); }
+      return;
+    }
+
     if (!trimmed || !password) return setError("Enter your email and password.");
+    if (mode === "signup") {
+      const pwErr = validatePassword(password);
+      if (pwErr) return setError(pwErr);
+      if (password !== confirmPw) return setError("Passwords don't match.");
+    }
     if (password.length < 6) return setError("Password must be at least 6 characters.");
 
     setBusy(true);
@@ -4176,9 +4493,8 @@ function AuthScreen({ mode, setMode, notice }) {
         : await cloudSignIn(trimmed, password);
 
       if (!data.access_token) {
-        // Sign-up with email confirmation enabled returns a user but no session.
         setMode("login");
-        setInfo("Account created. Confirm your email if asked, then sign in.");
+        setInfo("Account created. Check your email to confirm, then sign in.");
         return;
       }
       setSession(normalizeSession(data));
@@ -4188,6 +4504,8 @@ function AuthScreen({ mode, setMode, notice }) {
       setBusy(false);
     }
   };
+
+  const title = isRecovery ? "Set New Password" : mode === "forgot" ? "Reset Password" : mode === "signup" ? "Create Account" : "Sign In";
 
   return (
     <div style={{
@@ -4208,18 +4526,67 @@ function AuthScreen({ mode, setMode, notice }) {
         }}>FAMILY IPO REGISTER</div>
 
         <div style={{ color: COLORS.inkSoft, fontSize: 13.5, marginBottom: 20 }}>
-          Sign in to sync your IPOs, applications, accounts and transfers across devices.
+          {isRecovery ? "Enter your new password below."
+            : mode === "forgot" ? "Enter your email and we'll send you a reset link."
+            : "Sign in to sync your IPOs, applications, accounts and transfers across devices."}
         </div>
 
-        <Field label="Email">
-          <Input type="email" autoComplete="email" inputMode="email" value={email}
-            onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" />
-        </Field>
-        <Field label="Password">
-          <Input type="password" autoComplete={mode === "signup" ? "new-password" : "current-password"}
-            value={password} onChange={(e) => setPassword(e.target.value)} placeholder="At least 6 characters"
-            onKeyDown={(e) => { if (e.key === "Enter") submit(); }} />
-        </Field>
+        {notice && !isRecovery && !noticeCleared && (
+          <div style={{
+            background: COLORS.redSoft, border: `1px solid ${COLORS.red}`, borderRadius: 10,
+            padding: "12px 14px", marginBottom: 16, display: "flex", gap: 8, alignItems: "flex-start",
+          }}>
+            <AlertTriangle size={16} color={COLORS.red} style={{ flexShrink: 0, marginTop: 1 }} />
+            <div>
+              <div style={{ fontWeight: 600, fontSize: 13, color: COLORS.red, marginBottom: 4 }}>Link expired or invalid</div>
+              <div style={{ fontSize: 12, color: COLORS.ink }}>{notice}</div>
+              <button onClick={() => { setMode("forgot"); setError(""); setNoticeCleared(true); }} style={{
+                marginTop: 8, background: "none", border: 0, padding: 0, color: COLORS.navy,
+                fontWeight: 600, fontSize: 12.5, cursor: "pointer", fontFamily: "Inter, sans-serif",
+              }}>Request a new reset link</button>
+            </div>
+          </div>
+        )}
+
+        {isRecovery ? (
+          <>
+            <Field label="New Password">
+              <Input type="password" autoComplete="new-password" value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)} placeholder="At least 8 characters, 1 uppercase, 1 number" />
+            </Field>
+            <Field label="Confirm New Password">
+              <Input type="password" autoComplete="new-password" value={confirmNewPw}
+                onChange={(e) => setConfirmNewPw(e.target.value)} placeholder="Re-enter your password"
+                onKeyDown={(e) => { if (e.key === "Enter") submit(); }} />
+            </Field>
+          </>
+        ) : mode === "forgot" ? (
+          <Field label="Email">
+            <Input type="email" autoComplete="email" inputMode="email" value={email}
+              onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com"
+              onKeyDown={(e) => { if (e.key === "Enter") submit(); }} />
+          </Field>
+        ) : (
+          <>
+            <Field label="Email">
+              <Input type="email" autoComplete="email" inputMode="email" value={email}
+                onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" />
+            </Field>
+            <Field label="Password">
+              <Input type="password" autoComplete={mode === "signup" ? "new-password" : "current-password"}
+                value={password} onChange={(e) => setPassword(e.target.value)}
+                placeholder={mode === "signup" ? "At least 8 chars, 1 uppercase, 1 number" : "Enter your password"}
+                onKeyDown={(e) => { if (e.key === "Enter" && mode !== "signup") submit(); }} />
+            </Field>
+            {mode === "signup" && (
+              <Field label="Confirm Password">
+                <Input type="password" autoComplete="new-password" value={confirmPw}
+                  onChange={(e) => setConfirmPw(e.target.value)} placeholder="Re-enter your password"
+                  onKeyDown={(e) => { if (e.key === "Enter") submit(); }} />
+              </Field>
+            )}
+          </>
+        )}
 
         {error && (
           <div style={{ background: COLORS.redSoft, color: COLORS.red, borderRadius: 10, padding: 10, marginBottom: 10, fontSize: 13 }}>{error}</div>
@@ -4229,17 +4596,23 @@ function AuthScreen({ mode, setMode, notice }) {
         )}
 
         <PrimaryButton onClick={submit} disabled={busy}>
-          {busy ? "Please wait..." : mode === "signup" ? "Create Account" : "Sign In"}
+          {busy ? "Please wait..." : isRecovery ? "Update Password" : mode === "forgot" ? "Send Reset Link" : mode === "signup" ? "Create Account" : "Sign In"}
         </PrimaryButton>
-        <button
-          onClick={() => { setMode(mode === "signup" ? "login" : "signup"); setError(""); setInfo(""); }}
-          style={{
-            width: "100%", border: 0, background: "transparent", marginTop: 12, padding: 12,
-            color: COLORS.navy, fontWeight: 600, fontSize: 13.5, cursor: "pointer",
-          }}
-        >
-          {mode === "signup" ? "Already have an account? Sign in" : "New here? Create an account"}
-        </button>
+
+        {!isRecovery && mode !== "forgot" && (
+          <button onClick={() => { setMode("forgot"); setError(""); setInfo(""); setNoticeCleared(true); }}
+            style={{ width: "100%", border: 0, background: "transparent", marginTop: 8, padding: 8, color: COLORS.inkSoft, fontSize: 12.5, cursor: "pointer" }}>
+            Forgot password?
+          </button>
+        )}
+
+        {!isRecovery && (
+          <button
+            onClick={() => { setMode(mode === "signup" ? "login" : mode === "forgot" ? "login" : "signup"); setError(""); setInfo(""); setNoticeCleared(true); }}
+            style={{ width: "100%", border: 0, background: "transparent", marginTop: 4, padding: 12, color: COLORS.navy, fontWeight: 600, fontSize: 13.5, cursor: "pointer" }}>
+            {mode === "signup" ? "Already have an account? Sign in" : mode === "forgot" ? "Back to sign in" : "New here? Create an account"}
+          </button>
+        )}
       </div>
     </div>
   );
@@ -4776,6 +5149,7 @@ function LiveIposSheet({ existing, onClose, onImport }) {
       id: uid(),
       fromExchange: true,
       symbol: r.symbol || "",
+      isin: r.isin || "",
       company: r.company,
       category: r.category || "Mainboard",
       applicationDate: r.closeDate || "",
@@ -4784,7 +5158,8 @@ function LiveIposSheet({ existing, onClose, onImport }) {
       lotSize: r.lotSize != null ? String(r.lotSize) : "",
       openDate: r.openDate || "",
       closeDate: r.closeDate || "",
-      listingDate: r.listedOn || "",
+      allotmentDate: r.allotmentDate || "",
+      listingDate: r.listedOn || r.listingDate || "",
       // Same rule as a refresh: no closing price until the day has closed.
       ...(() => {
         const listingToday = !!r.listedOn && r.listedOn >= todayISO();
