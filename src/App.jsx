@@ -1106,7 +1106,8 @@ function AppInner() {
      the bottom of the transfers - a list you had never scrolled. Each screen
      now starts where a screen should. */
   useEffect(() => {
-    if (contentRef.current) contentRef.current.scrollTop = 0;
+    if (typeof window === "undefined") return;
+    window.scrollTo(0, 0);
   }, [tab]);
   const [accounts, setAccounts] = useState([]);
   const [ipos, setIpos] = useState([]);
@@ -1828,9 +1829,9 @@ function AppInner() {
 
   return (
     <div style={{
-      height: "100dvh", background: COLORS.bg, fontFamily: "Inter, sans-serif",
-      color: COLORS.ink, maxWidth: 520, margin: "0 auto", position: "relative",
-      display: "flex", flexDirection: "column", overflow: "hidden",
+      minHeight: "100dvh", background: COLORS.bg, fontFamily: "Inter, sans-serif",
+      color: COLORS.ink, paddingBottom: "calc(78px + env(safe-area-inset-bottom))",
+      maxWidth: 520, margin: "0 auto", position: "relative",
     }}>
       <style>{FONT_IMPORT}</style>
 
@@ -1863,65 +1864,41 @@ function AppInner() {
         ref={contentRef}
         onTouchStart={(e) => {
           if (sheetIsOpen) return;
-          swipeNav.current = { x: e.touches[0].clientX, y: e.touches[0].clientY, dx: 0, committed: false };
+          swipeNav.current = { x: e.touches[0].clientX, y: e.touches[0].clientY, committed: false };
         }}
-        onTouchMove={(e) => {
+        onTouchEnd={(e) => {
           const s = swipeNav.current;
-          if (!s || sheetIsOpen) return;
-          const dx = e.touches[0].clientX - s.x;
-          const dy = e.touches[0].clientY - s.y;
-          if (!s.committed && Math.abs(dy) > Math.abs(dx)) { swipeNav.current = null; return; }
-          if (!s.committed && Math.abs(dx) < 15) return;
-          // Don't swipe past the edges
-          const idx = TABS.indexOf(tab);
-          if ((dx > 0 && idx === 0) || (dx < 0 && idx === TABS.length - 1)) { swipeNav.current = null; return; }
-          s.committed = true;
-          s.dx = dx;
-          setSwipeDx(dx);
-        }}
-        onTouchEnd={() => {
-          const s = swipeNav.current;
-          if (!s || !s.committed || sheetIsOpen) { swipeNav.current = null; setSwipeDx(0); return; }
+          if (!s || sheetIsOpen) { swipeNav.current = null; return; }
           swipeNav.current = null;
-          const dx = s.dx;
+          const dx = e.changedTouches[0].clientX - s.x;
+          const dy = e.changedTouches[0].clientY - s.y;
+          if (Math.abs(dx) < 60 || Math.abs(dy) > Math.abs(dx) * 0.5) return;
           const idx = TABS.indexOf(tab);
-          if (dx < -60 && idx < TABS.length - 1) { setTab(TABS[idx + 1]); }
-          else if (dx > 60 && idx > 0) { setTab(TABS[idx - 1]); }
-          setSwipeDx(0);
+          if (dx < 0 && idx < TABS.length - 1) setTab(TABS[idx + 1]);
+          if (dx > 0 && idx > 0) setTab(TABS[idx - 1]);
         }}
-        style={{
-          flex: "1 1 auto",
-          overflow: "hidden",
-          position: "relative",
-        }}>
-        {/* Render current + adjacent tab side by side for swipe preview */}
-        {(() => {
-          const idx = TABS.indexOf(tab);
-          const adjTab = swipeDx > 0 ? (idx > 0 ? TABS[idx - 1] : null) : swipeDx < 0 ? (idx < TABS.length - 1 ? TABS[idx + 1] : null) : null;
-          const offset = swipeDx ? (swipeDx / window.innerWidth) * 100 : 0;
-          const renderTab = (t) => {
-            if (t === "dashboard") return <Dashboard stats={stats} ipos={ipos} accounts={accounts} onOpenIpo={(id) => setIpoDetail(id)} onOpenHolding={(id) => setHoldingDetail(id)} />;
-            if (t === "ipos") return <IpoList ipos={ipos} accounts={accounts} onOpen={(id) => setIpoDetail(id)} />;
-            if (t === "accounts") return <AccountList transfers={transfers} accounts={accounts} ipos={ipos} onOpen={(id) => setAcctDetail(id)} />;
-            if (t === "transfers") return <TransfersScreen transfers={transfers} accounts={accounts} ipos={ipos} onEdit={(transfer) => setTransferSheet({ transfer })} onDelete={(id) => { const gone = transfers.find((x) => x.id === id); if (!gone) return; const who = (aid) => accounts.find((a) => a.id === aid)?.name || "Unknown"; discard("transfer", gone, `${inr(gone.amount)} · ${who(gone.fromAccountId)} to ${who(gone.toAccountId)}`); persistTransfers(transfers.filter((x) => x.id !== id)); }} />;
-            return null;
-          };
-          return (
-            <div style={{
-              display: "flex", width: "200%",
-              transform: `translateX(${adjTab && swipeDx > 0 ? offset - 50 : adjTab && swipeDx < 0 ? offset : swipeDx ? offset * 0.3 : 0}%)`,
-              transition: swipeDx ? "none" : "transform 300ms ease-out",
-            }}>
-              {adjTab && swipeDx > 0 && (
-                <div style={{ width: "50%", flexShrink: 0, padding: "14px 14px 0", overflowY: "auto", height: "100%" }}>{renderTab(adjTab)}</div>
-              )}
-              <div style={{ width: "50%", flexShrink: 0, padding: "14px 14px 0", overflowY: "auto", height: "100%" }}>{renderTab(tab)}</div>
-              {adjTab && swipeDx < 0 && (
-                <div style={{ width: "50%", flexShrink: 0, padding: "14px 14px 0", overflowY: "auto", height: "100%" }}>{renderTab(adjTab)}</div>
-              )}
-            </div>
-          );
-        })()}
+        style={{ padding: "14px 14px 0" }}>
+        {tab === "dashboard" && (
+          <Dashboard stats={stats} ipos={ipos} accounts={accounts} onOpenIpo={(id) => setIpoDetail(id)} onOpenHolding={(id) => setHoldingDetail(id)} />
+        )}
+        {tab === "ipos" && (
+          <IpoList ipos={ipos} accounts={accounts} onOpen={(id) => setIpoDetail(id)} />
+        )}
+        {tab === "accounts" && (
+          <AccountList transfers={transfers} accounts={accounts} ipos={ipos} onOpen={(id) => setAcctDetail(id)} />
+        )}
+        {tab === "transfers" && (
+          <TransfersScreen transfers={transfers} accounts={accounts} ipos={ipos}
+            onEdit={(transfer) => setTransferSheet({ transfer })}
+            onDelete={(id) => {
+              const gone = transfers.find((x) => x.id === id);
+              if (!gone) return;
+              const who = (aid) => accounts.find((a) => a.id === aid)?.name || "Unknown";
+              discard("transfer", gone, `${inr(gone.amount)} · ${who(gone.fromAccountId)} to ${who(gone.toAccountId)}`);
+              persistTransfers(transfers.filter((x) => x.id !== id));
+            }}
+          />
+        )}
       </div>
 
       <BottomNav tab={tab} setTab={setTab} />
@@ -2272,7 +2249,7 @@ function Header({ tab, onAdd, onOpenData, onFetchLive, syncing, syncError, cloud
     <div style={{
       background: COLORS.navyDeep,
       padding: "calc(18px + env(safe-area-inset-top)) 14px 14px",
-      position: "relative", zIndex: 10, flexShrink: 0,
+      position: "sticky", top: 0, zIndex: 10,
       display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap",
       rowGap: 10, columnGap: 8, borderBottom: `3px double ${COLORS.gold}`,
     }}>
@@ -2332,7 +2309,7 @@ function BottomNav({ tab, setTab }) {
   ];
   return (
     <div style={{
-      position: "relative", flexShrink: 0,
+      position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)",
       width: "100%", maxWidth: 520, background: COLORS.navyDeep,
       display: "flex", justifyContent: "space-around",
       padding: "10px 6px calc(14px + env(safe-area-inset-bottom))",
