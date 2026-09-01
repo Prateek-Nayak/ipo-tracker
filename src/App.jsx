@@ -1830,7 +1830,7 @@ function AppInner() {
     <div style={{
       height: "100dvh", background: COLORS.bg, fontFamily: "Inter, sans-serif",
       color: COLORS.ink, maxWidth: 520, margin: "0 auto", position: "relative",
-      display: "flex", flexDirection: "column", overflow: "hidden",
+      display: "flex", flexDirection: "column",
     }}>
       <style>{FONT_IMPORT}</style>
 
