@@ -9,6 +9,10 @@ html, body, #root {
 html {
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
+  scrollbar-width: none;
+}
+html::-webkit-scrollbar {
+  display: none;
 }
 body {
   -webkit-tap-highlight-color: transparent;
@@ -19,12 +23,6 @@ button, input, select, textarea {
 }
 * {
   box-sizing: border-box;
-}
-.ledger-scroll {
-  scrollbar-width: none;          /* Firefox */
-}
-.ledger-scroll::-webkit-scrollbar {
-  display: none;                  /* Chrome, Safari, Edge */
 }
 @keyframes spin {
   from { transform: rotate(0deg); }
