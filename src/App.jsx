@@ -580,13 +580,28 @@ const TABLES = ["accounts", "ipos", "transfers", "trash"];
 // be pushed over a populated cloud.
 const LEDGER_TABLES = ["accounts", "ipos", "transfers"];
 
-/* Whose money it was, as against whose account it left from. Somebody often
-   sends on somebody else's behalf - Rishabh moves the money to Dadasaheb, but
-   it was Prateek's to send - and then Rishabh's account is only the pipe: the
-   claim on Dadasaheb belongs to Prateek and Rishabh comes out square. Every
-   balance in the ledger is worked out from this rather than from the sender,
-   so a transfer with nobody named behaves exactly as it always did. */
-const creditorOf = (t) => t.onBehalfOfId || t.fromAccountId;
+/* A transfer made on somebody's behalf is two hops rather than one. Rishabh
+   pays Dadasaheb for Prateek: what Rishabh owed Prateek is squared off by that
+   much, and Dadasaheb takes on the same debt to Prateek in his place. Prateek's
+   own position does not move, which is what passing money along means - he is
+   owed the same amount before and after, only by somebody else.
+
+   That falls out of splitting it in two - sender to bearer, bearer to receiver -
+   and it settles both readings of the arrangement with no choice to make. Where
+   the sender already owed the bearer, the first hop clears the debt and the
+   sender ends up square. Where he did not, the same hop says the bearer now owes
+   the sender, which is exactly right: he was out of pocket for someone else.
+
+   Written as one hop, crediting the bearer and leaving the sender out of it,
+   only the first of those came out right - and only while the sender's own debt
+   was missing from the ledger. Once it was recorded the same money was counted
+   twice, and the sender was left still owing what he had just paid off. */
+const transferLegs = (t) => {
+  const via = t.onBehalfOfId;
+  return via && via !== t.fromAccountId && via !== t.toAccountId
+    ? [[t.fromAccountId, via], [via, t.toAccountId]]
+    : [[t.fromAccountId, t.toAccountId]];
+};
 
 // The three accounts a transfer can touch, for anything that asks "is this
 // account involved" rather than "what does this account owe".
@@ -4092,28 +4107,29 @@ function AccountDetailSheet({ account, ipos, transfers, accounts, onClose, onEdi
               const nameOf = (id) => accounts.find((a) => a.id === id)?.name || "Unknown";
               const from = nameOf(t.fromAccountId);
               const to = nameOf(t.toAccountId);
-              /* Three ways an account can appear on a transfer, and only two of
-                 them are money owed. The account that carries the claim is out
-                 of pocket whether or not the cash left its own bank, and the
-                 one that merely passed the money along is owed nothing - shown
-                 without a sign, so the same rupees are never counted twice
-                 down two different accounts. */
-              const bearer = creditorOf(t) === account.id;
-              const conduit = t.fromAccountId === account.id && !bearer;
-              const heading = bearer || conduit ? `To ${to}` : `From ${from}`;
-              const behalf = t.onBehalfOfId
-                ? (bearer ? `via ${from}` : `on ${nameOf(t.onBehalfOfId)}'s behalf`)
-                : "";
+/* Three ways an account can appear on a transfer, and the
+                 middle one is worth nothing to it either way. Whoever paid is
+                 out of pocket and whoever received it owes; the one it was done
+                 for is owed the same amount afterwards as before, only by
+                 somebody else, so it shows without a sign. */
+              const via = nameOf(t.onBehalfOfId);
+              const payer = t.fromAccountId === account.id;
+              const receiver = t.toAccountId === account.id;
+              const bearer = !payer && !receiver && t.onBehalfOfId === account.id;
+              const heading = bearer ? `${from} -> ${to}` : payer ? `To ${to}` : `From ${from}`;
+              const behalf = !t.onBehalfOfId ? ""
+                : bearer ? "on your behalf, settling between them"
+                : payer ? `counts against ${via}`
+                : `owed to ${via}`;
               return (
                 <div key={t.id} style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: "8px 10px", fontFamily: "Inter, sans-serif", fontSize: 12.5 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
                     <span style={{ color: COLORS.ink, fontWeight: 600 }}>{heading}</span>
-                    <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, flexShrink: 0, color: conduit ? COLORS.inkSoft : bearer ? COLORS.red : COLORS.green }}>{conduit ? "" : bearer ? "-" : "+"}{inrOrDash(t.amount)}</span>
+                    <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, flexShrink: 0, color: bearer ? COLORS.inkSoft : payer ? COLORS.red : COLORS.green }}>{bearer ? "" : payer ? "-" : "+"}{inrOrDash(t.amount)}</span>
                   </div>
                   <div title={t.remarks || undefined} style={{ fontSize: 11, color: COLORS.inkSoft, marginTop: 2, ...ellipsisText }}>
                     {fmtDate(t.date)}
                     {behalf ? <span style={{ color: COLORS.gold, fontWeight: 600 }}> · {behalf}</span> : null}
-                    {conduit ? " · passed through, nothing owed" : ""}
                     {t.remarks ? ` · ${t.remarks}` : ""}
                   </div>
                 </div>
@@ -4164,9 +4180,10 @@ function ReconciliationView({ transfers, accounts }) {
     accounts.forEach((a) => { map[a.id] = 0; });
     transfers.forEach((t) => {
       const amt = Number(t.amount) || 0;
-      const from = creditorOf(t);
-      map[from] = (map[from] || 0) + amt;
-      map[t.toAccountId] = (map[t.toAccountId] || 0) - amt;
+      transferLegs(t).forEach(([x, y]) => {
+        map[x] = (map[x] || 0) + amt;
+        map[y] = (map[y] || 0) - amt;
+      });
     });
     return accounts.map((a) => ({ id: a.id, name: a.name, net: map[a.id] || 0 }))
       .filter((x) => x.net !== 0)
@@ -4177,11 +4194,12 @@ function ReconciliationView({ transfers, accounts }) {
     const map = {};
     transfers.forEach((t) => {
       const amt = Number(t.amount) || 0;
-      const [x, y] = [creditorOf(t), t.toAccountId];
-      if (!x || !y || x === y) return;
-      const key = x < y ? `${x}|${y}` : `${y}|${x}`;
-      const sign = x < y ? 1 : -1;
-      map[key] = (map[key] || 0) + sign * amt;
+      transferLegs(t).forEach(([x, y]) => {
+        if (!x || !y || x === y) return;
+        const key = x < y ? `${x}|${y}` : `${y}|${x}`;
+        const sign = x < y ? 1 : -1;
+        map[key] = (map[key] || 0) + sign * amt;
+      });
     });
     return Object.entries(map)
       .map(([key, net]) => {
@@ -4652,10 +4670,10 @@ function TransferFormSheet({ initial, accounts, ipos, onClose, onSave, onDelete 
   const change = (k) => (e) => {
     const v = e.target.value;
     const next = { ...f, [k]: v };
-    /* Nobody sends on their own behalf, so switching the sender to whoever was
-       named there drops the name rather than leaving the field pointing at a
-       choice it no longer offers. */
-    if (k === "fromAccountId" && v === next.onBehalfOfId) next.onBehalfOfId = "";
+    /* Neither end of a transfer can also be the one it was made for - a hop to
+       itself is no hop - so picking either drops the name rather than leaving
+       the field pointing at a choice it no longer offers. */
+    if ((k === "fromAccountId" || k === "toAccountId") && v === next.onBehalfOfId) next.onBehalfOfId = "";
     setF(next);
     const errs = {};
     if (k === "fromAccountId" || k === "toAccountId") {
@@ -4709,14 +4727,15 @@ function TransferFormSheet({ initial, accounts, ipos, onClose, onSave, onDelete 
       <Field label="On Behalf Of (optional)">
         <Select value={f.onBehalfOfId} onChange={change("onBehalfOfId")}>
           <option value="">Nobody - {name(f.fromAccountId) || "the sender"} is owed this</option>
-          {accounts.filter((a) => a.id !== f.fromAccountId).map((a) => (
+          {accounts.filter((a) => a.id !== f.fromAccountId && a.id !== f.toAccountId).map((a) => (
             <option key={a.id} value={a.id}>{a.name}</option>
           ))}
         </Select>
-        {f.onBehalfOfId && f.onBehalfOfId !== f.fromAccountId && (
+        {f.onBehalfOfId && f.onBehalfOfId !== f.fromAccountId && f.onBehalfOfId !== f.toAccountId && (
           <div style={{ fontSize: 11.5, color: COLORS.inkSoft, marginTop: 6, fontFamily: "Inter, sans-serif", lineHeight: 1.45 }}>
-            {name(f.toAccountId)} will owe <strong style={{ color: COLORS.ink }}>{name(f.onBehalfOfId)}</strong>, not {name(f.fromAccountId)}
-            {f.onBehalfOfId === f.toAccountId ? " - which settles to nothing, since they are the same person." : `. ${name(f.fromAccountId)} comes out square.`}
+            Counted as two: {name(f.fromAccountId)} settles that much with{" "}
+            <strong style={{ color: COLORS.ink }}>{name(f.onBehalfOfId)}</strong>, and {name(f.toAccountId)} owes{" "}
+            {name(f.onBehalfOfId)} instead. {name(f.onBehalfOfId)} is owed the same as before, by somebody else.
           </div>
         )}
       </Field>
@@ -4779,8 +4798,9 @@ function TransferFormSheet({ initial, accounts, ipos, onClose, onSave, onDelete 
         if (!f.amount || Number(f.amount) <= 0) e.amount = "Must be greater than 0";
         if (!f.date) e.date = "Required";
         if (Object.keys(e).length) return setErrors(e);
-        // Naming the sender is the same as naming nobody; store it as nobody.
-        const onBehalfOfId = f.onBehalfOfId === f.fromAccountId ? "" : f.onBehalfOfId;
+        // Naming either end is the same as naming nobody; store it as nobody.
+        const onBehalfOfId =
+          (f.onBehalfOfId === f.fromAccountId || f.onBehalfOfId === f.toAccountId) ? "" : f.onBehalfOfId;
         onSave(trimFields({ ...f, onBehalfOfId, relatedIpoId: f.relatedIpoIds[0] || "", id: f.id || uid() }));
       }}>
         {initial ? "Save Changes" : "Add Transfer"}
