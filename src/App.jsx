@@ -3560,6 +3560,10 @@ function ipoBucket(ipo) {
 
 const panOf = (account) => (account?.pan || "").trim().toUpperCase();
 
+/* Everyone here is on first-name terms, and the on-behalf-of line names three
+   people in a row - it only fits, and only reads like a sentence, short. */
+const firstNameOf = (name) => String(name || "").trim().split(/\s+/)[0] || "";
+
 /* Deleting an account deliberately leaves its applications on their IPOs - the
    money was applied and the totals still count it - but the name went with the
    account, and every one of those rows then read "Unknown". The name is copied
@@ -4294,7 +4298,7 @@ function AccountDetailSheet({ account, ipos, transfers, accounts, onClose, onEdi
                  out of pocket and whoever received it owes; the one it was done
                  for is owed the same amount afterwards as before, only by
                  somebody else, so it shows without a sign. */
-              const via = nameOf(t.onBehalfOfId);
+              const via = firstNameOf(nameOf(t.onBehalfOfId));
               const payer = t.fromAccountId === account.id;
               const receiver = t.toAccountId === account.id;
               const bearer = !payer && !receiver && t.onBehalfOfId === account.id;
@@ -4519,7 +4523,7 @@ function TransferList({ transfers, accounts, ipos = [], onEdit, onDelete }) {
               {fmtDate(t.date)}
               {/* Who the money was really for. Kept off the headline, which
                   stays the movement you would find on a bank statement. */}
-              {t.onBehalfOfId ? <span style={{ color: COLORS.gold, fontWeight: 600 }}> · for {name(t.onBehalfOfId)}</span> : null}
+              {t.onBehalfOfId ? <span style={{ color: COLORS.gold, fontWeight: 600 }}> · for {firstNameOf(name(t.onBehalfOfId))}</span> : null}
               {t.remarks ? <span style={{ fontStyle: "italic" }}> · "{t.remarks}"</span> : null}
             </div>
           </div>
@@ -4893,7 +4897,7 @@ function TransferFormSheet({ initial, accounts, ipos, onClose, onSave, onDelete 
   const name = (id) => accounts.find((a) => a.id === id)?.name || "";
   // Just the first name in the chain below: three full names do not fit a line,
   // and within one family the first name is the whole of what distinguishes them.
-  const firstName = (id) => name(id).trim().split(/s+/)[0] || "";
+  const firstName = (id) => firstNameOf(name(id));
 
   return (
     <Sheet title={initial ? "Edit Transfer" : "New Transfer"} onClose={onClose}>
