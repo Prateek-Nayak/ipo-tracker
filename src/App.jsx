@@ -4286,7 +4286,7 @@ function AccountDetailSheet({ account, ipos, transfers, accounts, onClose, onEdi
           <SectionLabel>Fund Transfers ({acctTransfers.length})</SectionLabel>
           <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
             {acctTransfers.map((t) => {
-              const nameOf = (id) => accounts.find((a) => a.id === id)?.name || "Unknown";
+              const nameOf = (id) => accounts.find((a) => a.id === id)?.name || "Unknown";
               const from = nameOf(t.fromAccountId);
               const to = nameOf(t.toAccountId);
 /* Three ways an account can appear on a transfer, and the
