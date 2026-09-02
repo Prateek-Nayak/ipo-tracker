@@ -106,11 +106,11 @@ const knownRegistrar = (name) =>
    a recent issue the lists cannot even say who the registrar was, and the
    exchange feed has to be asked instead. Upstox knows it for closed and listed
    issues as well as open ones, which is the whole span that matters. */
-let upstoxCache = { at: 0, byName: new Map() };
-async function upstoxRegistrars() {
-  if (Date.now() - upstoxCache.at < 30 * 60 * 1000 && upstoxCache.byName.size) return upstoxCache.byName;
+let upstoxCache = { at: 0, byId: new Map() };
+async function upstoxIndex() {
+  if (Date.now() - upstoxCache.at < 30 * 60 * 1000 && upstoxCache.byId.size) return upstoxCache.byId;
   const token = process.env.UPSTOX_ANALYTICS_TOKEN;
-  if (!token) return upstoxCache.byName;
+  if (!token) return upstoxCache.byId;
   const headers = { Accept: "application/json", Authorization: `Bearer ${token}` };
   const grab = async (status, type) => {
     try {
@@ -126,117 +126,39 @@ async function upstoxRegistrars() {
     grab("listed", "regular"), grab("listed", "sme"),
     grab("open", "regular"), grab("open", "sme"),
   ]);
-  const byName = new Map();
+  const byId = new Map();
   lists.flat().forEach((r) => {
     const key = nameKey(r?.name || r?.company_name || r?.id);
-    const reg = r?.registrar_info?.name;
-    if (key && reg && !byName.has(key)) byName.set(key, reg);
+    if (key && r?.id && !byId.has(key)) byId.set(key, r.id);
   });
-  if (byName.size) upstoxCache = { at: Date.now(), byName };
-  return upstoxCache.byName;
+  if (byId.size) upstoxCache = { at: Date.now(), byId };
+  return upstoxCache.byId;
 }
 
+/* The list endpoint gives an id and no registrar; only the per-issue detail
+   carries registrar_info. So the name is matched against the lists and then
+   one detail is fetched for the issue that matched - which is a request worth
+   making only when the registrars themselves have already come up empty. */
 async function registrarFromExchange(company) {
   const key = nameKey(company);
   if (!key) return "";
-  const map = await upstoxRegistrars().catch(() => new Map());
-  if (map.has(key)) return map.get(key);
-  for (const [k, v] of map) {
-    if (k.length > 6 && key.length > 6 && (k.includes(key) || key.includes(k))) return v;
+  const token = process.env.UPSTOX_ANALYTICS_TOKEN;
+  if (!token) return "";
+  const byId = await upstoxIndex().catch(() => new Map());
+  let id = byId.get(key);
+  if (!id) {
+    for (const [k, v] of byId) {
+      if (k.length > 6 && key.length > 6 && (k.includes(key) || key.includes(k))) { id = v; break; }
+    }
   }
-  return "";
-}
-
-/* Whichever of them is carrying this issue. An issue absent from both has
-   either not had its allotment published yet - they list it only once the
-   basis of allotment is done - or belongs to a third registrar. */
-async function findRegistrar(company) {
-  const key = nameKey(company);
-  if (!key) return null;
-  const near = (a, b) => a === b || (a.length > 6 && b.length > 6 && (a.includes(b) || b.includes(a)));
-
-  const [kf, mu] = await Promise.all([kfIssues().catch(() => []), mufgIssues().catch(() => [])]);
-  const k = kf.find((r) => near(nameKey(r.name), key));
-  if (k) return { registrar: "kfintech", id: String(k.clientId), listedAs: k.name };
-  const m = mu.find((r) => near(nameKey(r.name), key));
-  if (m) return { registrar: "mufg", id: m.id, listedAs: m.name };
-  return null;
-}
-
-async function kfLookup(clientId, pan) {
-  const r = await fetch(`${KF_QUERY}?type=pan`, {
-    headers: {
-      "User-Agent": UA,
-      Origin: KF_PAGE.replace(/\/$/, ""),
-      reqparam: pan,
-      client_id: clientId,
-    },
-  });
-  const text = await r.text();
-  let raw;
-  try { raw = JSON.parse(text); } catch { raw = { unparsed: text.slice(0, 400) }; }
-  /* A PAN with nothing on the issue comes back 404, not an empty list, so a
-     miss and a failure look alike unless the status is read first. Calling a
-     miss an error would be the worse mistake of the two: it reads as "we could
-     not check" when the registrar answered perfectly clearly. */
-  if (r.status === 404) return { status: "no_application", raw };
-  if (!r.ok) return { status: "error", message: `KFintech returned ${r.status}`, raw };
-
-  const rows = Array.isArray(raw.data) ? raw.data : [];
-  if (!rows.length) return { status: "no_application", raw };
-  // Every bid this PAN made on the issue; more than one is normal in a family
-  // that applies from the same demat under different applicants.
-  return {
-    status: "found",
-    name: rows[0].Name || "",
-    bids: rows.map((x) => ({
-      applicationNo: x.Appln_No || "",
-      applied: Number(x.App_Shares || 0),
-      allotted: Number(x.All_Shares || 0),
-      dpClientId: x.DP_CLID || "",
-    })),
-    raw,
-  };
-}
-
-async function mufgLookup(clientId, pan) {
-  const r = await fetch(`${MUFG}/SearchOnPan`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json; charset=UTF-8",
-      "User-Agent": UA,
-      Referer: "https://in.mpms.mufg.com/Initial_Offer/public-issues.html",
-    },
-    // token is sent empty on purpose - see the note at the top of this file.
-    body: JSON.stringify({ clientid: String(clientId), PAN: pan, IFSC: "", CHKVAL: "1", token: "" }),
-  });
-  const text = await r.text();
-  let payload;
-  try { payload = JSON.parse(text); } catch { payload = null; }
-  const xml = payload && typeof payload.d === "string" ? payload.d : "";
-  const raw = { d: xml || text.slice(0, 400) };
-  if (!r.ok) return { status: "error", message: `MUFG returned ${r.status}`, raw };
-  if (!xml.includes("<Table>")) return { status: "no_application", raw };
-
-  const tables = [...xml.matchAll(/<Table>([\s\S]*?)<\/Table>/g)].map((m) => m[1]);
-  const field = (block, tag) => {
-    const m = block.match(new RegExp(`<${tag}>([^<]*)</${tag}>`));
-    return m ? m[1] : "";
-  };
-  /* Their ALLOT is a number when there was one and a word - NON-ALLOTTED -
-     when there was not, so it cannot simply be parsed as a number. */
-  const asQty = (v) => (/^\d+$/.test(String(v).trim()) ? Number(v) : 0);
-  return {
-    status: "found",
-    name: field(tables[0], "NAME1"),
-    bids: tables.map((t) => ({
-      applicationNo: field(t, "APPLNO") || field(t, "RFNDNO") || "",
-      applied: asQty(field(t, "SHARES")),
-      allotted: asQty(field(t, "ALLOT")),
-      dpClientId: field(t, "DPCLITID"),
-    })),
-    raw,
-  };
+  if (!id) return "";
+  try {
+    const r = await fetch(`https://api.upstox.com/v2/ipos/${encodeURIComponent(id)}`, {
+      headers: { Accept: "application/json", Authorization: `Bearer ${token}` },
+    });
+    if (!r.ok) return "";
+    return (await r.json())?.data?.registrar_info?.name || "";
+  } catch { return ""; }
 }
 
 export default async function handler(req, res) {
