@@ -236,6 +236,24 @@ const inrShort = (n) => {
 };
 const trimFields = (obj) => { const out = { ...obj }; for (const k in out) { if (typeof out[k] === "string") out[k] = out[k].trimEnd(); } return out; };
 
+/* What a person types has no length limit, and a note long enough - or one
+   unbroken run of characters with nowhere to wrap - used to carry on straight
+   past the edge of the card holding it. Every place text is shown now takes one
+   of these three.
+
+   On a card the text is cut, because a card is for finding a record rather than
+   reading it and the whole of it is one tap away in the sheet the card opens: a
+   line or two and an ellipsis says there is more without the card growing to
+   fit. In a sheet, which is where it is read, it wraps instead - but breaks
+   mid-word rather than leaving the box. */
+const ellipsisText = { whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" };
+const clampText = (lines) => ({
+  display: "-webkit-box", WebkitBoxOrient: "vertical", WebkitLineClamp: lines,
+  overflow: "hidden", overflowWrap: "anywhere", wordBreak: "break-word",
+});
+// Newlines in a note are kept: it is a note, and it was typed with them.
+const wrapText = { overflowWrap: "anywhere", wordBreak: "break-word", whiteSpace: "pre-wrap" };
+
 function isNonTradingDay(iso) {
   if (!iso) return false;
   const d = new Date(iso + "T00:00:00");
@@ -1052,6 +1070,7 @@ function Sheet({ title, onClose, children }) {
         }}>
           <h2 style={{
             fontFamily: "'Fraunces', serif", fontWeight: 600, fontSize: 20, color: COLORS.heading, margin: 0,
+            minWidth: 0, ...clampText(2),
           }}>{title}</h2> 
           {title && title == "Sync & Data" ? <div style={{
           display: "flex", 
@@ -2096,6 +2115,9 @@ function AppInner() {
   const onSwipeMove = (e) => {
     const s = swipeNav.current;
     if (!s || sheetIsOpen) return;
+    /* A second finger means a pinch, now that the page can be zoomed into.
+       Whatever it is, it is not a page turn. */
+    if (e.touches.length > 1) { swipeNav.current = null; pullY.current = 0; pullMs.current = 0; paintPull(); return; }
     const dx = e.touches[0].clientX - s.x;
     const dy = e.touches[0].clientY - s.y;
     if (!s.axis) {
@@ -3667,7 +3689,7 @@ function ApplicationRow({ app, ipo, accounts, onEdit, onDelete }) {
           </span>
         )}
       </div>
-      {app.remarks && <div style={{ fontSize: 11.5, color: COLORS.inkSoft, marginTop: 4, fontFamily: "Inter, sans-serif", fontStyle: "italic" }}>"{app.remarks}"</div>}
+      {app.remarks && <div title={app.remarks} style={{ fontSize: 11.5, color: COLORS.inkSoft, marginTop: 4, fontFamily: "Inter, sans-serif", fontStyle: "italic", ...clampText(2) }}>"{app.remarks}"</div>}
     </div>
   );
 }
@@ -3775,9 +3797,9 @@ function AccountList({ accounts, ipos, transfers = [], onOpen }) {
                 borderRadius: 12, padding: "12px 14px", cursor: "pointer",
                 display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10,
               }}>
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 600, fontSize: 15.5, color: COLORS.heading }}>{acc.name}</div>
-                  <div style={{ fontSize: 12, color: COLORS.inkSoft, marginTop: 2 }}>
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 600, fontSize: 15.5, color: COLORS.heading, ...ellipsisText }}>{acc.name}</div>
+                  <div style={{ fontSize: 12, color: COLORS.inkSoft, marginTop: 2, ...ellipsisText }}>
                     {acc.relation || "Self"}{acc.bank ? ` · ${acc.bank}` : ""}
                   </div>
                   <div style={{
@@ -3790,7 +3812,7 @@ function AccountList({ accounts, ipos, transfers = [], onOpen }) {
                       ? <span style={{ color: isDup ? COLORS.red : COLORS.inkSoft }}>{pan}{isDup ? " · duplicate" : ""}</span>
                       : <span style={{ color: COLORS.gold }}>no PAN</span>}
                   </div>
-                  {acc.notes && <div style={{ fontSize: 11.5, color: COLORS.inkSoft, marginTop: 4, fontStyle: "italic" }}>{acc.notes}</div>}
+                  {acc.notes && <div title={acc.notes} style={{ fontSize: 11.5, color: COLORS.inkSoft, marginTop: 4, fontStyle: "italic", ...clampText(2) }}>{acc.notes}</div>}
                 </div>
                 <ChevronRight size={14} color={COLORS.inkSoft} style={{ flexShrink: 0 }} />
               </div>
@@ -3935,7 +3957,7 @@ function AccountDetailSheet({ account, ipos, transfers, accounts, onClose, onEdi
         </button>
       </div>
       {account.notes && (
-        <div style={{ fontSize: 12.5, color: COLORS.inkSoft, fontFamily: "Inter, sans-serif", fontStyle: "italic", marginBottom: 14 }}>
+        <div style={{ fontSize: 12.5, color: COLORS.inkSoft, fontFamily: "Inter, sans-serif", fontStyle: "italic", marginBottom: 14, ...wrapText }}>
           "{account.notes}"
         </div>
       )}
@@ -4020,7 +4042,7 @@ function AccountDetailSheet({ account, ipos, transfers, accounts, onClose, onEdi
                     <span style={{ color: COLORS.ink, fontWeight: 600 }}>{heading}</span>
                     <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, flexShrink: 0, color: conduit ? COLORS.inkSoft : bearer ? COLORS.red : COLORS.green }}>{conduit ? "" : bearer ? "-" : "+"}{inrOrDash(t.amount)}</span>
                   </div>
-                  <div style={{ fontSize: 11, color: COLORS.inkSoft, marginTop: 2 }}>
+                  <div title={t.remarks || undefined} style={{ fontSize: 11, color: COLORS.inkSoft, marginTop: 2, ...clampText(2) }}>
                     {fmtDate(t.date)}
                     {behalf ? <span style={{ color: COLORS.gold, fontWeight: 600 }}> · {behalf}</span> : null}
                     {conduit ? " · passed through, nothing owed" : ""}
@@ -4642,8 +4664,8 @@ function TransferFormSheet({ initial, accounts, ipos, onClose, onSave, onDelete 
                 background: COLORS.chip, color: COLORS.navy, border: `1px solid ${COLORS.border}`,
                 borderRadius: 999, padding: "3px 8px", fontSize: 11, fontWeight: 600,
                 fontFamily: "Inter, sans-serif", cursor: "pointer", display: "inline-flex",
-                alignItems: "center", gap: 4, whiteSpace: "nowrap",
-              }}>{ipoNameOf(id)} <X size={10} color={COLORS.inkSoft} /></span>
+                alignItems: "center", gap: 4, maxWidth: "100%",
+              }}><span style={{ ...ellipsisText, minWidth: 0 }}>{ipoNameOf(id)}</span> <X size={10} color={COLORS.inkSoft} style={{ flexShrink: 0 }} /></span>
             ))}
           </div>
         )}
