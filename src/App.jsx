@@ -190,6 +190,7 @@ const Clock = (p) => <SvgIcon {...p}><circle cx="12" cy="12" r="10" /><polyline 
 const XCircle = (p) => <SvgIcon {...p}><circle cx="12" cy="12" r="10" /><path d="m15 9-6 6" /><path d="m9 9 6 6" /></SvgIcon>;
 const Landmark = (p) => <SvgIcon {...p}><line x1="3" x2="21" y1="22" y2="22" /><line x1="6" x2="6" y1="18" y2="11" /><line x1="10" x2="10" y1="18" y2="11" /><line x1="14" x2="14" y1="18" y2="11" /><line x1="18" x2="18" y1="18" y2="11" /><polygon points="12 2 20 7 4 7" /></SvgIcon>;
 const Loader2 = (p) => <SvgIcon {...p}><path d="M21 12a9 9 0 1 1-6.219-8.56" /></SvgIcon>;
+const RefreshCw = (p) => <SvgIcon {...p}><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" /><path d="M21 3v5h-5" /><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" /><path d="M8 16H3v5" /></SvgIcon>;
 const CloudIcon = (p) => <SvgIcon {...p}><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z" /></SvgIcon>;
 const CloudOff = (p) => <SvgIcon {...p}><path d="m2 2 20 20" /><path d="M5.782 5.782A7 7 0 0 0 9 19h8.5a4.5 4.5 0 0 0 1.307-.193" /><path d="M21.532 16.5A4.5 4.5 0 0 0 17.5 10h-1.79A7.008 7.008 0 0 0 10 5.07" /></SvgIcon>;
 const DownloadIcon = (p) => <SvgIcon {...p}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" x2="12" y1="15" y2="3" /></SvgIcon>;
@@ -221,6 +222,18 @@ const inr = (n) => "₹" + (Number(n) || 0).toLocaleString("en-IN", { maximumFra
    than saying nothing - so unknown values render as an em dash instead. */
 const isBlank = (v) => v === "" || v == null || !Number.isFinite(Number(v));
 const inrOrDash = (v) => (isBlank(v) ? "--" : inr(v));
+
+/* Lakhs and crores where the room is fixed. A stat card is half a phone wide
+   and clips what it cannot fit without saying so, which around a crore turns a
+   figure into a different, smaller, wrong-looking one. The exact number is kept
+   on the element's title. */
+const inrShort = (n) => {
+  const v = Number(n) || 0;
+  const abs = Math.abs(v);
+  if (abs < 1e5) return inr(v);
+  const [div, unit, dp] = abs >= 1e7 ? [1e7, "Cr", 2] : [1e5, "L", 1];
+  return "₹" + (v / div).toFixed(dp).replace(/.0+$/, "") + unit;
+};
 const trimFields = (obj) => { const out = { ...obj }; for (const k in out) { if (typeof out[k] === "string") out[k] = out[k].trimEnd(); } return out; };
 
 function isNonTradingDay(iso) {
@@ -1022,7 +1035,10 @@ function Sheet({ title, onClose, children }) {
         onTouchCancel={onTouchEnd}
         style={{
           background: COLORS.bg, width: "100%", maxWidth: 480,
-          maxHeight: "92vh", borderRadius: "18px 18px 0 0",
+          /* dvh, not vh, like the rest of the app: vh is the viewport with the
+             browser's own chrome ignored, so a tall sheet ran its last inch -
+             and its save button - underneath the address bar. */
+          maxHeight: "92dvh", borderRadius: "18px 18px 0 0",
           display: "flex", flexDirection: "column", minHeight: 0,
           boxShadow: "0 -8px 30px rgba(0,0,0,0.2)",
           transform: closing ? "translateY(100%)" : dragY ? `translateY(${dragY}px)` : undefined,
@@ -1212,6 +1228,9 @@ function AppInner() {
   const pageRefs = useRef({});
   const swipeDx = useRef(0);
   const swipeMs = useRef(0);
+  const pullRef = useRef(null);
+  const pullY = useRef(0);
+  const pullMs = useRef(0);
   const settling = useRef(false);
   const settleTimer = useRef(null);
   const [swipeDir, setSwipeDir] = useState(0);
@@ -1846,12 +1865,51 @@ function AppInner() {
       TABLES.forEach((k) => saveTable(k, remote[k] || []));
       // Already in step with the cloud; no need to push it straight back.
       skipNextAutoSync.current = true;
+      setLastSync(new Date());
+      setSyncError("");
+      // Handed back so a caller can go on with these rather than React's copy
+      // from the render before, which is a beat behind until this commits.
+      return remote.ipos;
     } catch (e) {
       setSyncError(e.message || "Could not reach the cloud.");
     }
+    return null;
   }, [pushToCloud, userId]);
   const syncNowRef = useRef(syncNow);
   syncNowRef.current = syncNow;
+
+  /* Everything the ledger shows, brought up to date in one go. There is no
+     per-screen refresh to write: the four screens are one set of records seen
+     four ways, so the cloud round trip and the price feed between them cover
+     the lot - what other devices have changed, allotments, transfers, and
+     today's valuations. Whichever screen the pull happens on, all four are
+     current when it finishes. */
+  const [refreshing, setRefreshing] = useState(false);
+  const refreshingRef = useRef(false);
+  const iposRef = useRef(ipos);
+  iposRef.current = ipos;
+
+  const refreshAll = useCallback(async () => {
+    if (refreshingRef.current) return;
+    refreshingRef.current = true;
+    setRefreshing(true);
+    const startedAt = Date.now();
+    try {
+      const fresh = await syncNowRef.current();
+      await refreshPricesFrom(fresh || iposRef.current, { silent: true });
+    } catch {
+      /* Both halves report for themselves - the cloud through the sync status
+         in the header, prices through the panel that shows them. */
+    } finally {
+      /* Held a moment even when the answer comes back instantly, because a
+         spinner that vanishes on the same frame reads as a gesture that did
+         nothing rather than a refresh that found nothing to change. */
+      const left = 500 - (Date.now() - startedAt);
+      if (left > 0) await new Promise((r) => setTimeout(r, left));
+      refreshingRef.current = false;
+      setRefreshing(false);
+    }
+  }, [refreshPricesFrom]);
 
   /* When the browser regains connectivity, reconcile and refresh in the
      background - no reload, and no need to notice the app looks stale and
@@ -1948,6 +2006,13 @@ function AppInner() {
   const FLICK_MIN_PX = 24;
   const reducedMotion = prefersReducedMotion();
 
+  /* How far down the indicator comes: far enough to be a decision, not so far
+     that it is a haul. It parks a little short of the trigger while the work
+     is going on, the way a phone's own does. */
+  const PULL_TRIGGER = 64;
+  const PULL_MAX = 96;
+  const PULL_PARK = 52;
+
   /* Speed over the tail of the drag rather than the whole of it: a finger that
      wandered, stopped, and then flicked should be judged on the flick. */
   const swipeSpeed = (s) => {
@@ -1968,9 +2033,29 @@ function AppInner() {
       el.style.transform = `translate3d(calc(${(i - here) * 100}% + ${swipeDx.current}px), 0, 0)`;
     });
   };
+  /* Over the screens rather than pushing them down, so nothing below it
+     reflows while it is being held. */
+  const paintPull = () => {
+    const el = pullRef.current;
+    if (!el) return;
+    const y = pullY.current;
+    el.style.transition = pullMs.current
+      ? `transform ${pullMs.current}ms ease-out, opacity ${pullMs.current}ms ease-out`
+      : "none";
+    el.style.transform = `translate3d(-50%, ${y - 46}px, 0) rotate(${Math.round(y * 2.2)}deg)`;
+    el.style.opacity = String(Math.min(1, y / PULL_TRIGGER));
+  };
+
   /* After every render, so a neighbour that has just mounted is put in its
      place in the same frame rather than flashing over the screen you are on. */
-  useLayoutEffect(paintPages);
+  useLayoutEffect(() => { paintPages(); paintPull(); });
+
+  // Down to where it waits when the work starts, back up when it is done.
+  useEffect(() => {
+    pullMs.current = reducedMotion ? 0 : 240;
+    pullY.current = refreshing ? PULL_PARK : 0;
+    paintPull();
+  }, [refreshing]);
   useEffect(() => () => clearTimeout(settleTimer.current), []);
 
   /* dir 0 slides back to the screen you started on. */
@@ -2004,7 +2089,7 @@ function AppInner() {
     swipeNav.current = {
       x: e.touches[0].clientX, y: e.touches[0].clientY,
       axis: null, dx: 0, dir: 0, width: (box && box.width) || window.innerWidth,
-      samples: [{ x: e.touches[0].clientX, t: Date.now() }],
+      samples: [{ x: e.touches[0].clientX, t: Date.now() }], pull: 0,
     };
   };
 
@@ -2018,8 +2103,22 @@ function AppInner() {
          so a slightly slanted scroll cannot drag the page sideways halfway
          down a list, and a slanted swipe cannot scroll it. */
       if (Math.abs(dx) < 12 && Math.abs(dy) < 12) return;
-      if (Math.abs(dx) <= Math.abs(dy) * 1.2) { swipeNav.current = null; return; }
-      s.axis = "x";
+      if (Math.abs(dx) > Math.abs(dy) * 1.2) s.axis = "x";
+      else {
+        /* Downwards, from a screen already at its top, is the refresh; every
+           other vertical movement belongs to the scroller and is left alone. */
+        const top = pageRefs.current[tab];
+        if (dy > 0 && !refreshing && top && top.scrollTop <= 0) s.axis = "pull";
+        else { swipeNav.current = null; return; }
+      }
+    }
+    if (s.axis === "pull") {
+      // Half of what the finger does, so it never feels like it is falling out.
+      s.pull = Math.min(PULL_MAX, Math.max(0, dy) * 0.5);
+      pullY.current = s.pull;
+      pullMs.current = 0;
+      paintPull();
+      return;
     }
     const dir = dx < 0 ? 1 : -1;
     const room = !!TABS[TABS.indexOf(tab) + dir];
@@ -2036,7 +2135,14 @@ function AppInner() {
   const onSwipeEnd = () => {
     const s = swipeNav.current;
     swipeNav.current = null;
-    if (!s || s.axis !== "x") return;
+    if (!s) return;
+    if (s.axis === "pull") {
+      pullMs.current = reducedMotion ? 0 : 240;
+      if (s.pull >= PULL_TRIGGER) { pullY.current = PULL_PARK; paintPull(); refreshAll(); }
+      else { pullY.current = 0; paintPull(); }
+      return;
+    }
+    if (s.axis !== "x") return;
     const speed = swipeSpeed(s);
     const thrown = speed !== 0 && Math.sign(speed) === Math.sign(s.dx);
     /* A flick settles it either way - thrown forward the page goes, pulled
@@ -2100,6 +2206,20 @@ function AppInner() {
           position: "relative", flex: "1 1 auto", minHeight: 0,
           overflow: "hidden", overscrollBehaviorX: "contain",
         }}>
+        {/* Neither transform nor opacity is set from here: both are written
+            straight onto the node as the finger moves, and React would
+            overwrite them on its next render if it thought it owned them. */}
+        <div ref={pullRef} aria-hidden="true" style={{
+          position: "absolute", top: 10, left: "50%", zIndex: 6, pointerEvents: "none",
+          width: 34, height: 34, borderRadius: 17,
+          background: COLORS.surface, border: `1px solid ${COLORS.border}`,
+          boxShadow: "0 3px 10px rgba(0,0,0,0.14)",
+          display: "flex", alignItems: "center", justifyContent: "center",
+        }}>
+          {refreshing
+            ? <Loader2 size={16} color={COLORS.gold} className="spin" />
+            : <RefreshCw size={16} color={COLORS.gold} />}
+        </div>
         {TABS.map((id, i) => {
           // The screen you are on, plus the one you are swiping towards.
           if (id !== tab && i !== TABS.indexOf(tab) + swipeDir) return null;
@@ -2110,7 +2230,10 @@ function AppInner() {
               className="ledger-scroll"
               style={{
                 position: "absolute", inset: 0, overflowY: "auto", padding: "14px 14px 14px",
-                WebkitOverflowScrolling: "touch", overscrollBehaviorY: "auto",
+                /* Contained, so pulling past the top is the ledger's own
+                   refresh rather than the browser's - which reloaded the whole
+                   app, and did it by accident as often as on purpose. */
+                WebkitOverflowScrolling: "touch", overscrollBehaviorY: "contain",
                 // Vertical scrolling stays the browser's; sideways is ours.
                 touchAction: "pan-y", willChange: "transform",
               }}>
@@ -2140,7 +2263,19 @@ function AppInner() {
         })}
       </div>
 
-      <BottomNav tab={tab} setTab={setTab} />
+      <BottomNav
+        tab={tab}
+        setTab={setTab}
+        /* Tapping the screen you are already on takes you back to the top of
+           it, which is the one thing a bottom bar is expected to do and the
+           only way back up a long list without scrolling all of it. */
+        onReselect={() => {
+          const el = pageRefs.current[tab];
+          if (!el) return;
+          if (el.scrollTo) el.scrollTo({ top: 0, behavior: reducedMotion ? "auto" : "smooth" });
+          else el.scrollTop = 0;
+        }}
+      />
 
       {ipoDetail && (
         <IpoDetailSheet
@@ -2500,7 +2635,10 @@ function Header({ tab, onAdd, onOpenData, onFetchLive, syncing, syncError, cloud
       rowGap: 10, columnGap: 8, borderBottom: `3px double ${COLORS.gold}`,
     }}>
       <div style={{ minWidth: 0, flexShrink: 1 }}>
-        <div style={{
+        {/* Keyed by tab so the node is replaced when the screen changes, which
+            replays the fade. Everything below the header slides; a title that
+            simply cut from one word to the next was the one thing that did not. */}
+        <div key={tab} className="ledger-title" style={{
           fontFamily: "'Fraunces', serif", fontWeight: 700, fontSize: 21, color: "#fff",
           whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
         }}>{titles[tab]}</div>
@@ -2543,7 +2681,7 @@ function Header({ tab, onAdd, onOpenData, onFetchLive, syncing, syncError, cloud
   );
 }
 
-function BottomNav({ tab, setTab }) {
+function BottomNav({ tab, setTab, onReselect }) {
   const items = [
     { id: "dashboard", label: "Overview", icon: LayoutDashboard },
     { id: "ipos", label: "IPOs", icon: Receipt },
@@ -2561,7 +2699,7 @@ function BottomNav({ tab, setTab }) {
       {items.map(({ id, label, icon: Icon }) => {
         const active = tab === id;
         return (
-          <button key={id} onClick={() => setTab(id)} style={{
+          <button key={id} aria-current={active ? "page" : undefined} onClick={() => (active ? onReselect && onReselect() : setTab(id))} style={{
             background: "none", border: "none", display: "flex", flexDirection: "column",
             alignItems: "center", gap: 4, cursor: "pointer", color: active ? COLORS.gold : "#8592A6",
             padding: "4px 10px",
@@ -2630,9 +2768,9 @@ function Dashboard({ stats, ipos, accounts, onOpenIpo, onOpenHolding }) {
   return (
     <div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
-        <StatCard label="Capital Deployed" value={inr(stats.invested)} icon={Landmark} tone="navy" />
-        <StatCard label="Realized Gain" value={inr(stats.realized)} icon={stats.realized >= 0 ? TrendingUp : TrendingDown} tone={stats.realized >= 0 ? "green" : "red"} />
-        <StatCard label={marked ? "Unrealized (at today's price)" : "Unrealized (at listing)"} value={inr(stats.unrealized)} icon={stats.unrealized >= 0 ? TrendingUp : TrendingDown} tone={stats.unrealized >= 0 ? "green" : "red"} warning={stats.missingLtp > 0 ? `${stats.missingLtp} listed holding${stats.missingLtp === 1 ? "" : "s"} without a current price -- refresh to update` : ""} />
+        <StatCard label="Capital Deployed" value={inrShort(stats.invested)} full={inr(stats.invested)} icon={Landmark} tone="navy" />
+        <StatCard label="Realized Gain" value={inrShort(stats.realized)} full={inr(stats.realized)} icon={stats.realized >= 0 ? TrendingUp : TrendingDown} tone={stats.realized >= 0 ? "green" : "red"} />
+        <StatCard label={marked ? "Unrealized (at today's price)" : "Unrealized (at listing)"} value={inrShort(stats.unrealized)} full={inr(stats.unrealized)} icon={stats.unrealized >= 0 ? TrendingUp : TrendingDown} tone={stats.unrealized >= 0 ? "green" : "red"} warning={stats.missingLtp > 0 ? `${stats.missingLtp} listed holding${stats.missingLtp === 1 ? "" : "s"} without a current price -- refresh to update` : ""} />
         <StatCard label="Pending Allotment" value={stats.pendingCount} icon={Clock} tone="gold" />
       </div>
 
@@ -2744,7 +2882,7 @@ function Dashboard({ stats, ipos, accounts, onOpenIpo, onOpenHolding }) {
   );
 }
 
-function StatCard({ label, value, icon: Icon, tone, warning }) {
+function StatCard({ label, value, full, icon: Icon, tone, warning }) {
   const toneColor = { navy: COLORS.navy, green: COLORS.green, red: COLORS.red, gold: COLORS.gold }[tone];
   return (
     <div style={{
@@ -2754,7 +2892,7 @@ function StatCard({ label, value, icon: Icon, tone, warning }) {
       <div style={{ position: "absolute", top: 0, left: 0, width: 4, height: "100%", background: toneColor }} />
       <Icon size={16} color={toneColor} style={{ marginBottom: 8 }} />
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-        <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 18, fontWeight: 700, color: COLORS.ink }}>{value}</span>
+        <span title={full || undefined} style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 18, fontWeight: 700, color: COLORS.ink, whiteSpace: "nowrap" }}>{value}</span>
         {warning && <span title={warning} style={{ cursor: "help", fontSize: 14 }}>&#9888;</span>}
       </div>
       <div style={{ fontSize: 11, color: COLORS.inkSoft, marginTop: 2 }}>{label}</div>
@@ -2902,6 +3040,14 @@ function ListControls({ search, setSearch, placeholder, filters, filter, setFilt
             <Search size={15} color={COLORS.inkSoft} />
           </span>
           <Input
+            type="search"
+            /* So the phone offers a search key that closes the keyboard, and
+               does not try to autocorrect or capitalise a company name. */
+            enterKeyHint="search"
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="none"
+            spellCheck={false}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder={placeholder}
@@ -5500,7 +5646,7 @@ function LiveIposSheet({ existing, onClose, onImport }) {
               <span style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)", display: "flex", pointerEvents: "none" }}>
                 <Search size={15} color={COLORS.inkSoft} />
               </span>
-              <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search company" style={{ paddingLeft: 34 }} />
+              <Input type="search" enterKeyHint="search" autoComplete="off" autoCorrect="off" autoCapitalize="none" spellCheck={false} value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search company" style={{ paddingLeft: 34 }} />
             </div>
           )}
 

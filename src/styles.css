@@ -46,3 +46,34 @@ button, input, select, textarea {
   from { opacity: 1; }
   to { opacity: 0; }
 }
+
+/* The screens slide from one to the next, and the header title was the one
+   thing that simply cut. It is keyed by tab, so the node is replaced on a
+   change and this replays. */
+.ledger-title {
+  animation: titleIn 260ms ease-out;
+}
+@keyframes titleIn {
+  from { opacity: 0; transform: translateY(5px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* iOS zooms the page in when a form field smaller than 16px takes focus, and
+   never zooms back out - so every tap on a field leaves the ledger magnified.
+   Only there: everywhere else keeps the size the design asks for. The rule has
+   to win over an inline style, hence the important. */
+@supports (-webkit-touch-callout: none) {
+  input, select, textarea { font-size: 16px !important; }
+}
+
+/* The search fields carry their own clear button; WebKit's would be a second. */
+input[type="search"]::-webkit-search-cancel-button,
+input[type="search"]::-webkit-search-decoration {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ledger-title { animation: none; }
+  .spin { animation-duration: 2.4s; }
+}
