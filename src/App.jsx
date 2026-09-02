@@ -509,6 +509,19 @@ const TABLES = ["accounts", "ipos", "transfers", "trash"];
 // be pushed over a populated cloud.
 const LEDGER_TABLES = ["accounts", "ipos", "transfers"];
 
+/* Whose money it was, as against whose account it left from. Somebody often
+   sends on somebody else's behalf - Rishabh moves the money to Dadasaheb, but
+   it was Prateek's to send - and then Rishabh's account is only the pipe: the
+   claim on Dadasaheb belongs to Prateek and Rishabh comes out square. Every
+   balance in the ledger is worked out from this rather than from the sender,
+   so a transfer with nobody named behaves exactly as it always did. */
+const creditorOf = (t) => t.onBehalfOfId || t.fromAccountId;
+
+// The three accounts a transfer can touch, for anything that asks "is this
+// account involved" rather than "what does this account owe".
+const touchesAccount = (t, id) =>
+  t.fromAccountId === id || t.toAccountId === id || t.onBehalfOfId === id;
+
 /* ---------------------------------------------------------
    LOCAL STORAGE
    Keys are deliberately identical to the original single-file
@@ -3518,9 +3531,7 @@ function AccountList({ accounts, ipos, transfers = [], onOpen }) {
     const apps = ipos.reduce(
       (n, i) => n + (i.applications || []).filter((a) => a.accountId === acc.id).length, 0
     );
-    const moves = transfers.filter(
-      (t) => t.fromAccountId === acc.id || t.toAccountId === acc.id
-    ).length;
+    const moves = transfers.filter((t) => touchesAccount(t, acc.id)).length;
     if (!apps && !moves) {
       return confirm(`Delete ${acc.name || "this account"}?`);
     }
@@ -3723,7 +3734,7 @@ function AccountDetailSheet({ account, ipos, transfers, accounts, onClose, onEdi
   }, [apps]);
 
   const acctTransfers = useMemo(() =>
-    transfers.filter((t) => t.fromAccountId === account.id || t.toAccountId === account.id)
+    transfers.filter((t) => touchesAccount(t, account.id))
       .sort((a, b) => (b.date || "").localeCompare(a.date || "")),
     [account.id, transfers]
   );
@@ -3807,16 +3818,33 @@ function AccountDetailSheet({ account, ipos, transfers, accounts, onClose, onEdi
           <SectionLabel>Fund Transfers ({acctTransfers.length})</SectionLabel>
           <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
             {acctTransfers.map((t) => {
-              const from = accounts.find((a) => a.id === t.fromAccountId)?.name || "Unknown";
-              const to = accounts.find((a) => a.id === t.toAccountId)?.name || "Unknown";
-              const isOutgoing = t.fromAccountId === account.id;
+              const nameOf = (id) => accounts.find((a) => a.id === id)?.name || "Unknown";
+              const from = nameOf(t.fromAccountId);
+              const to = nameOf(t.toAccountId);
+              /* Three ways an account can appear on a transfer, and only two of
+                 them are money owed. The account that carries the claim is out
+                 of pocket whether or not the cash left its own bank, and the
+                 one that merely passed the money along is owed nothing - shown
+                 without a sign, so the same rupees are never counted twice
+                 down two different accounts. */
+              const bearer = creditorOf(t) === account.id;
+              const conduit = t.fromAccountId === account.id && !bearer;
+              const heading = bearer || conduit ? `To ${to}` : `From ${from}`;
+              const behalf = t.onBehalfOfId
+                ? (bearer ? `via ${from}` : `on ${nameOf(t.onBehalfOfId)}'s behalf`)
+                : "";
               return (
                 <div key={t.id} style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: "8px 10px", fontFamily: "Inter, sans-serif", fontSize: 12.5 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <span style={{ color: COLORS.ink, fontWeight: 600 }}>{isOutgoing ? `To ${to}` : `From ${from}`}</span>
-                    <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, color: isOutgoing ? COLORS.red : COLORS.green }}>{isOutgoing ? "-" : "+"}{inrOrDash(t.amount)}</span>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                    <span style={{ color: COLORS.ink, fontWeight: 600 }}>{heading}</span>
+                    <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, flexShrink: 0, color: conduit ? COLORS.inkSoft : bearer ? COLORS.red : COLORS.green }}>{conduit ? "" : bearer ? "-" : "+"}{inrOrDash(t.amount)}</span>
                   </div>
-                  <div style={{ fontSize: 11, color: COLORS.inkSoft, marginTop: 2 }}>{fmtDate(t.date)}{t.remarks ? ` · ${t.remarks}` : ""}</div>
+                  <div style={{ fontSize: 11, color: COLORS.inkSoft, marginTop: 2 }}>
+                    {fmtDate(t.date)}
+                    {behalf ? <span style={{ color: COLORS.gold, fontWeight: 600 }}> · {behalf}</span> : null}
+                    {conduit ? " · passed through, nothing owed" : ""}
+                    {t.remarks ? ` · ${t.remarks}` : ""}
+                  </div>
                 </div>
               );
             })}
@@ -3865,7 +3893,8 @@ function ReconciliationView({ transfers, accounts }) {
     accounts.forEach((a) => { map[a.id] = 0; });
     transfers.forEach((t) => {
       const amt = Number(t.amount) || 0;
-      map[t.fromAccountId] = (map[t.fromAccountId] || 0) + amt;
+      const from = creditorOf(t);
+      map[from] = (map[from] || 0) + amt;
       map[t.toAccountId] = (map[t.toAccountId] || 0) - amt;
     });
     return accounts.map((a) => ({ id: a.id, name: a.name, net: map[a.id] || 0 }))
@@ -3877,7 +3906,7 @@ function ReconciliationView({ transfers, accounts }) {
     const map = {};
     transfers.forEach((t) => {
       const amt = Number(t.amount) || 0;
-      const [x, y] = [t.fromAccountId, t.toAccountId];
+      const [x, y] = [creditorOf(t), t.toAccountId];
       if (!x || !y || x === y) return;
       const key = x < y ? `${x}|${y}` : `${y}|${x}`;
       const sign = x < y ? 1 : -1;
@@ -3965,7 +3994,7 @@ function TransferList({ transfers, accounts, ipos = [], onEdit, onDelete }) {
     return transfers
       .filter((t) => {
         if (q) {
-          const hay = `${name(t.fromAccountId)} ${name(t.toAccountId)} ${t.remarks || ""} ${ipoName(t.relatedIpoId)} ${(t.relatedIpoIds || []).map(ipoName).join(" ")}`.toLowerCase();
+          const hay = `${name(t.fromAccountId)} ${name(t.toAccountId)} ${t.onBehalfOfId ? name(t.onBehalfOfId) : ""} ${t.remarks || ""} ${ipoName(t.relatedIpoId)} ${(t.relatedIpoIds || []).map(ipoName).join(" ")}`.toLowerCase();
           if (!hay.includes(q)) return false;
         }
         return true;
@@ -4017,6 +4046,9 @@ function TransferList({ transfers, accounts, ipos = [], onEdit, onDelete }) {
               }}
             >
               {fmtDate(t.date)}
+              {/* Who the money was really for. Kept off the headline, which
+                  stays the movement you would find on a bank statement. */}
+              {t.onBehalfOfId ? <span style={{ color: COLORS.gold, fontWeight: 600 }}> · for {name(t.onBehalfOfId)}</span> : null}
               {t.remarks ? <span style={{ fontStyle: "italic" }}> · "{t.remarks}"</span> : null}
             </div>
           </div>
@@ -4341,13 +4373,18 @@ function TransferFormSheet({ initial, accounts, ipos, onClose, onSave, onDelete 
   const [f, setF] = useState({
     ...(initial || {
       id: undefined, fromAccountId: accounts[0]?.id || "", toAccountId: accounts[1]?.id || accounts[0]?.id || "",
-      amount: "", date: todayISO(), remarks: "",
+      amount: "", date: todayISO(), remarks: "", onBehalfOfId: "",
     }),
+    onBehalfOfId: initial?.onBehalfOfId || "",
     relatedIpoIds: initIds,
   });
   const change = (k) => (e) => {
     const v = e.target.value;
     const next = { ...f, [k]: v };
+    /* Nobody sends on their own behalf, so switching the sender to whoever was
+       named there drops the name rather than leaving the field pointing at a
+       choice it no longer offers. */
+    if (k === "fromAccountId" && v === next.onBehalfOfId) next.onBehalfOfId = "";
     setF(next);
     const errs = {};
     if (k === "fromAccountId" || k === "toAccountId") {
@@ -4382,6 +4419,7 @@ function TransferFormSheet({ initial, accounts, ipos, onClose, onSave, onDelete 
   const addIpo = (id) => { setF((prev) => ({ ...prev, relatedIpoIds: [...prev.relatedIpoIds, id] })); setIpoSearch(""); };
   const removeIpo = (id) => { setF((prev) => ({ ...prev, relatedIpoIds: prev.relatedIpoIds.filter((x) => x !== id) })); };
   const ipoNameOf = (id) => ipos.find((i) => i.id === id)?.company || "Unknown IPO";
+  const name = (id) => accounts.find((a) => a.id === id)?.name || "";
 
   return (
     <Sheet title={initial ? "Edit Transfer" : "New Transfer"} onClose={onClose}>
@@ -4394,6 +4432,22 @@ function TransferFormSheet({ initial, accounts, ipos, onClose, onSave, onDelete 
         <Select value={f.toAccountId} onChange={change("toAccountId")}>
           {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
         </Select>
+      </Field>
+      {/* Whose money it really was. Left blank - which is every transfer that
+          was ever recorded before this existed - the sender keeps the claim. */}
+      <Field label="On Behalf Of (optional)">
+        <Select value={f.onBehalfOfId} onChange={change("onBehalfOfId")}>
+          <option value="">Nobody - {name(f.fromAccountId) || "the sender"} is owed this</option>
+          {accounts.filter((a) => a.id !== f.fromAccountId).map((a) => (
+            <option key={a.id} value={a.id}>{a.name}</option>
+          ))}
+        </Select>
+        {f.onBehalfOfId && f.onBehalfOfId !== f.fromAccountId && (
+          <div style={{ fontSize: 11.5, color: COLORS.inkSoft, marginTop: 6, fontFamily: "Inter, sans-serif", lineHeight: 1.45 }}>
+            {name(f.toAccountId)} will owe <strong style={{ color: COLORS.ink }}>{name(f.onBehalfOfId)}</strong>, not {name(f.fromAccountId)}
+            {f.onBehalfOfId === f.toAccountId ? " - which settles to nothing, since they are the same person." : `. ${name(f.fromAccountId)} comes out square.`}
+          </div>
+        )}
       </Field>
       <div style={{ display: "flex", gap: 10 }}>
         <div style={{ flex: 1 }}><Field label="Amount (₹)" error={errors.amount}><Input type="number" inputMode="numeric" value={f.amount} onChange={change("amount")} /></Field></div>
@@ -4454,7 +4508,9 @@ function TransferFormSheet({ initial, accounts, ipos, onClose, onSave, onDelete 
         if (!f.amount || Number(f.amount) <= 0) e.amount = "Must be greater than 0";
         if (!f.date) e.date = "Required";
         if (Object.keys(e).length) return setErrors(e);
-        onSave(trimFields({ ...f, relatedIpoId: f.relatedIpoIds[0] || "", id: f.id || uid() }));
+        // Naming the sender is the same as naming nobody; store it as nobody.
+        const onBehalfOfId = f.onBehalfOfId === f.fromAccountId ? "" : f.onBehalfOfId;
+        onSave(trimFields({ ...f, onBehalfOfId, relatedIpoId: f.relatedIpoIds[0] || "", id: f.id || uid() }));
       }}>
         {initial ? "Save Changes" : "Add Transfer"}
       </PrimaryButton>
