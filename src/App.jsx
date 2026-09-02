@@ -4742,6 +4742,9 @@ function TransferFormSheet({ initial, accounts, ipos, onClose, onSave, onDelete 
   const removeIpo = (id) => { setF((prev) => ({ ...prev, relatedIpoIds: prev.relatedIpoIds.filter((x) => x !== id) })); };
   const ipoNameOf = (id) => ipos.find((i) => i.id === id)?.company || "Unknown IPO";
   const name = (id) => accounts.find((a) => a.id === id)?.name || "";
+  // Just the first name in the chain below: three full names do not fit a line,
+  // and within one family the first name is the whole of what distinguishes them.
+  const firstName = (id) => name(id).trim().split(/s+/)[0] || "";
 
   return (
     <Sheet title={initial ? "Edit Transfer" : "New Transfer"} onClose={onClose}>
@@ -4766,7 +4769,7 @@ function TransferFormSheet({ initial, accounts, ipos, onClose, onSave, onDelete 
         </Select>
         {f.onBehalfOfId && f.onBehalfOfId !== f.fromAccountId && f.onBehalfOfId !== f.toAccountId && (
           <div style={{ fontSize: 11.5, color: COLORS.inkSoft, marginTop: 6, fontFamily: "Inter, sans-serif" }}>
-            Counts as {name(f.fromAccountId)} → <strong style={{ color: COLORS.ink }}>{name(f.onBehalfOfId)}</strong> → {name(f.toAccountId)}
+            Counts as {firstName(f.fromAccountId)} → <strong style={{ color: COLORS.ink }}>{firstName(f.onBehalfOfId)}</strong> → {firstName(f.toAccountId)}
           </div>
         )}
       </Field>
