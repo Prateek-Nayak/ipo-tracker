@@ -535,6 +535,25 @@ const fmtDate = (d) => {
 };
 const fmtTime = (d) => (d ? d.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }) : "");
 
+/* Day and month only, for a row that has to fit its whole line across a phone.
+   An open-to-close pair written out in full - 2026-08-31 -> 2026-09-02 - took
+   more width than there was and wrapped, and the fix is not a smaller font on
+   a line that is already 11px. The year comes back whenever it is not this
+   one, so an older listing is still unambiguous. */
+/* Written out rather than left to toLocaleDateString, which gives "Sept" for
+   September under en-IN and three letters for every other month. In a monospace
+   column that one extra character shifts the arrow out of line on every
+   September row, and it varies by platform besides. */
+const MONTHS_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const fmtDayMon = (d) => {
+  if (!d) return "--";
+  const dt = new Date(d + "T00:00:00");
+  if (isNaN(dt)) return d;
+  const year = dt.getFullYear() === new Date().getFullYear()
+    ? "" : " " + String(dt.getFullYear()).slice(2);
+  return String(dt.getDate()).padStart(2, "0") + " " + MONTHS_SHORT[dt.getMonth()] + year;
+};
+
 const ALLOTMENT_STATUSES = ["Pending", "Allotted", "Partial", "Not Allotted"];
 let STATUS_META = {};
 function buildStatusMeta() {
@@ -5778,18 +5797,18 @@ function LiveIposSheet({ existing, onClose, onImport }) {
                     />
                     <div style={{ minWidth: 0, flex: 1 }}>
                       <div style={{ display: "flex", justifyContent: "space-between", gap: 6, alignItems: "flex-start" }}>
-                        <span style={{ fontWeight: 600, fontSize: 14, color: COLORS.ink }}>{r.company}</span>
+                        <span title={r.company} style={{ fontWeight: 600, fontSize: 14, color: COLORS.ink, minWidth: 0, ...ellipsisText }}>{r.company}</span>
                         {r.category && <Badge color={COLORS.navy} bg={COLORS.chip}>{r.category}</Badge>}
                       </div>
 
-                      <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: COLORS.inkSoft, marginTop: 4 }}>
+                      <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: COLORS.inkSoft, marginTop: 4, ...ellipsisText }}>
                         {r.priceMin != null && r.priceMax != null
                           ? `₹${r.priceMin}-${r.priceMax}`
                           : r.priceMax != null ? `₹${r.priceMax}` : "price not published"}
                         {r.lotSize ? ` · lot ${r.lotSize}` : ""}
                         {r.listedOn
-                          ? ` · listed ${fmtDate(r.listedOn)}`
-                          : r.closeDate ? ` · ${r.openDate || "--"} -> ${r.closeDate}` : ""}
+                          ? ` · listed ${fmtDayMon(r.listedOn)}`
+                          : r.closeDate ? ` · ${fmtDayMon(r.openDate)} -> ${fmtDayMon(r.closeDate)}` : ""}
                       </div>
 
                       {(r.listingOpen != null || r.currentPrice != null) && (
