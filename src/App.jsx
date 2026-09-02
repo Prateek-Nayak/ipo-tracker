@@ -4732,10 +4732,8 @@ function TransferFormSheet({ initial, accounts, ipos, onClose, onSave, onDelete 
           ))}
         </Select>
         {f.onBehalfOfId && f.onBehalfOfId !== f.fromAccountId && f.onBehalfOfId !== f.toAccountId && (
-          <div style={{ fontSize: 11.5, color: COLORS.inkSoft, marginTop: 6, fontFamily: "Inter, sans-serif", lineHeight: 1.45 }}>
-            Counted as two: {name(f.fromAccountId)} settles that much with{" "}
-            <strong style={{ color: COLORS.ink }}>{name(f.onBehalfOfId)}</strong>, and {name(f.toAccountId)} owes{" "}
-            {name(f.onBehalfOfId)} instead. {name(f.onBehalfOfId)} is owed the same as before, by somebody else.
+          <div style={{ fontSize: 11.5, color: COLORS.inkSoft, marginTop: 6, fontFamily: "Inter, sans-serif" }}>
+            Counts as {name(f.fromAccountId)} → <strong style={{ color: COLORS.ink }}>{name(f.onBehalfOfId)}</strong> → {name(f.toAccountId)}
           </div>
         )}
       </Field>
