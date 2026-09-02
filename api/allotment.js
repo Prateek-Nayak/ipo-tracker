@@ -83,6 +83,23 @@ async function mufgIssues() {
     .map((m) => ({ id: m[1], name: m[2] }));
 }
 
+/* Which of the known registrars a name belongs to, from whatever Upstox calls
+   it. Worth knowing even for the ones that cannot be asked: "Bigshare, which
+   needs a captcha" is a useful thing to be told, where "not listed" is not. */
+const REGISTRARS = [
+  { id: "kfintech", label: "KFintech", reach: true, match: /kfin/i },
+  { id: "mufg", label: "MUFG Intime", reach: true, match: /mufg|link\s*intime|mpms/i },
+  { id: "bigshare", label: "Bigshare", reach: false, match: /bigshare/i },
+  { id: "cameo", label: "Cameo", reach: false, match: /cameo/i },
+  { id: "skyline", label: "Skyline", reach: false, match: /skyline/i },
+  { id: "maashitla", label: "Maashitla", reach: false, match: /maashitla/i },
+  { id: "purva", label: "Purva Sharegistry", reach: false, match: /purva/i },
+  { id: "integrated", label: "Integrated Registry", reach: false, match: /integrated/i },
+  { id: "mas", label: "MAS Services", reach: false, match: /\bmas\b/i },
+];
+const knownRegistrar = (name) =>
+  REGISTRARS.find((r) => r.match.test(String(name || ""))) || null;
+
 /* Whichever of them is carrying this issue. An issue absent from both has
    either not had its allotment published yet - they list it only once the
    basis of allotment is done - or belongs to a third registrar. */
@@ -176,8 +193,28 @@ async function mufgLookup(clientId, pan) {
 }
 
 export default async function handler(req, res) {
+  /* The two indexes on their own. One call the app can make on opening to see
+     whether anything it is waiting on has been published, without asking after
+     each issue in turn. */
+  if (req.query.index) {
+    try {
+      const [kf, mu] = await Promise.all([kfIssues().catch(() => []), mufgIssues().catch(() => [])]);
+      return res.status(200).json({
+        checkedAt: new Date().toISOString(),
+        kfintech: kf.map((r) => r.name),
+        mufg: mu.map((r) => r.name),
+      });
+    } catch (error) {
+      return res.status(502).json({ error: error.message || "Could not reach the registrars" });
+    }
+  }
+
   const company = String(req.query.company || "").trim();
   if (!company) return res.status(400).json({ error: "company is required" });
+  // What the ledger believes the registrar to be, if it knows. Only ever used
+  // to explain a miss - never to choose an adapter, since the name could be
+  // stale and the lists are the truth.
+  const hinted = knownRegistrar(req.query.registrar);
 
   const pans = String(req.query.pans || "")
     .split(",")
@@ -187,13 +224,26 @@ export default async function handler(req, res) {
   try {
     const found = await findRegistrar(company);
     if (!found) {
+      /* Three different situations, and telling them apart is most of the value
+         of saying anything at all: a registrar that cannot be reached, one that
+         can but has not published yet, and not knowing which registrar it is. */
+      const note = hinted && !hinted.reach
+        ? `${hinted.label} is the registrar for this issue, and it cannot be asked `
+          + "automatically - it requires a captcha for every PAN. Check it by hand."
+        : hinted && hinted.reach
+          ? `${hinted.label} is the registrar, but is not listing this issue yet. `
+            + "The basis of allotment is published on the evening of allotment day; "
+            + "if it is well past that, the issue has aged off their status page."
+          : "Neither KFintech nor MUFG is listing this issue, and the ledger does "
+            + "not know who registers it. Import the issue from the exchange to "
+            + "pick up the registrar, or check by hand.";
       return res.status(200).json({
         company,
         registrar: null,
+        knownRegistrar: hinted ? hinted.label : (req.query.registrar || ""),
+        reachable: hinted ? hinted.reach : null,
         results: [],
-        note: "Neither registrar is listing this issue. They publish it only once "
-          + "the basis of allotment is done, so it may simply be early - or it may "
-          + "belong to a registrar this cannot reach.",
+        note,
         checkedAt: new Date().toISOString(),
       });
     }

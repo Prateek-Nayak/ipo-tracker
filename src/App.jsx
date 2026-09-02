@@ -1927,7 +1927,8 @@ function AppInner() {
   const enrichedDatesOnce = useRef(false);
   useEffect(() => {
     if (!reconciled || enrichedDatesOnce.current) return;
-    const needDates = ipos.filter((i) => i.closeDate && (!i.allotmentDate || !i.listingDate) && !hasListed(i));
+    const needDates = ipos.filter((i) =>
+      i.closeDate && !hasListed(i) && (!i.allotmentDate || !i.listingDate || !i.registrar));
     if (!needDates.length) return;
     enrichedDatesOnce.current = true;
     (async () => {
@@ -1946,6 +1947,8 @@ function AppInner() {
           const patch = {};
           if (!ipo.allotmentDate && hit.allotmentDate) patch.allotmentDate = hit.allotmentDate;
           if (!ipo.listingDate && hit.listingDate) patch.listingDate = hit.listingDate;
+          // Issues imported before the registrar was kept have none on record.
+          if (!ipo.registrar && hit.registrar) patch.registrar = hit.registrar;
           if (!Object.keys(patch).length) return ipo;
           changed = true;
           return { ...ipo, ...patch };
@@ -2019,6 +2022,36 @@ function AppInner() {
   const iposRef = useRef(ipos);
   iposRef.current = ipos;
 
+  /* An issue appears on its registrar's status page only once the basis of
+     allotment is done, which is the moment the answer exists. So rather than
+     asking after each issue in turn, both indexes are fetched at once and
+     matched against whatever is still Pending here - one request, and the
+     Overview can then say which ones are ready to be checked. */
+  const [published, setPublished] = useState([]);
+  const watchRef = useRef({ at: 0, busy: false });
+
+  const checkPublished = useCallback(async (list) => {
+    const waiting = (list || []).filter(awaitingAllotmentEntry);
+    if (!waiting.length) { setPublished([]); return; }
+    if (watchRef.current.busy || Date.now() - watchRef.current.at < 5 * 60 * 1000) return;
+    watchRef.current.busy = true;
+    try {
+      const res = await fetch("/api/allotment?index=1");
+      if (!res.ok) return;
+      const idx = await res.json();
+      const names = [...(idx.kfintech || []), ...(idx.mufg || [])].map(nameKey);
+      const listed = (a) => names.some((n) => n === a || (n.length > 6 && a.length > 6 && (n.includes(a) || a.includes(n))));
+      setPublished(waiting.filter((i) => listed(nameKey(i.company))).map((i) => i.id));
+      watchRef.current.at = Date.now();
+    } catch {
+      /* No answer means no news, which is the same as the quiet case. */
+    } finally {
+      watchRef.current.busy = false;
+    }
+  }, []);
+
+  useEffect(() => { if (reconciled) checkPublished(ipos); }, [reconciled, ipos, checkPublished]);
+
   const refreshAll = useCallback(async () => {
     if (refreshingRef.current) return;
     refreshingRef.current = true;
@@ -2027,6 +2060,8 @@ function AppInner() {
     try {
       const fresh = await syncNowRef.current();
       await refreshPricesFrom(fresh || iposRef.current, { silent: true });
+      watchRef.current.at = 0;
+      await checkPublished(fresh || iposRef.current);
     } catch {
       /* Both halves report for themselves - the cloud through the sync status
          in the header, prices through the panel that shows them. */
@@ -2039,7 +2074,7 @@ function AppInner() {
       refreshingRef.current = false;
       setRefreshing(false);
     }
-  }, [refreshPricesFrom]);
+  }, [refreshPricesFrom, checkPublished]);
 
   /* When the browser regains connectivity, reconcile and refresh in the
      background - no reload, and no need to notice the app looks stale and
@@ -2372,7 +2407,7 @@ function AppInner() {
                 touchAction: "pan-y", willChange: "transform",
               }}>
               {id === "dashboard" && (
-                <Dashboard stats={stats} ipos={ipos} accounts={accounts} onOpenIpo={(x) => setIpoDetail(x)} onOpenHolding={(x) => setHoldingDetail(x)} />
+                <Dashboard stats={stats} ipos={ipos} accounts={accounts} published={published} onOpenIpo={(x) => setIpoDetail(x)} onOpenHolding={(x) => setHoldingDetail(x)} />
               )}
               {id === "ipos" && (
                 <IpoList ipos={ipos} accounts={accounts} onOpen={(x) => setIpoDetail(x)} />
@@ -2888,7 +2923,7 @@ function BottomNav({ tab, setTab, onReselect }) {
 /* ---------------------------------------------------------
    SCREENS
 ---------------------------------------------------------- */
-function Dashboard({ stats, ipos, accounts, onOpenIpo, onOpenHolding }) {
+function Dashboard({ stats, ipos, accounts, published = [], onOpenIpo, onOpenHolding }) {
   const holding = ipos.filter((ipo) =>
     (ipo.applications || []).some((a) =>
       (a.allotmentStatus === "Allotted" || a.allotmentStatus === "Partial") && !a.sold
@@ -2908,16 +2943,25 @@ function Dashboard({ stats, ipos, accounts, onOpenIpo, onOpenHolding }) {
     const closing = [];
     const allotting = [];
     const listing = [];
+    const ready = ipos.filter((i) => published.includes(i.id));
     ipos.forEach((i) => {
       if (i.closeDate && i.closeDate === today) closing.push(i);
       if (awaitingAllotmentEntry(i)) allotting.push(i);
       const lists = i.listingDate || listingDateOf(i).date;
       if (lists && lists === today) listing.push(i);
     });
-    return { closing, allotting, listing };
-  }, [ipos, today]);
+    return { closing, allotting, listing, ready };
+  }, [ipos, today, published]);
 
   const lines = [
+    /* First, because it is the only one of these that has just become true and
+       can be acted on immediately - the registrar has the answer now. */
+    todo.ready.length && {
+      key: "ready",
+      text: `Allotment is out for ${todo.ready.length === 1 ? "1 issue" : todo.ready.length + " issues"}`,
+      detail: todo.ready.map((i) => i.company).join(", "),
+      tone: COLORS.green,
+    },
     todo.closing.length && {
       key: "closing",
       text: `${todo.closing.length === 1 ? "1 issue closes" : todo.closing.length + " issues close"} today`,
@@ -3508,6 +3552,22 @@ function ipoBucket(ipo) {
 
 const panOf = (account) => (account?.pan || "").trim().toUpperCase();
 
+/* Registrars write themselves out at full legal length. The short name is what
+   anyone actually calls them, and it is what the allotment check reports back,
+   so the two agree. An unrecognised one is shown as it came. */
+const REGISTRAR_NAMES = [
+  [/kfin/i, "KFintech"], [/mufg|link\s*intime|mpms/i, "MUFG Intime"],
+  [/bigshare/i, "Bigshare"], [/cameo/i, "Cameo"], [/skyline/i, "Skyline"],
+  [/maashitla/i, "Maashitla"], [/purva/i, "Purva Sharegistry"],
+  [/integrated/i, "Integrated Registry"], [/\bmas\b/i, "MAS Services"],
+];
+const registrarLabel = (name) => {
+  const hit = REGISTRAR_NAMES.find(([re]) => re.test(String(name || "")));
+  return hit ? hit[1] : String(name || "");
+};
+// The two that answer without a captcha - see api/allotment.js.
+const registrarReachable = (name) => /kfin|mufg|link\s*intime|mpms/i.test(String(name || ""));
+
 /* One PAN may submit only one application per IPO - a duplicate gets every
    application under that PAN rejected, not just the extra one. Worth catching. */
 function panConflicts(ipo, accounts) {
@@ -3722,6 +3782,15 @@ function IpoDetailSheet({ ipo, accounts, onClose, onDeleteIpo, onEditIpo, onSave
         <DateCell label="Allotment" value={allotValue} />
         <DateCell label="Listing" value={listValue} />
       </div>
+      {ipo.registrar && (
+        <div style={{
+          display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10,
+          marginBottom: 16, fontFamily: "Inter, sans-serif",
+        }}>
+          <span style={{ fontSize: 11, color: COLORS.inkSoft, textTransform: "uppercase", letterSpacing: 0.6, fontWeight: 600, flexShrink: 0 }}>Registrar</span>
+          <span title={ipo.registrar} style={{ fontSize: 12.5, color: COLORS.ink, fontWeight: 600, minWidth: 0, textAlign: "right", ...ellipsisText }}>{registrarLabel(ipo.registrar)}</span>
+        </div>
+      )}
       <div style={{ marginBottom: 16 }}>
         <SectionLabel>Note</SectionLabel>
         <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={3} placeholder="Add a personal note about this IPO" aria-label="IPO note" style={{ ...inputStyle, resize: "vertical", marginTop: 6 }} />
@@ -5592,6 +5661,7 @@ function AllotmentSheet({ ipo, accounts, onClose, onApply }) {
     setWritten(false);
     try {
       const url = "/api/allotment?company=" + encodeURIComponent(ipo.company || "")
+        + "&registrar=" + encodeURIComponent(ipo.registrar || "")
         + "&pans=" + encodeURIComponent(holders.map((a) => panOf(a)).join(","));
       const res = await fetch(url);
       const text = await res.text();
@@ -5643,6 +5713,7 @@ function AllotmentSheet({ ipo, accounts, onClose, onApply }) {
         <div title={ipo.company} style={{ fontFamily: "'Fraunces', serif", fontWeight: 600, fontSize: 15, color: COLORS.heading, ...ellipsisText }}>{ipo.company}</div>
         <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11.5, color: COLORS.inkSoft, marginTop: 3 }}>
           {holders.length} account{holders.length === 1 ? "" : "s"} with a PAN on file
+          {ipo.registrar ? ` · ${registrarLabel(ipo.registrar)}` : ""}
         </div>
       </div>
 
@@ -6022,6 +6093,9 @@ function LiveIposSheet({ existing, onClose, onImport }) {
       openDate: r.openDate || "",
       closeDate: r.closeDate || "",
       allotmentDate: r.allotmentDate || "",
+      // Who allots it. Fetched all along and dropped here, which left the
+      // allotment check unable to say anything more useful than "not listed".
+      registrar: r.registrar || "",
       listingDate: r.listedOn || r.listingDate || "",
       // Same rule as a refresh: no closing price until the day has closed.
       ...(() => {
