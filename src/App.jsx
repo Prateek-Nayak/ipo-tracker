@@ -247,10 +247,6 @@ const trimFields = (obj) => { const out = { ...obj }; for (const k in out) { if 
    fit. In a sheet, which is where it is read, it wraps instead - but breaks
    mid-word rather than leaving the box. */
 const ellipsisText = { whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" };
-const clampText = (lines) => ({
-  display: "-webkit-box", WebkitBoxOrient: "vertical", WebkitLineClamp: lines,
-  overflow: "hidden", overflowWrap: "anywhere", wordBreak: "break-word",
-});
 // Newlines in a note are kept: it is a note, and it was typed with them.
 const wrapText = { overflowWrap: "anywhere", wordBreak: "break-word", whiteSpace: "pre-wrap" };
 
@@ -324,7 +320,32 @@ const BACK_LAYERS = [
   "acctDetail", "holdingDetail", "transferSheet", "liveOpen", "dataSheetOpen", "ipoDetail",
 ];
 const layerDepth = (v) =>
-  BACK_LAYERS.reduce((n, k) => n + (v[k] ? 1 : 0), 0) + (v.tab !== "dashboard" ? 1 : 0);
+  BACK_LAYERS.reduce((n, k) => n + (v[k] ? 1 : 0), 0) + (v.transient || 0)
+  + (v.tab !== "dashboard" ? 1 : 0);
+
+/* An overlay that belongs to a screen rather than to the app - a popover, a
+   picker - keeps its own state, which back could not see. So back looked past
+   it and closed whatever was underneath: on a list that meant going back to
+   Overview, which unmounted the screen and took the popover down with it. It
+   looked as though back had closed the popover, when it had really spent the
+   entry belonging to the tab - and the next press, finding nothing left to
+   close, left the app. Anything of that kind registers itself here and is
+   closed in its turn like every other layer. */
+const transientLayers = new Set();
+const transientListeners = new Set();
+const announceTransient = () => transientListeners.forEach((fn) => fn());
+function useBackLayer(open, close) {
+  // Held in a ref so a new closure every render does not re-register the layer.
+  const closeRef = useRef(close);
+  closeRef.current = close;
+  useEffect(() => {
+    if (!open) return;
+    const entry = () => closeRef.current();
+    transientLayers.add(entry);
+    announceTransient();
+    return () => { transientLayers.delete(entry); announceTransient(); };
+  }, [open]);
+}
 
 // Anything that counts as the first sign of a person, for the history entries.
 const ARM_EVENTS = ["touchstart", "pointerdown", "mousedown", "keydown"];
@@ -1068,9 +1089,9 @@ function Sheet({ title, onClose, children }) {
           display: "flex", justifyContent: "space-between", alignItems: "center",
           padding: "18px 18px 16px", flexShrink: 0,
         }}>
-          <h2 style={{
+          <h2 title={typeof title === "string" ? title : undefined} style={{
             fontFamily: "'Fraunces', serif", fontWeight: 600, fontSize: 20, color: COLORS.heading, margin: 0,
-            minWidth: 0, ...clampText(2),
+            minWidth: 0, ...ellipsisText,
           }}>{title}</h2> 
           {title && title == "Sync & Data" ? <div style={{
           display: "flex", 
@@ -1235,6 +1256,15 @@ function AppInner() {
     confirmListeners.add(listener);
     listener();
     return () => { confirmListeners.delete(listener); };
+  }, []);
+
+  // And the same for the popovers the screens own - see useBackLayer.
+  const [transient, setTransient] = useState(0);
+  useEffect(() => {
+    const listener = () => setTransient(transientLayers.size);
+    transientListeners.add(listener);
+    listener();
+    return () => { transientListeners.delete(listener); };
   }, []);
 
   const [pricing, setPricing] = useState(false);
@@ -1444,13 +1474,17 @@ function AppInner() {
      The handler reads through a ref so the listener can be registered once and
      still see current state; re-registering on every state change would drop
      the history bookkeeping below. */
-  const backLayers = { confirmOpen, appSheet, bulkApplyFor, bulkStatusFor, ipoSheet, acctSheet,
-    transferSheet, liveOpen, dataSheetOpen, ipoDetail, acctDetail, holdingDetail, tab };
+  const backLayers = { confirmOpen, transient, appSheet, bulkApplyFor, bulkStatusFor, ipoSheet,
+    acctSheet, transferSheet, liveOpen, dataSheetOpen, ipoDetail, acctDetail, holdingDetail, tab };
 
   /* A sheet covers the screen but the page behind it still scrolls, so dragging
      anywhere outside the panel moved the list underneath and you came back to
      somewhere else entirely. Held still while a sheet is open. */
-  const sheetIsOpen = Object.entries(backLayers).some(([k, v]) => k !== "tab" && !!v);
+  /* A popover is not one of these: it covers a corner, not the screen, and it
+     should not stop the page being swiped or pulled. Swiping away simply takes
+     it with the screen it belongs to. */
+  const sheetIsOpen = Object.entries(backLayers)
+    .some(([k, v]) => k !== "tab" && k !== "transient" && !!v);
   useEffect(() => {
     if (typeof document === "undefined" || !document.body) return;
     if (!sheetIsOpen) return;
@@ -1465,6 +1499,14 @@ function AppInner() {
     const v = backRef.current;
     const clear = (key, setter, val) => { setter(val !== undefined ? val : null); backRef.current = { ...backRef.current, [key]: val !== undefined ? val : null }; return true; };
     if (confirmDismissRef.current) { confirmDismissRef.current(); backRef.current = { ...backRef.current, confirmOpen: false }; return true; }
+    if (transientLayers.size) {
+      // The last to open is the one on top, and the one back is for.
+      const top = [...transientLayers].pop();
+      transientLayers.delete(top);
+      top();
+      backRef.current = { ...backRef.current, transient: transientLayers.size };
+      return true;
+    }
     if (v.appSheet) return clear("appSheet", setAppSheet);
     if (v.bulkApplyFor) return clear("bulkApplyFor", setBulkApplyFor);
     if (v.bulkStatusFor) return clear("bulkStatusFor", setBulkStatusFor);
@@ -2196,6 +2238,7 @@ function AppInner() {
       <Header
         tab={tab}
         syncing={syncing}
+        pricing={pricing}
         syncError={syncError}
         cloudOn={cloudEnabled()}
         onOpenData={() => setDataSheetOpen(true)}
@@ -2639,7 +2682,7 @@ function LedgerSkeleton({ text, tab = "dashboard" }) {
 /* ---------------------------------------------------------
    CHROME
 ---------------------------------------------------------- */
-function Header({ tab, onAdd, onOpenData, onFetchLive, syncing, syncError, cloudOn }) {
+function Header({ tab, onAdd, onOpenData, onFetchLive, syncing, pricing, syncError, cloudOn }) {
   /* The same word the bottom nav uses, on every screen. The app's own name is
      on the home screen icon and in the manifest, which is where a name belongs;
      spending a line of the header on it made Overview taller than the other
@@ -2647,7 +2690,10 @@ function Header({ tab, onAdd, onOpenData, onFetchLive, syncing, syncError, cloud
   const titles = { dashboard: "Overview", ipos: "IPOs", accounts: "Accounts", transfers: "Transfers" };
   const showAdd = tab !== "dashboard";
   const statusColor = !cloudOn ? COLORS.inkSoft : syncError ? COLORS.red : COLORS.gold;
-  const StatusIcon = !cloudOn ? CloudOff : syncing ? Loader2 : Settings;
+  /* Fetching prices is work the same as syncing is, and it is the only sign
+     that a pull to refresh is still going once the indicator has gone up. */
+  const busy = syncing || pricing;
+  const StatusIcon = busy ? Loader2 : !cloudOn ? CloudOff : Settings;
   return (
     <div style={{
       background: COLORS.navyDeep,
@@ -2689,14 +2735,14 @@ function Header({ tab, onAdd, onOpenData, onFetchLive, syncing, syncError, cloud
         <button
           onClick={onOpenData}
           aria-label="Sync and data"
-          title={!cloudOn ? "Cloud sync is off" : syncError ? "Sync problem" : syncing ? "Syncing..." : "Synced"}
+          title={syncing ? "Syncing..." : pricing ? "Updating prices..." : !cloudOn ? "Cloud sync is off" : syncError ? "Sync problem" : "Synced"}
           style={{
             width: 36, height: 36, borderRadius: 18, border: `1px solid ${statusColor}`,
             background: "transparent", display: "flex", alignItems: "center", justifyContent: "center",
             cursor: "pointer", flexShrink: 0,
           }}
         >
-          <StatusIcon size={17} color={statusColor} className={syncing ? "spin" : undefined} />
+          <StatusIcon size={17} color={statusColor} className={busy ? "spin" : undefined} />
         </button>
       </div>
     </div>
@@ -3026,6 +3072,9 @@ function ListControls({ search, setSearch, placeholder, filters, filter, setFilt
   const [open, setOpen] = useState(false);
   const panelRef = useRef(null);
   const buttonRef = useRef(null);
+
+  // Back closes this before it closes anything underneath it.
+  useBackLayer(open, () => setOpen(false));
 
   // Clicking away closes it, as a panel like this should.
   useEffect(() => {
@@ -3689,7 +3738,7 @@ function ApplicationRow({ app, ipo, accounts, onEdit, onDelete }) {
           </span>
         )}
       </div>
-      {app.remarks && <div title={app.remarks} style={{ fontSize: 11.5, color: COLORS.inkSoft, marginTop: 4, fontFamily: "Inter, sans-serif", fontStyle: "italic", ...clampText(2) }}>"{app.remarks}"</div>}
+      {app.remarks && <div title={app.remarks} style={{ fontSize: 11.5, color: COLORS.inkSoft, marginTop: 4, fontFamily: "Inter, sans-serif", fontStyle: "italic", ...ellipsisText }}>"{app.remarks}"</div>}
     </div>
   );
 }
@@ -3812,7 +3861,7 @@ function AccountList({ accounts, ipos, transfers = [], onOpen }) {
                       ? <span style={{ color: isDup ? COLORS.red : COLORS.inkSoft }}>{pan}{isDup ? " · duplicate" : ""}</span>
                       : <span style={{ color: COLORS.gold }}>no PAN</span>}
                   </div>
-                  {acc.notes && <div title={acc.notes} style={{ fontSize: 11.5, color: COLORS.inkSoft, marginTop: 4, fontStyle: "italic", ...clampText(2) }}>{acc.notes}</div>}
+                  {acc.notes && <div title={acc.notes} style={{ fontSize: 11.5, color: COLORS.inkSoft, marginTop: 4, fontStyle: "italic", ...ellipsisText }}>{acc.notes}</div>}
                 </div>
                 <ChevronRight size={14} color={COLORS.inkSoft} style={{ flexShrink: 0 }} />
               </div>
@@ -4042,7 +4091,7 @@ function AccountDetailSheet({ account, ipos, transfers, accounts, onClose, onEdi
                     <span style={{ color: COLORS.ink, fontWeight: 600 }}>{heading}</span>
                     <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, flexShrink: 0, color: conduit ? COLORS.inkSoft : bearer ? COLORS.red : COLORS.green }}>{conduit ? "" : bearer ? "-" : "+"}{inrOrDash(t.amount)}</span>
                   </div>
-                  <div title={t.remarks || undefined} style={{ fontSize: 11, color: COLORS.inkSoft, marginTop: 2, ...clampText(2) }}>
+                  <div title={t.remarks || undefined} style={{ fontSize: 11, color: COLORS.inkSoft, marginTop: 2, ...ellipsisText }}>
                     {fmtDate(t.date)}
                     {behalf ? <span style={{ color: COLORS.gold, fontWeight: 600 }}> · {behalf}</span> : null}
                     {conduit ? " · passed through, nothing owed" : ""}
