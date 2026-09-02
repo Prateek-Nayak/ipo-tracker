@@ -1940,7 +1940,22 @@ function AppInner() {
      state, because re-rendering this component on every touchmove drops frames
      on a long list. Neither property is set from the style prop, so React never
      overwrites what is written here. */
-  const swipeSettleMs = prefersReducedMotion() ? 0 : 260;
+  /* A flick counts for as much as a long drag. A phone's home screen does not
+     make you carry the page a third of the way across - a short, quick push is
+     enough, and the page then keeps the speed you gave it. Anything moving
+     faster than this many pixels per millisecond is read as a flick. */
+  const FLICK_SPEED = 0.28;
+  const FLICK_MIN_PX = 24;
+  const reducedMotion = prefersReducedMotion();
+
+  /* Speed over the tail of the drag rather than the whole of it: a finger that
+     wandered, stopped, and then flicked should be judged on the flick. */
+  const swipeSpeed = (s) => {
+    const last = s.samples[s.samples.length - 1];
+    const first = s.samples.find((p) => last.t - p.t <= 120) || s.samples[0];
+    const dt = last.t - first.t;
+    return dt > 0 ? (last.x - first.x) / dt : 0;
+  };
 
   const paintPages = () => {
     const here = TABS.indexOf(tab);
@@ -1959,9 +1974,15 @@ function AppInner() {
   useEffect(() => () => clearTimeout(settleTimer.current), []);
 
   /* dir 0 slides back to the screen you started on. */
-  const settleSwipe = (dir, width) => {
+  const settleSwipe = (dir, width, speed = 0) => {
+    /* However far is left to go, taken at roughly the speed the finger was
+       already going, so a flick lands quickly and a slow drag eases into
+       place instead of every swipe taking the same quarter of a second. */
+    const remaining = dir ? Math.max(width - Math.abs(swipeDx.current), 0) : Math.abs(swipeDx.current);
+    const ms = reducedMotion ? 0
+      : Math.round(Math.min(300, Math.max(130, remaining / Math.max(Math.abs(speed), 1.1))));
     settling.current = true;
-    swipeMs.current = swipeSettleMs;
+    swipeMs.current = ms;
     swipeDx.current = dir ? -dir * width : 0;
     paintPages();
     clearTimeout(settleTimer.current);
@@ -1974,7 +1995,7 @@ function AppInner() {
       swipeDx.current = 0;
       setSwipeDir(0);
       if (dir) setTab((t) => TABS[TABS.indexOf(t) + dir] || t);
-    }, swipeSettleMs + 30);
+    }, ms + 30);
   };
 
   const onSwipeStart = (e) => {
@@ -1983,6 +2004,7 @@ function AppInner() {
     swipeNav.current = {
       x: e.touches[0].clientX, y: e.touches[0].clientY,
       axis: null, dx: 0, dir: 0, width: (box && box.width) || window.innerWidth,
+      samples: [{ x: e.touches[0].clientX, t: Date.now() }],
     };
   };
 
@@ -2003,6 +2025,8 @@ function AppInner() {
     const room = !!TABS[TABS.indexOf(tab) + dir];
     // Past the first and last screens there is nowhere to go, so the drag resists.
     s.dx = room ? dx : dx * 0.25;
+    s.samples.push({ x: e.touches[0].clientX, t: Date.now() });
+    if (s.samples.length > 8) s.samples.shift();
     swipeDx.current = s.dx;
     swipeMs.current = 0;
     if (s.dir !== (room ? dir : 0)) { s.dir = room ? dir : 0; setSwipeDir(s.dir); }
@@ -2013,8 +2037,15 @@ function AppInner() {
     const s = swipeNav.current;
     swipeNav.current = null;
     if (!s || s.axis !== "x") return;
-    const far = Math.abs(s.dx) > Math.min(90, s.width * 0.3);
-    settleSwipe(s.dir && far ? s.dir : 0, s.width);
+    const speed = swipeSpeed(s);
+    const thrown = speed !== 0 && Math.sign(speed) === Math.sign(s.dx);
+    /* A flick settles it either way - thrown forward the page goes, pulled
+       back it stays - and only a drag slow enough to have no throw left in it
+       falls back on how far across it got. */
+    const commit = Math.abs(speed) > FLICK_SPEED
+      ? thrown && Math.abs(s.dx) > FLICK_MIN_PX
+      : Math.abs(s.dx) > s.width * 0.3;
+    settleSwipe(s.dir && commit ? s.dir : 0, s.width, speed);
   };
 
   /* ---------- gates ---------- */
@@ -2342,7 +2373,7 @@ function Bone({ w = "100%", h = 12, r = 6, style = {} }) {
    replacing a white one. */
 function LedgerSkeleton({ text, tab = "dashboard" }) {
   const titles = {
-    dashboard: "The Ledger", ipos: "IPOs", transfers: "Transfers", accounts: "Accounts",
+    dashboard: "Overview", ipos: "IPOs", transfers: "Transfers", accounts: "Accounts",
   };
   const items = [
     { id: "dashboard", label: "Overview" }, { id: "ipos", label: "IPOs" },
@@ -2367,16 +2398,19 @@ function LedgerSkeleton({ text, tab = "dashboard" }) {
         padding: "calc(18px + env(safe-area-inset-top)) 14px 14px",
         borderBottom: `3px double ${COLORS.gold}`,
       }}>
-        <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 700, fontSize: 21, color: "#fff" }}>
-          {titles[tab] || "The Ledger"}
+        {/* Title only, the same as the real header, or the two would differ in
+            height and the ledger would jump into place as it arrived. What is
+            being waited for is said below instead. */}
+        <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 700, fontSize: 21, color: "#fff", minHeight: 36, display: "flex", alignItems: "center" }}>
+          {titles[tab] || "Overview"}
         </div>
-        <div style={{
-          fontFamily: "'JetBrains Mono', monospace", fontSize: 10.5, color: COLORS.gold,
-          marginTop: 2, letterSpacing: 0.5,
-        }}>{text}</div>
       </div>
 
       <div style={{ padding: 14 }}>
+        <div style={{
+          fontFamily: "'JetBrains Mono', monospace", fontSize: 10.5, color: COLORS.gold,
+          letterSpacing: 0.5, marginBottom: 14,
+        }}>{text}</div>
         {isDashboard ? (
           <>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
@@ -2449,7 +2483,11 @@ function LedgerSkeleton({ text, tab = "dashboard" }) {
    CHROME
 ---------------------------------------------------------- */
 function Header({ tab, onAdd, onOpenData, onFetchLive, syncing, syncError, cloudOn }) {
-  const titles = { dashboard: "The Ledger", ipos: "IPOs", accounts: "Accounts", transfers: "Transfers" };
+  /* The same word the bottom nav uses, on every screen. The app's own name is
+     on the home screen icon and in the manifest, which is where a name belongs;
+     spending a line of the header on it made Overview taller than the other
+     three, and the extra height showed as a jolt when the screens slid. */
+  const titles = { dashboard: "Overview", ipos: "IPOs", accounts: "Accounts", transfers: "Transfers" };
   const showAdd = tab !== "dashboard";
   const statusColor = !cloudOn ? COLORS.inkSoft : syncError ? COLORS.red : COLORS.gold;
   const StatusIcon = !cloudOn ? CloudOff : syncing ? Loader2 : Settings;
@@ -2466,12 +2504,6 @@ function Header({ tab, onAdd, onOpenData, onFetchLive, syncing, syncError, cloud
           fontFamily: "'Fraunces', serif", fontWeight: 700, fontSize: 21, color: "#fff",
           whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
         }}>{titles[tab]}</div>
-        {tab === "dashboard" && (
-          <div style={{
-            fontFamily: "'JetBrains Mono', monospace", fontSize: 10.5, color: COLORS.gold,
-            marginTop: 2, letterSpacing: 0.5,
-          }}>FAMILY IPO REGISTER</div>
-        )}
       </div>
       <div style={{ display: "flex", gap: 8, flexShrink: 0, marginLeft: "auto" }}>
         {tab === "ipos" && (
@@ -2483,6 +2515,16 @@ function Header({ tab, onAdd, onOpenData, onFetchLive, syncing, syncError, cloud
             <Sparkles size={14} color={COLORS.gold} />
             <span style={{ color: COLORS.gold, fontSize: 12, fontWeight: 600, fontFamily: "Inter, sans-serif", whiteSpace: "nowrap" }}>Add from exchange</span>
           </button>
+        )}
+        {/* Add comes first and sync last, so the one button that is on every
+            screen keeps the same corner. With them the other way round, sync
+            slid sideways whenever Overview dropped the add button. */}
+        {showAdd && (
+          <button onClick={onAdd} aria-label="Add" style={{
+            width: 36, height: 36, borderRadius: 18, border: `1px solid ${COLORS.gold}`,
+            background: "transparent", display: "flex", alignItems: "center", justifyContent: "center",
+            cursor: "pointer", flexShrink: 0,
+          }}><Plus size={18} color={COLORS.gold} /></button>
         )}
         <button
           onClick={onOpenData}
@@ -2496,13 +2538,6 @@ function Header({ tab, onAdd, onOpenData, onFetchLive, syncing, syncError, cloud
         >
           <StatusIcon size={17} color={statusColor} className={syncing ? "spin" : undefined} />
         </button>
-        {showAdd && (
-          <button onClick={onAdd} aria-label="Add" style={{
-            width: 36, height: 36, borderRadius: 18, border: `1px solid ${COLORS.gold}`,
-            background: "transparent", display: "flex", alignItems: "center", justifyContent: "center",
-            cursor: "pointer", flexShrink: 0,
-          }}><Plus size={18} color={COLORS.gold} /></button>
-        )}
       </div>
     </div>
   );
