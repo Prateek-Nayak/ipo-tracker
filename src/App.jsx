@@ -2616,6 +2616,14 @@ function AppInner() {
             const gone = accounts.find((x) => x.id === id);
             if (!gone) return;
             discard("account", gone, gone.name || "Unnamed account");
+            const goneName = accounts.find((x) => x.id === id)?.name || "";
+            if (goneName) {
+              persistIpos(ipos.map((i) => {
+                const apps = i.applications || [];
+                if (!apps.some((a) => a.accountId === id && !a.accountName)) return i;
+                return { ...i, applications: apps.map((a) => (a.accountId === id && !a.accountName ? { ...a, accountName: goneName } : a)) };
+              }));
+            }
             persistAccounts(accounts.filter((x) => x.id !== id));
             setAcctDetail(null);
           }}
@@ -3552,6 +3560,28 @@ function ipoBucket(ipo) {
 
 const panOf = (account) => (account?.pan || "").trim().toUpperCase();
 
+/* Deleting an account deliberately leaves its applications on their IPOs - the
+   money was applied and the totals still count it - but the name went with the
+   account, and every one of those rows then read "Unknown". The name is copied
+   onto the applications as the account goes, so they can still say whose they
+   were. Anything from before this keeps saying Unknown, which is the truth
+   about it. */
+const accountLabel = (accounts, app) => {
+  const live = accounts.find((a) => a.id === app?.accountId);
+  if (live) return live.name || "Unnamed account";
+  return app?.accountName ? app.accountName + " (deleted)" : "Unknown account";
+};
+
+/* Worth offering only once the registrar could plausibly have an answer. They
+   publish on the evening of allotment day, so the day itself is the earliest
+   there is any point asking - and before that the sheet could only ever say
+   it was not listed, which reads as a fault rather than as "too early". */
+function allotmentCheckable(ipo) {
+  if (!(ipo?.applications || []).length) return false;
+  const { date } = allotmentDateOf(ipo);
+  return !!date && date <= todayISO();
+}
+
 /* Registrars write themselves out at full legal length. The short name is what
    anyone actually calls them, and it is what the allotment check reports back,
    so the two agree. An unrecognised one is shown as it came. */
@@ -3847,14 +3877,17 @@ function IpoDetailSheet({ ipo, accounts, onClose, onDeleteIpo, onEditIpo, onSave
           padding: "11px 10px", fontSize: 12.5, fontWeight: 600,
           cursor: apps.length ? "pointer" : "default", opacity: apps.length ? 1 : 0.6,
         }}><ClipboardCheck size={14} color={apps.length ? COLORS.ink : COLORS.inkSoft} /> Record allotment</button>
-        {/* The registrar knows the answer; there is no reason to type it in. */}
-        <button onClick={() => onCheckAllotment(ipo.id)} disabled={!apps.length} style={{
-          flex: 1, minHeight: 44, borderRadius: 10, border: `1px solid ${apps.length ? COLORS.gold : COLORS.border}`,
-          background: apps.length ? COLORS.goldSoft : COLORS.surface,
-          color: apps.length ? COLORS.ink : COLORS.inkSoft, fontSize: 13, fontWeight: 600,
-          cursor: apps.length ? "pointer" : "default", fontFamily: "Inter, sans-serif",
-          display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
-        }}><Sparkles size={14} color={apps.length ? COLORS.gold : COLORS.inkSoft} /> Check allotment</button>
+        {/* The registrar knows the answer; there is no reason to type it in.
+            Shown only once there is something to apply for and a day on which
+            an answer could exist - see allotmentCheckable. */}
+        {allotmentCheckable(ipo) && (
+          <button onClick={() => onCheckAllotment(ipo.id)} style={{
+            flex: 1, minHeight: 44, borderRadius: 10, border: `1px solid ${COLORS.gold}`,
+            background: COLORS.goldSoft, color: COLORS.ink, fontSize: 13, fontWeight: 600,
+            cursor: "pointer", fontFamily: "Inter, sans-serif",
+            display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+          }}><Sparkles size={14} color={COLORS.gold} /> Check allotment</button>
+        )}
       </div>
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
@@ -3890,7 +3923,8 @@ function ApplicationRow({ app, ipo, accounts, onEdit, onDelete }) {
     const mark = valuationPrice(ipo);
     if (mark) pnl = shares * (mark - price);
   }
-  const accountName = accounts.find((a) => a.id === app.accountId)?.name;
+  const liveAccount = accounts.find((a) => a.id === app.accountId);
+  const accountName = liveAccount?.name;
   const strongStatus = app.allotmentStatus === "Allotted" || app.allotmentStatus === "Not Allotted";
   return (
     <div style={{
@@ -3898,9 +3932,10 @@ function ApplicationRow({ app, ipo, accounts, onEdit, onDelete }) {
     }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
         <div style={{ minWidth: 0, flex: 1 }}>
-          <div style={{ fontFamily: "Inter, sans-serif", fontWeight: 600, fontSize: 14, color: COLORS.ink }}>
-            {accountName || "Unknown account"}
-          </div>
+          <div title={accountLabel(accounts, app)} style={{
+            fontFamily: "Inter, sans-serif", fontWeight: 600, fontSize: 14,
+            color: liveAccount ? COLORS.ink : COLORS.inkSoft, ...ellipsisText,
+          }}>{accountLabel(accounts, app)}</div>
           {app.appliedFor && app.appliedFor !== accountName && (
             <div style={{ fontSize: 11.5, color: COLORS.inkSoft, fontFamily: "Inter, sans-serif" }}>on behalf of {app.appliedFor}</div>
           )}
@@ -4106,7 +4141,7 @@ function HoldingDetailSheet({ ipo, accounts, onClose }) {
       <SectionLabel>Holding Accounts ({holdingApps.length})</SectionLabel>
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {holdingApps.map((app) => {
-          const accountName = accounts.find((a) => a.id === app.accountId)?.name || "Unknown";
+          const accountName = accountLabel(accounts, app);
           const shares = Number(app.sharesAllotted) || 0;
           const lots = Math.round(shares / lotSize) || 1;
           const appPnl = currentPrice > 0 ? shares * (currentPrice - entryPrice) : 0;
@@ -4251,7 +4286,7 @@ function AccountDetailSheet({ account, ipos, transfers, accounts, onClose, onEdi
           <SectionLabel>Fund Transfers ({acctTransfers.length})</SectionLabel>
           <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
             {acctTransfers.map((t) => {
-              const nameOf = (id) => accounts.find((a) => a.id === id)?.name || "Unknown";
+              const nameOf = (id) => accounts.find((a) => a.id === id)?.name || "Unknown";
               const from = nameOf(t.fromAccountId);
               const to = nameOf(t.toAccountId);
 /* Three ways an account can appear on a transfer, and the
@@ -5565,7 +5600,7 @@ function BulkStatusSheet({ ipo, accounts, onClose, onSave }) {
             }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
                 <div style={{ minWidth: 0 }}>
-                  <div style={{ fontWeight: 600, fontSize: 14, color: COLORS.ink }}>{nameOf(app.accountId)}</div>
+                  <div title={accountLabel(accounts, app)} style={{ fontWeight: 600, fontSize: 14, color: COLORS.ink, ...ellipsisText }}>{accountLabel(accounts, app)}</div>
                   <div style={{ fontSize: 11, color: COLORS.inkSoft, fontFamily: "'JetBrains Mono', monospace" }}>
                     {app.lots || 0} lot(s) applied · {inrOrDash(app.amountBlocked)}
                   </div>
@@ -5623,86 +5658,126 @@ const normaliseName = (s) =>
 /* Two ways in: the issues open or coming up, and everything that listed in a
    given year. The second exists because a ledger started late would otherwise
    have to be typed out by hand, an IPO at a time. */
-/* What the registrar says, for every account at once.
+/* What the registrar says, account by account.
 
    The exchanges hold only the bids routed through their own platform, and which
    one a bid took is the broker's choice, made invisibly - so asking there misses
    applications without ever saying it missed them. The registrar has the whole
-   issue. Two of the three answer directly; an issue registered with the third
-   comes back unreachable and says so, rather than reporting nothing found.
+   issue. Two of the three answer directly; an issue registered with the third,
+   or one too old to still be on a status page, says which and why.
+
+   Asked one account at a time and shown as each answers, rather than held back
+   until all of them have. A dozen accounts take a few seconds, and watching the
+   list fill in is the difference between waiting and wondering.
 
    The registrar's own reply is kept and shown beneath the numbers. A figure that
    looks plausible but is wrong is worse than an error, and the only way to tell
    those apart is to read what was actually said. */
 function AllotmentSheet({ ipo, accounts, onClose, onApply }) {
-  const [state, setState] = useState({ status: "idle" });
+  const [phase, setPhase] = useState("resolving");   // resolving | asking | done | dead
+  const [registrar, setRegistrar] = useState(null);
+  const [note, setNote] = useState("");
+  const [error, setError] = useState(null);
+  const [rows, setRows] = useState([]);
+  const [raw, setRaw] = useState(null);
   const [showRaw, setShowRaw] = useState(false);
-  const [written, setWritten] = useState(false);
+  const [written, setWritten] = useState(0);
 
   const holders = useMemo(
     () => accounts.filter((a) => /^[A-Z]{5}[0-9]{4}[A-Z]$/.test(panOf(a))),
     [accounts]
   );
-  const byPan = useMemo(() => {
-    const m = {};
-    holders.forEach((a) => { m[panOf(a)] = a; });
-    return m;
-  }, [holders]);
 
-  const check = async () => {
-    if (typeof navigator !== "undefined" && navigator.onLine === false) {
-      setState({
-        status: "error", title: "You are offline",
-        detail: "The registrar can only be asked with a connection.",
-      });
-      return;
-    }
-    setState({ status: "loading" });
-    setWritten(false);
-    try {
-      const url = "/api/allotment?company=" + encodeURIComponent(ipo.company || "")
-        + "&registrar=" + encodeURIComponent(ipo.registrar || "")
-        + "&pans=" + encodeURIComponent(holders.map((a) => panOf(a)).join(","));
-      const res = await fetch(url);
-      const text = await res.text();
-      let data = null;
-      try { data = JSON.parse(text); } catch { /* reported just below */ }
-      if (!data) {
-        setState({
-          status: "error", title: "Unreadable reply",
-          detail: "The server answered " + res.status + " with something that was not JSON.",
-          raw: { httpStatus: res.status, body: text.slice(0, 600) },
-        });
-        return;
-      }
-      if (!res.ok) {
-        setState({
-          status: "error", title: "Could not reach the registrar",
-          detail: data.error || ("The server answered " + res.status + "."),
-          raw: data,
-        });
-        return;
-      }
-      setState({ status: "done", data });
-    } catch (e) {
-      setState({
-        status: "error", title: "The request did not complete",
-        detail: e.message || "Something interrupted it before an answer came back.",
-        raw: null,
-      });
-    }
+  const started = useRef(false);
+  const alive = useRef(true);
+  useEffect(() => () => { alive.current = false; }, []);
+
+  const ask = async (pans) => {
+    const url = "/api/allotment?company=" + encodeURIComponent(ipo.company || "")
+      + "&registrar=" + encodeURIComponent(ipo.registrar || "")
+      + "&pans=" + encodeURIComponent(pans);
+    const res = await fetch(url);
+    const text = await res.text();
+    let data = null;
+    try { data = JSON.parse(text); } catch { /* raised below */ }
+    if (!data) throw Object.assign(new Error("The reply was not JSON."), { raw: { httpStatus: res.status, body: text.slice(0, 600) } });
+    if (!res.ok) throw Object.assign(new Error(data.error || ("The server answered " + res.status + ".")), { raw: data });
+    return data;
   };
 
-  const data = state.status === "done" ? state.data : null;
-  const rows = (data?.results || []).map((r) => ({
+  /* Started on opening. There is nothing to decide before asking, and a button
+     that only ever gets pressed once is a button that should not be there. */
+  const run = useCallback(async () => {
+    if (typeof navigator !== "undefined" && navigator.onLine === false) {
+      setError({ title: "You are offline", detail: "The registrar can only be asked with a connection." });
+      setPhase("dead");
+      return;
+    }
+    setError(null);
+    setWritten(0);
+    setPhase("resolving");
+    setRows(holders.map((a) => ({ pan: panOf(a), account: a, status: "waiting" })));
+    try {
+      // Who has it, before troubling anyone about a PAN.
+      const head = await ask("");
+      if (!alive.current) return;
+      setRaw(head);
+      if (!head.registrar) {
+        setNote(head.note || "");
+        setRegistrar(null);
+        setPhase("dead");
+        return;
+      }
+      setRegistrar({ id: head.registrar, label: head.registrar === "kfintech" ? "KFintech" : "MUFG Intime", listedAs: head.listedAs });
+      setPhase("asking");
+
+      const collected = [];
+      for (const a of holders) {
+        if (!alive.current) return;
+        const pan = panOf(a);
+        try {
+          const one = await ask(pan);
+          const r = (one.results || [])[0] || { pan, status: "error", message: "no answer for this PAN" };
+          collected.push(r);
+          setRows((prev) => prev.map((x) => (x.pan === pan ? { ...r, account: a } : x)));
+        } catch (e) {
+          const r = { pan, status: "error", message: e.message || "could not be checked" };
+          collected.push(r);
+          setRows((prev) => prev.map((x) => (x.pan === pan ? { ...r, account: a } : x)));
+        }
+      }
+      if (!alive.current) return;
+      setRaw({ ...head, results: collected });
+      setPhase("done");
+    } catch (e) {
+      if (!alive.current) return;
+      setError({ title: "Could not reach the registrar", detail: e.message || "The request did not complete." });
+      if (e.raw) setRaw(e.raw);
+      setPhase("dead");
+    }
+  }, [holders, ipo.company, ipo.registrar]);
+
+  useEffect(() => {
+    if (started.current || !holders.length) return;
+    started.current = true;
+    run();
+  }, [holders.length, run]);
+
+  const withQty = rows.map((r) => ({
     ...r,
-    account: byPan[r.pan],
     allotted: (r.bids || []).reduce((n, b) => n + (Number(b.allotted) || 0), 0),
     appliedQty: (r.bids || []).reduce((n, b) => n + (Number(b.applied) || 0), 0),
   }));
-  const found = rows.filter((r) => r.status === "found");
-  const failed = rows.filter((r) => r.status === "error");
+  const answered = withQty.filter((r) => r.status !== "waiting");
+  const found = withQty.filter((r) => r.status === "found");
+  const failed = withQty.filter((r) => r.status === "error");
   const wins = found.filter((r) => r.allotted > 0);
+
+  const heading = phase === "resolving" ? "Finding the registrar..."
+    : phase === "asking" ? `Checking ${answered.length} of ${holders.length}`
+      + (registrar ? ` · ${registrar.label}` : "")
+      : phase === "done" ? `${holders.length} checked` + (registrar ? ` · ${registrar.label}` : "")
+        : holders.length + (holders.length === 1 ? " account" : " accounts") + " to check";
 
   return (
     <Sheet title="Check allotment" onClose={onClose}>
@@ -5711,9 +5786,12 @@ function AllotmentSheet({ ipo, accounts, onClose, onApply }) {
         padding: "10px 12px", marginBottom: 14,
       }}>
         <div title={ipo.company} style={{ fontFamily: "'Fraunces', serif", fontWeight: 600, fontSize: 15, color: COLORS.heading, ...ellipsisText }}>{ipo.company}</div>
-        <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11.5, color: COLORS.inkSoft, marginTop: 3 }}>
-          {holders.length} account{holders.length === 1 ? "" : "s"} with a PAN on file
-          {ipo.registrar ? ` · ${registrarLabel(ipo.registrar)}` : ""}
+        <div style={{
+          fontFamily: "'JetBrains Mono', monospace", fontSize: 11.5, color: COLORS.inkSoft,
+          marginTop: 3, display: "flex", alignItems: "center", gap: 6, ...ellipsisText,
+        }}>
+          {(phase === "resolving" || phase === "asking") && <Loader2 size={12} color={COLORS.gold} className="spin" />}
+          {heading}
         </div>
       </div>
 
@@ -5725,21 +5803,15 @@ function AllotmentSheet({ ipo, accounts, onClose, onApply }) {
         />
       ) : (
         <>
-          {state.status !== "done" && (
-            <PrimaryButton onClick={check} disabled={state.status === "loading"}>
-              {state.status === "loading" ? "Asking the registrar..." : "Check with the registrar"}
-            </PrimaryButton>
-          )}
-
-          {state.status === "error" && (
+          {error && (
             <div style={{
               background: COLORS.redSoft, border: `1px solid ${COLORS.red}`, borderRadius: 10,
-              padding: "10px 12px", marginTop: 14, fontSize: 12.5, color: COLORS.ink,
+              padding: "10px 12px", marginBottom: 14, fontSize: 12.5, color: COLORS.ink,
               fontFamily: "Inter, sans-serif",
             }}>
-              <div style={{ fontWeight: 700, marginBottom: 3 }}>{state.title}</div>
-              <div style={{ color: COLORS.inkSoft, ...wrapText }}>{state.detail}</div>
-              <button onClick={check} style={{
+              <div style={{ fontWeight: 700, marginBottom: 3 }}>{error.title}</div>
+              <div style={{ color: COLORS.inkSoft, ...wrapText }}>{error.detail}</div>
+              <button onClick={run} style={{
                 marginTop: 10, minHeight: 36, padding: "0 14px", borderRadius: 8,
                 border: `1px solid ${COLORS.red}`, background: "transparent", color: COLORS.red,
                 fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "Inter, sans-serif",
@@ -5747,43 +5819,42 @@ function AllotmentSheet({ ipo, accounts, onClose, onApply }) {
             </div>
           )}
 
-          {/* Not finding a registrar is usually not a failure - the basis of
-              allotment is published on the evening of allotment day, and until
-              then no registrar lists the issue at all. */}
-          {data && !data.registrar && (
+          {/* Short, because there is nothing to be done about it here. */}
+          {!error && phase === "dead" && note && (
             <div style={{
-              background: COLORS.goldSoft, borderRadius: 10, padding: "10px 12px", marginTop: 14,
+              background: COLORS.goldSoft, borderRadius: 10, padding: "10px 12px", marginBottom: 14,
               fontSize: 12.5, color: COLORS.ink, display: "flex", gap: 8, alignItems: "flex-start",
               fontFamily: "Inter, sans-serif",
             }}>
               <AlertTriangle size={14} color={COLORS.gold} style={{ flexShrink: 0, marginTop: 1 }} />
-              <span style={wrapText}>{data.note}</span>
+              <span style={wrapText}>{note}</span>
             </div>
           )}
 
-          {data && data.registrar && (
+          {rows.length > 0 && phase !== "dead" && (
             <>
-              <div style={{ fontSize: 11.5, color: COLORS.inkSoft, margin: "14px 0 10px", fontFamily: "Inter, sans-serif", ...ellipsisText }}>
-                {data.registrar === "kfintech" ? "KFintech" : "MUFG Intime"} · {data.listedAs}
-              </div>
-
-              <SectionLabel>
-                {wins.length
-                  ? `Allotted to ${wins.length} of ${found.length}`
-                  : `Nothing allotted (${found.length} application${found.length === 1 ? "" : "s"})`}
-              </SectionLabel>
-
+              {phase === "done" && (
+                <SectionLabel>
+                  {wins.length
+                    ? `Allotted to ${wins.length} of ${found.length}`
+                    : found.length
+                      ? `Nothing allotted (${found.length} application${found.length === 1 ? "" : "s"})`
+                      : "No applications found"}
+                </SectionLabel>
+              )}
               <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
-                {rows.map((r) => {
+                {withQty.map((r) => {
                   const label = r.account?.name || r.name || r.pan;
-                  const tone = r.status === "error" ? COLORS.red
-                    : r.allotted > 0 ? COLORS.green
-                      : r.status === "found" ? COLORS.inkSoft : COLORS.border;
+                  const tone = r.status === "waiting" ? COLORS.border
+                    : r.status === "error" ? COLORS.red
+                      : r.allotted > 0 ? COLORS.green : COLORS.inkSoft;
                   return (
                     <div key={r.pan} style={{
                       background: COLORS.surface, border: `1px solid ${COLORS.border}`,
                       borderLeft: `3px solid ${tone}`, borderRadius: 10, padding: "8px 10px",
                       fontFamily: "Inter, sans-serif", fontSize: 12.5,
+                      opacity: r.status === "waiting" ? 0.55 : 1,
+                      transition: "opacity 200ms ease-out",
                     }}>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
                         <span title={label} style={{ color: COLORS.ink, fontWeight: 600, minWidth: 0, ...ellipsisText }}>{label}</span>
@@ -5793,53 +5864,63 @@ function AllotmentSheet({ ipo, accounts, onClose, onApply }) {
                             color: r.allotted > 0 ? COLORS.green : COLORS.inkSoft,
                           }}>{r.allotted > 0 ? `${r.allotted} allotted` : "not allotted"}</span>
                         )}
+                        {r.status === "waiting" && <Loader2 size={13} color={COLORS.inkSoft} className="spin" style={{ flexShrink: 0 }} />}
                       </div>
                       <div title={r.message || undefined} style={{
                         fontSize: 11, color: r.status === "error" ? COLORS.red : COLORS.inkSoft,
                         marginTop: 2, fontFamily: "'JetBrains Mono', monospace", ...ellipsisText,
                       }}>
+                        {r.status === "waiting" && `${r.pan} · asking...`}
                         {r.status === "found" && `${r.pan} · applied ${r.appliedQty}`}
-                        {r.status === "no_application" && `${r.pan} · no application on this issue`}
+                        {r.status === "no_application" && `${r.pan} · no application under this PAN`}
                         {r.status === "error" && `${r.pan} · ${r.message || "could not be checked"}`}
                       </div>
                     </div>
                   );
                 })}
               </div>
-
-              {failed.length > 0 && (
-                <div style={{
-                  background: COLORS.goldSoft, borderRadius: 10, padding: "9px 12px", marginBottom: 14,
-                  fontSize: 12, color: COLORS.ink, fontFamily: "Inter, sans-serif", ...wrapText,
-                }}>
-                  {failed.length} account{failed.length === 1 ? "" : "s"} could not be checked, and
-                  nothing will be written for {failed.length === 1 ? "it" : "them"}. Try again rather
-                  than reading a blank as a rejection.
-                </div>
-              )}
-
-              {found.length > 0 && (
-                <PrimaryButton
-                  onClick={() => {
-                    onApply(found.map((r) => ({
-                      accountId: r.account?.id,
-                      allotted: r.allotted,
-                      appliedQty: r.appliedQty,
-                    })));
-                    setWritten(true);
-                  }}
-                  disabled={written}
-                >
-                  {written
-                    ? "Written to the ledger"
-                    : `Write ${found.length} result${found.length === 1 ? "" : "s"} to the ledger`}
-                </PrimaryButton>
-              )}
             </>
           )}
 
+          {phase === "done" && failed.length > 0 && (
+            <div style={{
+              background: COLORS.goldSoft, borderRadius: 10, padding: "9px 12px", marginBottom: 14,
+              fontSize: 12, color: COLORS.ink, fontFamily: "Inter, sans-serif", ...wrapText,
+            }}>
+              {failed.length} could not be checked and {failed.length === 1 ? "is" : "are"} left as
+              {failed.length === 1 ? " it was" : " they were"}. Try again rather than reading a blank
+              as a rejection.
+            </div>
+          )}
+
+          {phase === "done" && found.length > 0 && (
+            written > 0 ? (
+              /* Said plainly. A button that greys out looks like a button that
+                 failed, and leaves you wondering whether anything happened. */
+              <div style={{
+                background: COLORS.greenSoft, border: `1px solid ${COLORS.green}`, borderRadius: 10,
+                padding: "10px 12px", fontSize: 12.5, color: COLORS.ink, fontFamily: "Inter, sans-serif",
+                display: "flex", gap: 8, alignItems: "center",
+              }}>
+                <CheckCircle2 size={15} color={COLORS.green} style={{ flexShrink: 0 }} />
+                <span style={wrapText}>
+                  Written to the ledger - {written} application{written === 1 ? "" : "s"} updated.
+                </span>
+              </div>
+            ) : (
+              <PrimaryButton onClick={() => {
+                onApply(found.map((r) => ({
+                  accountId: r.account?.id, allotted: r.allotted, appliedQty: r.appliedQty,
+                })));
+                setWritten(found.length);
+              }}>
+                Write {found.length} result{found.length === 1 ? "" : "s"} to the ledger
+              </PrimaryButton>
+            )
+          )}
+
           {/* The registrar's own words, for when a number looks wrong. */}
-          {(data || state.raw) && (
+          {raw && (
             <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px solid ${COLORS.border}` }}>
               <button onClick={() => setShowRaw((v) => !v)} aria-expanded={showRaw} style={{
                 width: "100%", minHeight: 40, borderRadius: 8, border: `1px solid ${COLORS.border}`,
@@ -5860,7 +5941,7 @@ function AllotmentSheet({ ipo, accounts, onClose, onApply }) {
                   fontFamily: "'JetBrains Mono', monospace", fontSize: 10.5, lineHeight: 1.5,
                   color: COLORS.ink, overflowX: "auto", maxHeight: 340, overflowY: "auto",
                   whiteSpace: "pre", WebkitOverflowScrolling: "touch",
-                }}>{JSON.stringify(data || state.raw, null, 2)}</pre>
+                }}>{JSON.stringify(raw, null, 2)}</pre>
               )}
             </div>
           )}

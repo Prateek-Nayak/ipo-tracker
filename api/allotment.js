@@ -100,6 +100,53 @@ const REGISTRARS = [
 const knownRegistrar = (name) =>
   REGISTRARS.find((r) => r.match.test(String(name || ""))) || null;
 
+/* Neither registrar keeps an issue for long. KFintech holds a few months;
+   MUFG holds only what is current - a scan of its ids found data for exactly
+   the two issues on its dropdown and nothing behind them. So for anything but
+   a recent issue the lists cannot even say who the registrar was, and the
+   exchange feed has to be asked instead. Upstox knows it for closed and listed
+   issues as well as open ones, which is the whole span that matters. */
+let upstoxCache = { at: 0, byName: new Map() };
+async function upstoxRegistrars() {
+  if (Date.now() - upstoxCache.at < 30 * 60 * 1000 && upstoxCache.byName.size) return upstoxCache.byName;
+  const token = process.env.UPSTOX_ANALYTICS_TOKEN;
+  if (!token) return upstoxCache.byName;
+  const headers = { Accept: "application/json", Authorization: `Bearer ${token}` };
+  const grab = async (status, type) => {
+    try {
+      const r = await fetch(
+        `https://api.upstox.com/v2/ipos?status=${status}&issue_type=${type}&page_number=1&records=30`,
+        { headers });
+      if (!r.ok) return [];
+      return (await r.json())?.data || [];
+    } catch { return []; }
+  };
+  const lists = await Promise.all([
+    grab("closed", "regular"), grab("closed", "sme"),
+    grab("listed", "regular"), grab("listed", "sme"),
+    grab("open", "regular"), grab("open", "sme"),
+  ]);
+  const byName = new Map();
+  lists.flat().forEach((r) => {
+    const key = nameKey(r?.name || r?.company_name || r?.id);
+    const reg = r?.registrar_info?.name;
+    if (key && reg && !byName.has(key)) byName.set(key, reg);
+  });
+  if (byName.size) upstoxCache = { at: Date.now(), byName };
+  return upstoxCache.byName;
+}
+
+async function registrarFromExchange(company) {
+  const key = nameKey(company);
+  if (!key) return "";
+  const map = await upstoxRegistrars().catch(() => new Map());
+  if (map.has(key)) return map.get(key);
+  for (const [k, v] of map) {
+    if (k.length > 6 && key.length > 6 && (k.includes(key) || key.includes(k))) return v;
+  }
+  return "";
+}
+
 /* Whichever of them is carrying this issue. An issue absent from both has
    either not had its allotment published yet - they list it only once the
    basis of allotment is done - or belongs to a third registrar. */
@@ -224,24 +271,23 @@ export default async function handler(req, res) {
   try {
     const found = await findRegistrar(company);
     if (!found) {
-      /* Three different situations, and telling them apart is most of the value
-         of saying anything at all: a registrar that cannot be reached, one that
-         can but has not published yet, and not knowing which registrar it is. */
-      const note = hinted && !hinted.reach
-        ? `${hinted.label} is the registrar for this issue, and it cannot be asked `
-          + "automatically - it requires a captcha for every PAN. Check it by hand."
-        : hinted && hinted.reach
-          ? `${hinted.label} is the registrar, but is not listing this issue yet. `
-            + "The basis of allotment is published on the evening of allotment day; "
-            + "if it is well past that, the issue has aged off their status page."
-          : "Neither KFintech nor MUFG is listing this issue, and the ledger does "
-            + "not know who registers it. Import the issue from the exchange to "
-            + "pick up the registrar, or check by hand.";
+      /* Fall back to the exchange for who registers it, so an issue too old for
+         the registrar's own list can still be named rather than shrugged at. */
+      const who = hinted || knownRegistrar(await registrarFromExchange(company));
+      const note = !who
+        ? "Could not find out who registers this issue. Registrars keep only "
+          + "recent issues on their status pages, so an older one has to be "
+          + "checked from your own records."
+        : !who.reach
+          ? `${who.label} registers this issue and needs a captcha for every PAN, `
+            + "so it cannot be checked here."
+          : `${who.label} is not showing this issue. Results appear on the evening `
+            + "of allotment day, and drop off again after a few weeks.";
       return res.status(200).json({
         company,
         registrar: null,
-        knownRegistrar: hinted ? hinted.label : (req.query.registrar || ""),
-        reachable: hinted ? hinted.reach : null,
+        knownRegistrar: who ? who.label : "",
+        reachable: who ? who.reach : null,
         results: [],
         note,
         checkedAt: new Date().toISOString(),
