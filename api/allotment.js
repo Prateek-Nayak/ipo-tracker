@@ -161,6 +161,98 @@ async function registrarFromExchange(company) {
   } catch { return ""; }
 }
 
+/* Whichever of them is carrying this issue. An issue absent from both has
+   either not had its allotment published yet - they list it only once the
+   basis of allotment is done - or belongs to a third registrar. */
+async function findRegistrar(company) {
+  const key = nameKey(company);
+  if (!key) return null;
+  const near = (a, b) => a === b || (a.length > 6 && b.length > 6 && (a.includes(b) || b.includes(a)));
+
+  const [kf, mu] = await Promise.all([kfIssues().catch(() => []), mufgIssues().catch(() => [])]);
+  const k = kf.find((r) => near(nameKey(r.name), key));
+  if (k) return { registrar: "kfintech", id: String(k.clientId), listedAs: k.name };
+  const m = mu.find((r) => near(nameKey(r.name), key));
+  if (m) return { registrar: "mufg", id: m.id, listedAs: m.name };
+  return null;
+}
+
+async function kfLookup(clientId, pan) {
+  const r = await fetch(`${KF_QUERY}?type=pan`, {
+    headers: {
+      "User-Agent": UA,
+      Origin: KF_PAGE.replace(/\/$/, ""),
+      reqparam: pan,
+      client_id: clientId,
+    },
+  });
+  const text = await r.text();
+  let raw;
+  try { raw = JSON.parse(text); } catch { raw = { unparsed: text.slice(0, 400) }; }
+  /* A PAN with nothing on the issue comes back 404, not an empty list, so a
+     miss and a failure look alike unless the status is read first. Calling a
+     miss an error would be the worse mistake of the two: it reads as "we could
+     not check" when the registrar answered perfectly clearly. */
+  if (r.status === 404) return { status: "no_application", raw };
+  if (!r.ok) return { status: "error", message: `KFintech returned ${r.status}`, raw };
+
+  const rows = Array.isArray(raw.data) ? raw.data : [];
+  if (!rows.length) return { status: "no_application", raw };
+  // Every bid this PAN made on the issue; more than one is normal in a family
+  // that applies from the same demat under different applicants.
+  return {
+    status: "found",
+    name: rows[0].Name || "",
+    bids: rows.map((x) => ({
+      applicationNo: x.Appln_No || "",
+      applied: Number(x.App_Shares || 0),
+      allotted: Number(x.All_Shares || 0),
+      dpClientId: x.DP_CLID || "",
+    })),
+    raw,
+  };
+}
+
+async function mufgLookup(clientId, pan) {
+  const r = await fetch(`${MUFG}/SearchOnPan`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json; charset=UTF-8",
+      "User-Agent": UA,
+      Referer: "https://in.mpms.mufg.com/Initial_Offer/public-issues.html",
+    },
+    // token is sent empty on purpose - see the note at the top of this file.
+    body: JSON.stringify({ clientid: String(clientId), PAN: pan, IFSC: "", CHKVAL: "1", token: "" }),
+  });
+  const text = await r.text();
+  let payload;
+  try { payload = JSON.parse(text); } catch { payload = null; }
+  const xml = payload && typeof payload.d === "string" ? payload.d : "";
+  const raw = { d: xml || text.slice(0, 400) };
+  if (!r.ok) return { status: "error", message: `MUFG returned ${r.status}`, raw };
+  if (!xml.includes("<Table>")) return { status: "no_application", raw };
+
+  const tables = [...xml.matchAll(/<Table>([\s\S]*?)<\/Table>/g)].map((m) => m[1]);
+  const field = (block, tag) => {
+    const m = block.match(new RegExp(`<${tag}>([^<]*)</${tag}>`));
+    return m ? m[1] : "";
+  };
+  /* Their ALLOT is a number when there was one and a word - NON-ALLOTTED -
+     when there was not, so it cannot simply be parsed as a number. */
+  const asQty = (v) => (/^\d+$/.test(String(v).trim()) ? Number(v) : 0);
+  return {
+    status: "found",
+    name: field(tables[0], "NAME1"),
+    bids: tables.map((t) => ({
+      applicationNo: field(t, "APPLNO") || field(t, "RFNDNO") || "",
+      applied: asQty(field(t, "SHARES")),
+      allotted: asQty(field(t, "ALLOT")),
+      dpClientId: field(t, "DPCLITID"),
+    })),
+    raw,
+  };
+}
+
 export default async function handler(req, res) {
   /* The two indexes on their own. One call the app can make on opening to see
      whether anything it is waiting on has been published, without asking after
