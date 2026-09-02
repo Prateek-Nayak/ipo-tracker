@@ -5731,19 +5731,43 @@ function AllotmentSheet({ ipo, accounts, onClose, onApply }) {
       setRegistrar({ id: head.registrar, label: head.registrar === "kfintech" ? "KFintech" : "MUFG Intime", listedAs: head.listedAs });
       setPhase("asking");
 
-      const collected = [];
-      for (const a of holders) {
-        if (!alive.current) return;
+      /* One PAN per request meant thirteen round trips for a dozen accounts,
+         and the round trip - browser to the function and back - cost more than
+         the registrar did. Asked four at a time instead: still filling in as
+         the answers come, at a quarter of the waiting.
+
+         Asked once per PAN, not once per account. The same person often holds
+         two demats, and the registrar's answer is about the PAN, so asking
+         twice would only get the same reply twice. */
+      const seen = new Set();
+      const wanted = [];
+      holders.forEach((a) => {
         const pan = panOf(a);
+        if (!seen.has(pan)) { seen.add(pan); wanted.push(pan); }
+      });
+
+      const settle = (r) =>
+        // Every account on that PAN, each keeping its own name.
+        setRows((prev) => prev.map((x) => (x.pan === r.pan ? { ...r, account: x.account } : x)));
+
+      const collected = [];
+      for (let i = 0; i < wanted.length; i += 4) {
+        if (!alive.current) return;
+        const group = wanted.slice(i, i + 4);
         try {
-          const one = await ask(pan);
-          const r = (one.results || [])[0] || { pan, status: "error", message: "no answer for this PAN" };
-          collected.push(r);
-          setRows((prev) => prev.map((x) => (x.pan === pan ? { ...r, account: a } : x)));
+          const answer = await ask(group.join(","));
+          const byPan = new Map((answer.results || []).map((r) => [r.pan, r]));
+          group.forEach((pan) => {
+            const r = byPan.get(pan) || { pan, status: "error", message: "no answer for this PAN" };
+            collected.push(r);
+            settle(r);
+          });
         } catch (e) {
-          const r = { pan, status: "error", message: e.message || "could not be checked" };
-          collected.push(r);
-          setRows((prev) => prev.map((x) => (x.pan === pan ? { ...r, account: a } : x)));
+          group.forEach((pan) => {
+            const r = { pan, status: "error", message: e.message || "could not be checked" };
+            collected.push(r);
+            settle(r);
+          });
         }
       }
       if (!alive.current) return;

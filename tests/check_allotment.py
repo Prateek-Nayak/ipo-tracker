@@ -5,10 +5,31 @@ This is a bench for the real thing. BSE holds every application that was routed
 through its own bidding platform, whoever the registrar is, and answers a plain
 GET with no token, no cookie and no captcha - only a Referer header. That makes
 it the one automatable source we found. NSE has the same data for bids routed
-through NSE, but demands a live reCAPTCHA token per request, so it cannot be
-asked from a script; a bid placed there is invisible here and comes back looking
-exactly like no bid at all. Measuring how often that happens, across real PANs
-and real issues, is the point of running this.
+through NSE, at POST /api/ipo-bid-verification-details, but the reCAPTCHA in its
+payload is checked: sent empty, or left out, it answers
+
+    {"error":"failed to submit","reason":"invalid captcha"}
+
+so it cannot be asked from a script, and a bid placed there is invisible here
+and comes back looking exactly like no bid at all. Measuring how often that
+happens, across real PANs and real issues, is the point of running this.
+
+Which is why the app asks the registrars instead. Two measurements settled it:
+
+  Coverage    Of six family PANs on Tempsens, BSE had no record of the one that
+              was allotted fifty shares - the bid had gone through NSE, and BSE
+              cannot say so. KFintech had all seven, allotment included.
+
+  Retention   imId is a temporary code for the offer, not the listed scrip code,
+              so once an issue leaves BSE's own list there is no way to look it
+              up by name at all. Scanning 4700-4771 on 3 Sep 2026, everything
+              from 4742 up answered and everything below it was empty: 4742 is
+              Lalithaa Jewellery, which closed on 19 Aug. About seventeen days.
+              KFintech was carrying 66 issues at the same moment.
+
+So BSE is neither wider nor longer-lived than the registrars, and adding it as a
+fallback would only produce confident "no application" answers for bids that
+went through NSE.
 
     python tests/check_allotment.py                  # PANS below
     python tests/check_allotment.py ABCDE1234F ...   # or pass them in

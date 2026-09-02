@@ -309,15 +309,27 @@ export default async function handler(req, res) {
     }
 
     const lookup = found.registrar === "kfintech" ? kfLookup : mufgLookup;
-    const results = [];
-    for (const pan of pans) {
-      try {
-        results.push({ pan, ...(await lookup(found.id, pan)) });
-      } catch (e) {
-        results.push({ pan, status: "error", message: e.message || "request failed", raw: null });
+    const askOne = async (pan) => {
+      try { return { pan, ...(await lookup(found.id, pan)) }; }
+      catch (e) { return { pan, status: "error", message: e.message || "request failed", raw: null }; }
+    };
+
+    /* The two want opposite things, measured rather than assumed. MUFG answers
+       six at once in 362ms where it takes 1658ms one after another, so its PANs
+       go together. KFintech gains nothing - 1440ms against 1351ms, it queues
+       them internally anyway - and its page is known to back off when pressed,
+       so those stay in line with a pause between. The pause is between calls
+       and not after the last one, which used to add a quarter second of doing
+       nothing to the end of every request. */
+    let results;
+    if (found.registrar === "kfintech") {
+      results = [];
+      for (let i = 0; i < pans.length; i++) {
+        if (i) await new Promise((r) => setTimeout(r, 120));
+        results.push(await askOne(pans[i]));
       }
-      // One at a time, unhurried. KFintech's own page backs off when pressed.
-      await new Promise((r) => setTimeout(r, 250));
+    } else {
+      results = await Promise.all(pans.map(askOne));
     }
 
     return res.status(200).json({
