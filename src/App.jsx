@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback, useRef, useContext } from "react";
+import React, { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef, useContext } from "react";
 import { createPortal } from "react-dom";
 
 /* ---------------------------------------------------------
@@ -282,6 +282,26 @@ const STORAGE_PREFIX = "ipo_ledger_";
 // The four screens, in nav order. Named here so a remembered tab can be checked
 // against them before it is trusted.
 const TABS = ["dashboard", "ipos", "transfers", "accounts"];
+
+/* Everything back has to peel off before it is allowed to leave, in the order
+   it comes off. Each layer that is on screen owns one history entry, so the
+   count below and the number of entries pushed are the same number and can be
+   compared directly. Being off Overview counts as a layer too - back from a
+   tab returns to Overview before it returns to the home screen. */
+const BACK_LAYERS = [
+  "confirmOpen", "appSheet", "bulkApplyFor", "bulkStatusFor", "ipoSheet", "acctSheet",
+  "acctDetail", "holdingDetail", "transferSheet", "liveOpen", "dataSheetOpen", "ipoDetail",
+];
+const layerDepth = (v) =>
+  BACK_LAYERS.reduce((n, k) => n + (v[k] ? 1 : 0), 0) + (v.tab !== "dashboard" ? 1 : 0);
+
+// Anything that counts as the first sign of a person, for the history entries.
+const ARM_EVENTS = ["touchstart", "pointerdown", "mousedown", "keydown"];
+
+// Anyone who has asked for less movement gets the screen change without the slide.
+const prefersReducedMotion = () =>
+  typeof window !== "undefined" && typeof window.matchMedia === "function" &&
+  window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 /* NSE's holiday calendars, kept module-wide because every date calculation
    needs them. Both are required, and which one applies depends on the event:
@@ -885,8 +905,12 @@ function ConfirmModal({ state, onResolve }) {
   );
 }
 
-// Module-level ref for dismissing confirm modal from back button handler
+/* The confirm modal is mounted above the app and never re-renders it, so the
+   back handler cannot find it in state the way it finds every other layer. It
+   announces itself instead: the ref is how it is dismissed, the listeners are
+   how the app learns it is on screen and counts it as one more layer. */
 const confirmDismissRef = { current: null };
+const confirmListeners = new Set();
 
 function ConfirmProvider({ children }) {
   const [state, setState] = useState(null);
@@ -904,7 +928,10 @@ function ConfirmProvider({ children }) {
   }, []);
   // Expose dismiss for back button handling
   dismissRef.current = state ? () => onResolve(false) : null;
-  confirmDismissRef.current = dismissRef.current;
+  useEffect(() => {
+    confirmDismissRef.current = dismissRef.current;
+    confirmListeners.forEach((fn) => fn());
+  }, [state]);
   return (
     <ConfirmContext.Provider value={show}>
       {children}
@@ -1116,7 +1143,8 @@ function AppInner() {
      the bottom of the transfers - a list you had never scrolled. Each screen
      now starts where a screen should. */
   useEffect(() => {
-    if (contentRef.current) contentRef.current.scrollTop = 0;
+    const el = pageRefs.current[tab];
+    if (el) el.scrollTop = 0;
   }, [tab]);
   const [accounts, setAccounts] = useState([]);
   const [ipos, setIpos] = useState([]);
@@ -1150,14 +1178,30 @@ function AppInner() {
   const [bulkApplyFor, setBulkApplyFor] = useState(null);   // ipo id
   const [bulkStatusFor, setBulkStatusFor] = useState(null); // ipo id
   const [liveOpen, setLiveOpen] = useState(false);
+
+  /* The confirm modal is not this component's to own - it is mounted above it -
+     but back has to treat it as the topmost layer, so it is mirrored here. */
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  useEffect(() => {
+    const listener = () => setConfirmOpen(!!confirmDismissRef.current);
+    confirmListeners.add(listener);
+    listener();
+    return () => { confirmListeners.delete(listener); };
+  }, []);
+
   const [pricing, setPricing] = useState(false);
   const [priceInfo, setPriceInfo] = useState({ asOf: "", matched: 0, total: 0, error: "" });
 
   const skipNextAutoSync = useRef(true);
   const pricedOnce = useRef(false);
   const swipeNav = useRef(null);
-  const [swipeDx, setSwipeDx] = useState(0);
-  const contentRef = useRef(null);
+  const pagerRef = useRef(null);
+  const pageRefs = useRef({});
+  const swipeDx = useRef(0);
+  const swipeMs = useRef(0);
+  const settling = useRef(false);
+  const settleTimer = useRef(null);
+  const [swipeDir, setSwipeDir] = useState(0);
   const [, bumpHolidays] = useState(0);
 
   // The palette is mutated in place, so a theme change needs a nudge to redraw.
@@ -1348,8 +1392,8 @@ function AppInner() {
 
      The handler reads through a ref so the listener can be registered once and
      still see current state; re-registering on every state change would drop
-     the buffered history entry. */
-  const backLayers = { appSheet, bulkApplyFor, bulkStatusFor, ipoSheet, acctSheet,
+     the history bookkeeping below. */
+  const backLayers = { confirmOpen, appSheet, bulkApplyFor, bulkStatusFor, ipoSheet, acctSheet,
     transferSheet, liveOpen, dataSheetOpen, ipoDetail, acctDetail, holdingDetail, tab };
 
   /* A sheet covers the screen but the page behind it still scrolls, so dragging
@@ -1369,7 +1413,7 @@ function AppInner() {
   const closeTopLayer = useCallback(() => {
     const v = backRef.current;
     const clear = (key, setter, val) => { setter(val !== undefined ? val : null); backRef.current = { ...backRef.current, [key]: val !== undefined ? val : null }; return true; };
-    if (confirmDismissRef.current) { confirmDismissRef.current(); return true; }
+    if (confirmDismissRef.current) { confirmDismissRef.current(); backRef.current = { ...backRef.current, confirmOpen: false }; return true; }
     if (v.appSheet) return clear("appSheet", setAppSheet);
     if (v.bulkApplyFor) return clear("bulkApplyFor", setBulkApplyFor);
     if (v.bulkStatusFor) return clear("bulkStatusFor", setBulkStatusFor);
@@ -1385,19 +1429,63 @@ function AppInner() {
     return false;
   }, []);
 
+  /* An entry per open layer, pushed as the layer opens and popped as it closes,
+     with the depth it stands for written into the entry. Back then lands on an
+     entry that says how much should still be on screen, and anything above that
+     is closed - which is self-correcting, so a stack that ever drifts out of
+     step is put right by the next press rather than staying wrong.
+
+     Entries are never pushed from inside the popstate handler. Chrome treats a
+     history entry created without a user gesture as one to skip past, and a
+     back press is not a gesture on the page: the old code pushed a replacement
+     entry from the handler, which worked for the first back and then took the
+     second one straight out of the app - two panels deep, one back closed the
+     top panel and the next closed the app. */
+  const depth = layerDepth(backLayers);
+  const histDepth = useRef(0);
+  const histMoving = useRef(false);
+  const [histPops, setHistPops] = useState(0);
+
+  /* The same rule applies at startup: the tab you were last on is restored
+     before anyone has touched anything, and an entry pushed for it then would
+     be skipped over. Nothing is pushed until the first touch or key, and every
+     way a browser might report one is watched - if this never arms, back walks
+     straight out of the first panel that is opened. */
+  const [histArmed, setHistArmed] = useState(false);
+  useEffect(() => {
+    if (histArmed || typeof window === "undefined" || !window.history) return;
+    window.history.replaceState({ ...(window.history.state || {}), ledger: 0 }, "");
+    const arm = () => setHistArmed(true);
+    ARM_EVENTS.forEach((type) => window.addEventListener(type, arm, { capture: true, once: true }));
+    return () => ARM_EVENTS.forEach((type) => window.removeEventListener(type, arm, true));
+  }, [histArmed]);
+
   useEffect(() => {
     if (typeof window === "undefined" || !window.history) return;
-    window.history.replaceState({ ledger: "root" }, "");
-    window.history.pushState({ ledger: "layer" }, "");
+    if (!histArmed || histMoving.current) return;
+    if (depth > histDepth.current) {
+      for (let n = histDepth.current + 1; n <= depth; n++) window.history.pushState({ ledger: n }, "");
+      histDepth.current = depth;
+    } else if (depth < histDepth.current) {
+      // Closed by tapping rather than by back: give the entries back.
+      const steps = histDepth.current - depth;
+      histDepth.current = depth;
+      histMoving.current = true;
+      window.history.go(-steps);
+    }
+  }, [depth, histArmed, histPops]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
     const onPop = (e) => {
-      if (closeTopLayer()) {
-        window.history.pushState({ ledger: "layer" }, "");
-      } else {
-        window.history.back();
+      histMoving.current = false;
+      const landed = e.state && typeof e.state.ledger === "number" ? e.state.ledger : 0;
+      histDepth.current = landed;
+      for (let guard = BACK_LAYERS.length + 2; layerDepth(backRef.current) > landed && guard > 0; guard--) {
+        if (!closeTopLayer()) break;
       }
+      setHistPops((n) => n + 1);
     };
-
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, [closeTopLayer]);
@@ -1827,6 +1915,95 @@ function AppInner() {
     return { invested, realized, unrealized, pendingCount, activeCount, missingLtp };
   }, [ipos]);
 
+  /* ---------- page swipe ---------- */
+  /* Swiping between the four screens used to snap from one to the next. They
+     sit side by side now: the screen you are on follows your finger, the one
+     you are heading for comes in beside it, and on release the pair settles
+     onto whichever is more than a third of the way across - the way a phone's
+     home screen moves. Only the neighbour you are dragging towards is mounted,
+     so a swipe never costs more than two screens.
+
+     The drag is painted straight onto the two nodes instead of going through
+     state, because re-rendering this component on every touchmove drops frames
+     on a long list. Neither property is set from the style prop, so React never
+     overwrites what is written here. */
+  const swipeSettleMs = prefersReducedMotion() ? 0 : 260;
+
+  const paintPages = () => {
+    const here = TABS.indexOf(tab);
+    TABS.forEach((id, i) => {
+      const el = pageRefs.current[id];
+      if (!el) return;
+      el.style.transition = swipeMs.current
+        ? `transform ${swipeMs.current}ms cubic-bezier(0.22, 0.61, 0.36, 1)`
+        : "none";
+      el.style.transform = `translate3d(calc(${(i - here) * 100}% + ${swipeDx.current}px), 0, 0)`;
+    });
+  };
+  /* After every render, so a neighbour that has just mounted is put in its
+     place in the same frame rather than flashing over the screen you are on. */
+  useLayoutEffect(paintPages);
+  useEffect(() => () => clearTimeout(settleTimer.current), []);
+
+  /* dir 0 slides back to the screen you started on. */
+  const settleSwipe = (dir, width) => {
+    settling.current = true;
+    swipeMs.current = swipeSettleMs;
+    swipeDx.current = dir ? -dir * width : 0;
+    paintPages();
+    clearTimeout(settleTimer.current);
+    settleTimer.current = setTimeout(() => {
+      /* The screen that has slid into place keeps its node - the pages are
+         keyed by tab - so changing which tab is active under it leaves it
+         sitting exactly where the animation left it, at an offset of nothing. */
+      settling.current = false;
+      swipeMs.current = 0;
+      swipeDx.current = 0;
+      setSwipeDir(0);
+      if (dir) setTab((t) => TABS[TABS.indexOf(t) + dir] || t);
+    }, swipeSettleMs + 30);
+  };
+
+  const onSwipeStart = (e) => {
+    if (sheetIsOpen || settling.current || e.touches.length > 1) return;
+    const box = pagerRef.current && pagerRef.current.getBoundingClientRect();
+    swipeNav.current = {
+      x: e.touches[0].clientX, y: e.touches[0].clientY,
+      axis: null, dx: 0, dir: 0, width: (box && box.width) || window.innerWidth,
+    };
+  };
+
+  const onSwipeMove = (e) => {
+    const s = swipeNav.current;
+    if (!s || sheetIsOpen) return;
+    const dx = e.touches[0].clientX - s.x;
+    const dy = e.touches[0].clientY - s.y;
+    if (!s.axis) {
+      /* The first decisive movement decides the axis and it is not revisited,
+         so a slightly slanted scroll cannot drag the page sideways halfway
+         down a list, and a slanted swipe cannot scroll it. */
+      if (Math.abs(dx) < 12 && Math.abs(dy) < 12) return;
+      if (Math.abs(dx) <= Math.abs(dy) * 1.2) { swipeNav.current = null; return; }
+      s.axis = "x";
+    }
+    const dir = dx < 0 ? 1 : -1;
+    const room = !!TABS[TABS.indexOf(tab) + dir];
+    // Past the first and last screens there is nowhere to go, so the drag resists.
+    s.dx = room ? dx : dx * 0.25;
+    swipeDx.current = s.dx;
+    swipeMs.current = 0;
+    if (s.dir !== (room ? dir : 0)) { s.dir = room ? dir : 0; setSwipeDir(s.dir); }
+    paintPages();
+  };
+
+  const onSwipeEnd = () => {
+    const s = swipeNav.current;
+    swipeNav.current = null;
+    if (!s || s.axis !== "x") return;
+    const far = Math.abs(s.dx) > Math.min(90, s.width * 0.3);
+    settleSwipe(s.dir && far ? s.dir : 0, s.width);
+  };
+
   /* ---------- gates ---------- */
   if (linkBusy) return <LedgerSkeleton text="SIGNING YOU IN" tab={tab} />;
 
@@ -1870,45 +2047,53 @@ function AppInner() {
       )}
 
       <div
-        ref={contentRef}
-        className="ledger-scroll"
-        onTouchStart={(e) => {
-          if (sheetIsOpen) return;
-          swipeNav.current = { x: e.touches[0].clientX, y: e.touches[0].clientY, committed: false };
-        }}
-        onTouchEnd={(e) => {
-          const s = swipeNav.current;
-          if (!s || sheetIsOpen) { swipeNav.current = null; return; }
-          swipeNav.current = null;
-          const dx = e.changedTouches[0].clientX - s.x;
-          const dy = e.changedTouches[0].clientY - s.y;
-          if (Math.abs(dx) < 60 || Math.abs(dy) > Math.abs(dx) * 0.5) return;
-          const idx = TABS.indexOf(tab);
-          if (dx < 0 && idx < TABS.length - 1) setTab(TABS[idx + 1]);
-          if (dx > 0 && idx > 0) setTab(TABS[idx - 1]);
-        }}
-        style={{ padding: "14px 14px 14px", flex: "1 1 auto", overflowY: "auto", WebkitOverflowScrolling: "touch", overscrollBehaviorY: "auto" }}>
-        {tab === "dashboard" && (
-          <Dashboard stats={stats} ipos={ipos} accounts={accounts} onOpenIpo={(id) => setIpoDetail(id)} onOpenHolding={(id) => setHoldingDetail(id)} />
-        )}
-        {tab === "ipos" && (
-          <IpoList ipos={ipos} accounts={accounts} onOpen={(id) => setIpoDetail(id)} />
-        )}
-        {tab === "accounts" && (
-          <AccountList transfers={transfers} accounts={accounts} ipos={ipos} onOpen={(id) => setAcctDetail(id)} />
-        )}
-        {tab === "transfers" && (
-          <TransfersScreen transfers={transfers} accounts={accounts} ipos={ipos}
-            onEdit={(transfer) => setTransferSheet({ transfer })}
-            onDelete={(id) => {
-              const gone = transfers.find((x) => x.id === id);
-              if (!gone) return;
-              const who = (aid) => accounts.find((a) => a.id === aid)?.name || "Unknown";
-              discard("transfer", gone, `${inr(gone.amount)} · ${who(gone.fromAccountId)} to ${who(gone.toAccountId)}`);
-              persistTransfers(transfers.filter((x) => x.id !== id));
-            }}
-          />
-        )}
+        ref={pagerRef}
+        onTouchStart={onSwipeStart}
+        onTouchMove={onSwipeMove}
+        onTouchEnd={onSwipeEnd}
+        onTouchCancel={onSwipeEnd}
+        style={{
+          position: "relative", flex: "1 1 auto", minHeight: 0,
+          overflow: "hidden", overscrollBehaviorX: "contain",
+        }}>
+        {TABS.map((id, i) => {
+          // The screen you are on, plus the one you are swiping towards.
+          if (id !== tab && i !== TABS.indexOf(tab) + swipeDir) return null;
+          return (
+            <div
+              key={id}
+              ref={(el) => { if (el) pageRefs.current[id] = el; else delete pageRefs.current[id]; }}
+              className="ledger-scroll"
+              style={{
+                position: "absolute", inset: 0, overflowY: "auto", padding: "14px 14px 14px",
+                WebkitOverflowScrolling: "touch", overscrollBehaviorY: "auto",
+                // Vertical scrolling stays the browser's; sideways is ours.
+                touchAction: "pan-y", willChange: "transform",
+              }}>
+              {id === "dashboard" && (
+                <Dashboard stats={stats} ipos={ipos} accounts={accounts} onOpenIpo={(x) => setIpoDetail(x)} onOpenHolding={(x) => setHoldingDetail(x)} />
+              )}
+              {id === "ipos" && (
+                <IpoList ipos={ipos} accounts={accounts} onOpen={(x) => setIpoDetail(x)} />
+              )}
+              {id === "accounts" && (
+                <AccountList transfers={transfers} accounts={accounts} ipos={ipos} onOpen={(x) => setAcctDetail(x)} />
+              )}
+              {id === "transfers" && (
+                <TransfersScreen transfers={transfers} accounts={accounts} ipos={ipos}
+                  onEdit={(transfer) => setTransferSheet({ transfer })}
+                  onDelete={(x) => {
+                    const gone = transfers.find((t) => t.id === x);
+                    if (!gone) return;
+                    const who = (aid) => accounts.find((a) => a.id === aid)?.name || "Unknown";
+                    discard("transfer", gone, `${inr(gone.amount)} · ${who(gone.fromAccountId)} to ${who(gone.toAccountId)}`);
+                    persistTransfers(transfers.filter((t) => t.id !== x));
+                  }}
+                />
+              )}
+            </div>
+          );
+        })}
       </div>
 
       <BottomNav tab={tab} setTab={setTab} />
