@@ -319,7 +319,7 @@ const TABS = ["dashboard", "ipos", "transfers", "accounts"];
    compared directly. Being off Overview counts as a layer too - back from a
    tab returns to Overview before it returns to the home screen. */
 const BACK_LAYERS = [
-  "confirmOpen", "appSheet", "bulkApplyFor", "bulkStatusFor", "ipoSheet", "acctSheet",
+  "confirmOpen", "appSheet", "bulkApplyFor", "bulkStatusFor", "allotmentFor", "ipoSheet", "acctSheet",
   "acctDetail", "holdingDetail", "transferSheet", "liveOpen", "dataSheetOpen", "ipoDetail",
 ];
 const layerDepth = (v) =>
@@ -1293,6 +1293,7 @@ function AppInner() {
   const [dataSheetOpen, setDataSheetOpen] = useState(false);
   const [bulkApplyFor, setBulkApplyFor] = useState(null);   // ipo id
   const [bulkStatusFor, setBulkStatusFor] = useState(null); // ipo id
+  const [allotmentFor, setAllotmentFor] = useState(null);   // ipo id
   const [liveOpen, setLiveOpen] = useState(false);
 
   /* The confirm modal is not this component's to own - it is mounted above it -
@@ -1521,7 +1522,7 @@ function AppInner() {
      The handler reads through a ref so the listener can be registered once and
      still see current state; re-registering on every state change would drop
      the history bookkeeping below. */
-  const backLayers = { confirmOpen, transient, appSheet, bulkApplyFor, bulkStatusFor, ipoSheet,
+  const backLayers = { confirmOpen, transient, appSheet, bulkApplyFor, bulkStatusFor, allotmentFor, ipoSheet,
     acctSheet, transferSheet, liveOpen, dataSheetOpen, ipoDetail, acctDetail, holdingDetail, tab };
 
   /* A sheet covers the screen but the page behind it still scrolls, so dragging
@@ -1559,6 +1560,7 @@ function AppInner() {
     if (v.appSheet) return clear("appSheet", setAppSheet);
     if (v.bulkApplyFor) return clear("bulkApplyFor", setBulkApplyFor);
     if (v.bulkStatusFor) return clear("bulkStatusFor", setBulkStatusFor);
+    if (v.allotmentFor) return clear("allotmentFor", setAllotmentFor);
     if (v.ipoSheet) return clear("ipoSheet", setIpoSheet);
     if (v.acctSheet) return clear("acctSheet", setAcctSheet);
     if (v.acctDetail) return clear("acctDetail", setAcctDetail);
@@ -2419,6 +2421,7 @@ function AppInner() {
           onSaveNote={(id,noteValue)=>{ persistIpos(ipos.map((i)=>i.id===id?{...i,remarks:(noteValue||"").trimEnd()}:i)); }}
           onBulkApply={(ipoId) => { setBulkApplyFor(ipoId); }}
           onBulkStatus={(ipoId) => { setBulkStatusFor(ipoId); }}
+          onCheckAllotment={(ipoId) => { setAllotmentFor(ipoId); }}
           onEditApplication={(ipoId, application) => setAppSheet({ ipoId, application })}
           onDeleteApplication={(ipoId, appId) => {
             const owner = ipos.find((i) => i.id === ipoId);
@@ -2508,6 +2511,40 @@ function AppInner() {
                 }
               : i)));
             setBulkStatusFor(null);
+          }}
+        />
+      )}
+
+      {allotmentFor && (
+        <AllotmentSheet
+          ipo={ipos.find((i) => i.id === allotmentFor)}
+          accounts={accounts}
+          onClose={() => { setAllotmentFor(null); backRef.current = { ...backRef.current, allotmentFor: null }; }}
+          onApply={(results) => {
+            /* Written per account, and only where the registrar actually
+               answered - an account it could not reach is left exactly as it
+               was rather than being recorded as rejected. The share count is
+               the registrar's; the status follows from it, with Partial kept
+               for the case where some of what was applied for came through. */
+            const byAccount = {};
+            results.forEach((r) => { if (r.accountId) byAccount[r.accountId] = r; });
+            persistIpos(ipos.map((i) => (i.id === allotmentFor
+              ? {
+                  ...i,
+                  applications: (i.applications || []).map((a) => {
+                    const hit = byAccount[a.accountId];
+                    if (!hit) return a;
+                    const status = hit.allotted <= 0 ? "Not Allotted"
+                      : hit.appliedQty > 0 && hit.allotted < hit.appliedQty ? "Partial"
+                      : "Allotted";
+                    return {
+                      ...a,
+                      sharesAllotted: hit.allotted > 0 ? String(hit.allotted) : "",
+                      allotmentStatus: status,
+                    };
+                  }),
+                }
+              : i)));
           }}
         />
       )}
@@ -3621,7 +3658,7 @@ function IpoCard({ ipo, accounts, onClick }) {
    rather than fit inside it. */
 
 
-function IpoDetailSheet({ ipo, accounts, onClose, onDeleteIpo, onEditIpo, onSaveNote, onAddApplication, onBulkApply, onBulkStatus, onEditApplication, onDeleteApplication }) {
+function IpoDetailSheet({ ipo, accounts, onClose, onDeleteIpo, onEditIpo, onSaveNote, onAddApplication, onBulkApply, onBulkStatus, onCheckAllotment, onEditApplication, onDeleteApplication }) {
   const confirm = useConfirm();
   if (!ipo) return null;
   const apps = ipo.applications || [];
@@ -3741,6 +3778,14 @@ function IpoDetailSheet({ ipo, accounts, onClose, onDeleteIpo, onEditIpo, onSave
           padding: "11px 10px", fontSize: 12.5, fontWeight: 600,
           cursor: apps.length ? "pointer" : "default", opacity: apps.length ? 1 : 0.6,
         }}><ClipboardCheck size={14} color={apps.length ? COLORS.ink : COLORS.inkSoft} /> Record allotment</button>
+        {/* The registrar knows the answer; there is no reason to type it in. */}
+        <button onClick={() => onCheckAllotment(ipo.id)} disabled={!apps.length} style={{
+          flex: 1, minHeight: 44, borderRadius: 10, border: `1px solid ${apps.length ? COLORS.gold : COLORS.border}`,
+          background: apps.length ? COLORS.goldSoft : COLORS.surface,
+          color: apps.length ? COLORS.ink : COLORS.inkSoft, fontSize: 13, fontWeight: 600,
+          cursor: apps.length ? "pointer" : "default", fontFamily: "Inter, sans-serif",
+          display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+        }}><Sparkles size={14} color={apps.length ? COLORS.gold : COLORS.inkSoft} /> Check allotment</button>
       </div>
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
@@ -5509,6 +5554,251 @@ const normaliseName = (s) =>
 /* Two ways in: the issues open or coming up, and everything that listed in a
    given year. The second exists because a ledger started late would otherwise
    have to be typed out by hand, an IPO at a time. */
+/* What the registrar says, for every account at once.
+
+   The exchanges hold only the bids routed through their own platform, and which
+   one a bid took is the broker's choice, made invisibly - so asking there misses
+   applications without ever saying it missed them. The registrar has the whole
+   issue. Two of the three answer directly; an issue registered with the third
+   comes back unreachable and says so, rather than reporting nothing found.
+
+   The registrar's own reply is kept and shown beneath the numbers. A figure that
+   looks plausible but is wrong is worse than an error, and the only way to tell
+   those apart is to read what was actually said. */
+function AllotmentSheet({ ipo, accounts, onClose, onApply }) {
+  const [state, setState] = useState({ status: "idle" });
+  const [showRaw, setShowRaw] = useState(false);
+  const [written, setWritten] = useState(false);
+
+  const holders = useMemo(
+    () => accounts.filter((a) => /^[A-Z]{5}[0-9]{4}[A-Z]$/.test(panOf(a))),
+    [accounts]
+  );
+  const byPan = useMemo(() => {
+    const m = {};
+    holders.forEach((a) => { m[panOf(a)] = a; });
+    return m;
+  }, [holders]);
+
+  const check = async () => {
+    if (typeof navigator !== "undefined" && navigator.onLine === false) {
+      setState({
+        status: "error", title: "You are offline",
+        detail: "The registrar can only be asked with a connection.",
+      });
+      return;
+    }
+    setState({ status: "loading" });
+    setWritten(false);
+    try {
+      const url = "/api/allotment?company=" + encodeURIComponent(ipo.company || "")
+        + "&pans=" + encodeURIComponent(holders.map((a) => panOf(a)).join(","));
+      const res = await fetch(url);
+      const text = await res.text();
+      let data = null;
+      try { data = JSON.parse(text); } catch { /* reported just below */ }
+      if (!data) {
+        setState({
+          status: "error", title: "Unreadable reply",
+          detail: "The server answered " + res.status + " with something that was not JSON.",
+          raw: { httpStatus: res.status, body: text.slice(0, 600) },
+        });
+        return;
+      }
+      if (!res.ok) {
+        setState({
+          status: "error", title: "Could not reach the registrar",
+          detail: data.error || ("The server answered " + res.status + "."),
+          raw: data,
+        });
+        return;
+      }
+      setState({ status: "done", data });
+    } catch (e) {
+      setState({
+        status: "error", title: "The request did not complete",
+        detail: e.message || "Something interrupted it before an answer came back.",
+        raw: null,
+      });
+    }
+  };
+
+  const data = state.status === "done" ? state.data : null;
+  const rows = (data?.results || []).map((r) => ({
+    ...r,
+    account: byPan[r.pan],
+    allotted: (r.bids || []).reduce((n, b) => n + (Number(b.allotted) || 0), 0),
+    appliedQty: (r.bids || []).reduce((n, b) => n + (Number(b.applied) || 0), 0),
+  }));
+  const found = rows.filter((r) => r.status === "found");
+  const failed = rows.filter((r) => r.status === "error");
+  const wins = found.filter((r) => r.allotted > 0);
+
+  return (
+    <Sheet title="Check allotment" onClose={onClose}>
+      <div style={{
+        background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 12,
+        padding: "10px 12px", marginBottom: 14,
+      }}>
+        <div title={ipo.company} style={{ fontFamily: "'Fraunces', serif", fontWeight: 600, fontSize: 15, color: COLORS.heading, ...ellipsisText }}>{ipo.company}</div>
+        <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11.5, color: COLORS.inkSoft, marginTop: 3 }}>
+          {holders.length} account{holders.length === 1 ? "" : "s"} with a PAN on file
+        </div>
+      </div>
+
+      {holders.length === 0 ? (
+        <EmptyState
+          icon={AlertTriangle}
+          text="No PANs on file."
+          subtitle="The registrar is asked by PAN, so add one to an account first - Accounts, then the account, then edit."
+        />
+      ) : (
+        <>
+          {state.status !== "done" && (
+            <PrimaryButton onClick={check} disabled={state.status === "loading"}>
+              {state.status === "loading" ? "Asking the registrar..." : "Check with the registrar"}
+            </PrimaryButton>
+          )}
+
+          {state.status === "error" && (
+            <div style={{
+              background: COLORS.redSoft, border: `1px solid ${COLORS.red}`, borderRadius: 10,
+              padding: "10px 12px", marginTop: 14, fontSize: 12.5, color: COLORS.ink,
+              fontFamily: "Inter, sans-serif",
+            }}>
+              <div style={{ fontWeight: 700, marginBottom: 3 }}>{state.title}</div>
+              <div style={{ color: COLORS.inkSoft, ...wrapText }}>{state.detail}</div>
+              <button onClick={check} style={{
+                marginTop: 10, minHeight: 36, padding: "0 14px", borderRadius: 8,
+                border: `1px solid ${COLORS.red}`, background: "transparent", color: COLORS.red,
+                fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "Inter, sans-serif",
+              }}>Try again</button>
+            </div>
+          )}
+
+          {/* Not finding a registrar is usually not a failure - the basis of
+              allotment is published on the evening of allotment day, and until
+              then no registrar lists the issue at all. */}
+          {data && !data.registrar && (
+            <div style={{
+              background: COLORS.goldSoft, borderRadius: 10, padding: "10px 12px", marginTop: 14,
+              fontSize: 12.5, color: COLORS.ink, display: "flex", gap: 8, alignItems: "flex-start",
+              fontFamily: "Inter, sans-serif",
+            }}>
+              <AlertTriangle size={14} color={COLORS.gold} style={{ flexShrink: 0, marginTop: 1 }} />
+              <span style={wrapText}>{data.note}</span>
+            </div>
+          )}
+
+          {data && data.registrar && (
+            <>
+              <div style={{ fontSize: 11.5, color: COLORS.inkSoft, margin: "14px 0 10px", fontFamily: "Inter, sans-serif", ...ellipsisText }}>
+                {data.registrar === "kfintech" ? "KFintech" : "MUFG Intime"} · {data.listedAs}
+              </div>
+
+              <SectionLabel>
+                {wins.length
+                  ? `Allotted to ${wins.length} of ${found.length}`
+                  : `Nothing allotted (${found.length} application${found.length === 1 ? "" : "s"})`}
+              </SectionLabel>
+
+              <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
+                {rows.map((r) => {
+                  const label = r.account?.name || r.name || r.pan;
+                  const tone = r.status === "error" ? COLORS.red
+                    : r.allotted > 0 ? COLORS.green
+                      : r.status === "found" ? COLORS.inkSoft : COLORS.border;
+                  return (
+                    <div key={r.pan} style={{
+                      background: COLORS.surface, border: `1px solid ${COLORS.border}`,
+                      borderLeft: `3px solid ${tone}`, borderRadius: 10, padding: "8px 10px",
+                      fontFamily: "Inter, sans-serif", fontSize: 12.5,
+                    }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                        <span title={label} style={{ color: COLORS.ink, fontWeight: 600, minWidth: 0, ...ellipsisText }}>{label}</span>
+                        {r.status === "found" && (
+                          <span style={{
+                            fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, flexShrink: 0,
+                            color: r.allotted > 0 ? COLORS.green : COLORS.inkSoft,
+                          }}>{r.allotted > 0 ? `${r.allotted} allotted` : "not allotted"}</span>
+                        )}
+                      </div>
+                      <div title={r.message || undefined} style={{
+                        fontSize: 11, color: r.status === "error" ? COLORS.red : COLORS.inkSoft,
+                        marginTop: 2, fontFamily: "'JetBrains Mono', monospace", ...ellipsisText,
+                      }}>
+                        {r.status === "found" && `${r.pan} · applied ${r.appliedQty}`}
+                        {r.status === "no_application" && `${r.pan} · no application on this issue`}
+                        {r.status === "error" && `${r.pan} · ${r.message || "could not be checked"}`}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {failed.length > 0 && (
+                <div style={{
+                  background: COLORS.goldSoft, borderRadius: 10, padding: "9px 12px", marginBottom: 14,
+                  fontSize: 12, color: COLORS.ink, fontFamily: "Inter, sans-serif", ...wrapText,
+                }}>
+                  {failed.length} account{failed.length === 1 ? "" : "s"} could not be checked, and
+                  nothing will be written for {failed.length === 1 ? "it" : "them"}. Try again rather
+                  than reading a blank as a rejection.
+                </div>
+              )}
+
+              {found.length > 0 && (
+                <PrimaryButton
+                  onClick={() => {
+                    onApply(found.map((r) => ({
+                      accountId: r.account?.id,
+                      allotted: r.allotted,
+                      appliedQty: r.appliedQty,
+                    })));
+                    setWritten(true);
+                  }}
+                  disabled={written}
+                >
+                  {written
+                    ? "Written to the ledger"
+                    : `Write ${found.length} result${found.length === 1 ? "" : "s"} to the ledger`}
+                </PrimaryButton>
+              )}
+            </>
+          )}
+
+          {/* The registrar's own words, for when a number looks wrong. */}
+          {(data || state.raw) && (
+            <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px solid ${COLORS.border}` }}>
+              <button onClick={() => setShowRaw((v) => !v)} aria-expanded={showRaw} style={{
+                width: "100%", minHeight: 40, borderRadius: 8, border: `1px solid ${COLORS.border}`,
+                background: COLORS.surface, color: COLORS.inkSoft, fontSize: 12.5, fontWeight: 600,
+                cursor: "pointer", fontFamily: "Inter, sans-serif", display: "flex",
+                alignItems: "center", justifyContent: "space-between", padding: "0 12px", gap: 8,
+              }}>
+                <span>Exactly what came back</span>
+                <ChevronRight size={14} color={COLORS.inkSoft} style={{
+                  flexShrink: 0, transform: showRaw ? "rotate(90deg)" : "none",
+                  transition: "transform 150ms ease-out",
+                }} />
+              </button>
+              {showRaw && (
+                <pre style={{
+                  margin: "8px 0 0", padding: "10px 12px", background: COLORS.field,
+                  border: `1px solid ${COLORS.border}`, borderRadius: 8,
+                  fontFamily: "'JetBrains Mono', monospace", fontSize: 10.5, lineHeight: 1.5,
+                  color: COLORS.ink, overflowX: "auto", maxHeight: 340, overflowY: "auto",
+                  whiteSpace: "pre", WebkitOverflowScrolling: "touch",
+                }}>{JSON.stringify(data || state.raw, null, 2)}</pre>
+              )}
+            </div>
+          )}
+        </>
+      )}
+    </Sheet>
+  );
+}
+
 function LiveIposSheet({ existing, onClose, onImport }) {
   const thisYear = new Date().getFullYear();
   const [mode, setMode] = useState("current");           // "current" · "year"
