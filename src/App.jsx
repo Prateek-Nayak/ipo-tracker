@@ -306,6 +306,9 @@ const hasListed = (ipo) => !!ipo?.listingDate && ipo.listingDate <= todayISO();
    "undefinedholidays". */
 const STORAGE_PREFIX = "ipo_ledger_";
 
+// Stamped in at build time by vite.config.js; MMDD.HHMM, IST.
+const BUILD_ID = typeof __BUILD_ID__ === "string" ? __BUILD_ID__ : "dev";
+
 // The four screens, in nav order. Named here so a remembered tab can be checked
 // against them before it is trusted.
 const TABS = ["dashboard", "ipos", "transfers", "accounts"];
@@ -1023,6 +1026,16 @@ function ConfirmProvider({ children }) {
   }, []);
   const onResolve = useCallback((result) => {
     setState(null);
+    /* Announced here rather than left to the effect below. When back dismisses
+       this, the app has to see it gone in the same batch of work: a render that
+       still counts the modal is a render one layer deeper than the truth, and
+       the history is made to match by pushing an entry - from inside the
+       popstate handler, which is the one place a push must never happen.
+       Chrome marks the entry such a push came from as one to skip, so the next
+       back steps over it and leaves the app. Sheets never had the problem;
+       their state is the app's own and falls in the same batch already. */
+    confirmDismissRef.current = null;
+    confirmListeners.forEach((fn) => fn());
     if (resolveRef.current) { resolveRef.current(result); resolveRef.current = null; }
   }, []);
   // Expose dismiss for back button handling
@@ -1538,6 +1551,8 @@ function AppInner() {
       const top = [...transientLayers].pop();
       transientLayers.delete(top);
       top();
+      // At once, for the reason the confirm modal does it: see onResolve.
+      announceTransient();
       backRef.current = { ...backRef.current, transient: transientLayers.size };
       return true;
     }
@@ -1571,6 +1586,8 @@ function AppInner() {
   const depth = layerDepth(backLayers);
   const histDepth = useRef(0);
   const histMoving = useRef(false);
+  const popTurn = useRef(false);
+  const popTurnTimer = useRef(null);
   const [histPops, setHistPops] = useState(0);
 
   /* The same rule applies at startup: the tab you were last on is restored
@@ -1591,6 +1608,11 @@ function AppInner() {
     if (typeof window === "undefined" || !window.history) return;
     if (!histArmed || histMoving.current) return;
     if (depth > histDepth.current) {
+      /* Never while a back press is still being answered, whatever the layers
+         say. A push from there is the one Chrome punishes, and a layer that is
+         slow to report itself closed would otherwise ask for exactly that.
+         It is only ever deferred - the tick below asks again. */
+      if (popTurn.current) return;
       for (let n = histDepth.current + 1; n <= depth; n++) window.history.pushState({ ledger: n }, "");
       histDepth.current = depth;
     } else if (depth < histDepth.current) {
@@ -1608,13 +1630,24 @@ function AppInner() {
       histMoving.current = false;
       const landed = e.state && typeof e.state.ledger === "number" ? e.state.ledger : 0;
       histDepth.current = landed;
+      popTurn.current = true;
       for (let guard = BACK_LAYERS.length + 2; layerDepth(backRef.current) > landed && guard > 0; guard--) {
         if (!closeTopLayer()) break;
       }
       setHistPops((n) => n + 1);
+      /* Once everything React does in answer to this press has landed, which is
+         inside this task, the stack is looked at again with a free hand. */
+      clearTimeout(popTurnTimer.current);
+      popTurnTimer.current = setTimeout(() => {
+        popTurn.current = false;
+        setHistPops((n) => n + 1);
+      }, 0);
     };
     window.addEventListener("popstate", onPop);
-    return () => window.removeEventListener("popstate", onPop);
+    return () => {
+      window.removeEventListener("popstate", onPop);
+      clearTimeout(popTurnTimer.current);
+    };
   }, [closeTopLayer]);
 
   /* ---------- writes ---------- */
@@ -4890,6 +4923,13 @@ function DataSheet({ state, session, cloudOn, syncing, syncError, lastSync, onCl
           </>
         )}
         <div style={{ fontSize: 11.5, color: COLORS.inkSoft, marginTop: 6, fontFamily: "'JetBrains Mono', monospace" }}>{counts}</div>
+        {/* Which build this actually is. An installed app keeps running the
+            bundle it started with however often the site is redeployed, so
+            without this there is no way to tell a fixed bug from a stale one
+            except by guessing at deployment times. */}
+        <div style={{ fontSize: 11.5, color: COLORS.inkSoft, marginTop: 4, fontFamily: "'JetBrains Mono', monospace" }}>
+          build {BUILD_ID}
+        </div>
       </div>
 
       {cloudOn && (
