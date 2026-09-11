@@ -978,8 +978,8 @@ function pillStyle(tone, compact) {
     color: p.c, background: p.bg, border: `1px solid ${p.b}`, borderRadius: 6,
     fontFamily: "'JetBrains Mono', monospace", fontWeight: 500, letterSpacing: 0.2,
     ...(compact
-      ? { fontSize: 9, padding: "0 5px", lineHeight: 1.55 }
-      : { fontSize: 9.5, padding: "1px 7px", lineHeight: 1.4 }),
+      ? { fontSize: 8.5, padding: "0 5px", lineHeight: 1.5 }
+      : { fontSize: 9, padding: "1px 6px", lineHeight: 1.4 }),
   };
 }
 /* truncate makes the pill a flexible cell that ellipsizes its own text, so a
@@ -1581,11 +1581,11 @@ function AppInner() {
   /* A sheet covers the screen but the page behind it still scrolls, so dragging
      anywhere outside the panel moved the list underneath and you came back to
      somewhere else entirely. Held still while a sheet is open. */
-  /* A popover is not one of these: it covers a corner, not the screen, and it
-     should not stop the page being swiped or pulled. Swiping away simply takes
-     it with the screen it belongs to. */
+  /* Transient layers count too: the filter panel is now a full bottom sheet, so
+     while it is up the page behind it must not swipe or pull-to-refresh - the
+     same as any other sheet. (It is the only transient layer in the app.) */
   const sheetIsOpen = Object.entries(backLayers)
-    .some(([k, v]) => k !== "tab" && k !== "transient" && !!v);
+    .some(([k, v]) => k !== "tab" && !!v);
   useEffect(() => {
     if (typeof document === "undefined" || !document.body) return;
     if (!sheetIsOpen) return;
@@ -3821,20 +3821,22 @@ function IpoCard({ ipo, accounts, onClick }) {
         <div style={{ marginTop: 8 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
             <AllotmentCounts tally={tally} />
-            <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-              {apps.some((a) => a.sold) && <Badge color={COLORS.navy} bg={COLORS.chip}>SOLD {apps.filter((a) => a.sold).length}/{tally.allotted}</Badge>}
-              {gainPct !== null && (
-                <span style={{
-                  fontFamily: "'JetBrains Mono', monospace", fontSize: 12, fontWeight: 700,
-                  color: gainPct >= 0 ? COLORS.green : COLORS.red,
-                  display: "flex", alignItems: "center", gap: 3, whiteSpace: "nowrap",
-                }}>
-                  {gainPct >= 0 ? <TrendingUp size={13} color={COLORS.green} /> : <TrendingDown size={13} color={COLORS.red} />}
-                  {gainPct.toFixed(1)}% {isMarkedToMarket(ipo) ? "now" : "listing"}
-                  {priceStale && <span title="Price is over a day old" style={{ opacity: 0.6 }}> !</span>}
-                </span>
-              )}
-            </div>
+            {(apps.some((a) => a.sold) || gainPct !== null) && (
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                {apps.some((a) => a.sold) && <Badge color={COLORS.navy} bg={COLORS.chip}>SOLD {apps.filter((a) => a.sold).length}/{tally.allotted}</Badge>}
+                {gainPct !== null && (
+                  <span style={{
+                    fontFamily: "'JetBrains Mono', monospace", fontSize: 12, fontWeight: 700,
+                    color: gainPct >= 0 ? COLORS.green : COLORS.red,
+                    display: "flex", alignItems: "center", gap: 3, whiteSpace: "nowrap",
+                  }}>
+                    {gainPct >= 0 ? <TrendingUp size={13} color={COLORS.green} /> : <TrendingDown size={13} color={COLORS.red} />}
+                    {gainPct.toFixed(1)}% {isMarkedToMarket(ipo) ? "now" : "listing"}
+                    {priceStale && <span title="Price is over a day old" style={{ opacity: 0.6 }}> !</span>}
+                  </span>
+                )}
+              </div>
+            )}
           </div>
           <AllotmentBar tally={tally} tone={spine} />
         </div>
