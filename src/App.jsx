@@ -3253,24 +3253,14 @@ function ListControls({ search, setSearch, placeholder, filters, filter, setFilt
   // Back closes this before it closes anything underneath it.
   useBackLayer(open, () => setOpen(false));
 
-  // A tap or click anywhere outside the panel (or its trigger) closes it, the
-  // way any panel should. touchstart is listened for too so a tap on a phone
-  // dismisses it without waiting on the emulated mouse event.
+  // Escape closes it on a keyboard; outside taps are handled by the scrim below
+  // (a document listener would fire on touchstart and let the same tap fall
+  // through to whatever was under it - e.g. open an IPO the moment it closed).
   useEffect(() => {
     if (!open) return;
-    const away = (e) => {
-      if (panelRef.current?.contains(e.target) || buttonRef.current?.contains(e.target)) return;
-      setOpen(false);
-    };
     const esc = (e) => { if (e.key === "Escape") setOpen(false); };
-    document.addEventListener("mousedown", away);
-    document.addEventListener("touchstart", away, { passive: true });
     document.addEventListener("keydown", esc);
-    return () => {
-      document.removeEventListener("mousedown", away);
-      document.removeEventListener("touchstart", away);
-      document.removeEventListener("keydown", esc);
-    };
+    return () => document.removeEventListener("keydown", esc);
   }, [open]);
 
   const chosen = Array.isArray(filter) ? filter : [];
@@ -3347,9 +3337,8 @@ function ListControls({ search, setSearch, placeholder, filters, filter, setFilt
           the panel reads as the layer in front. Back closes it too (useBackLayer). */}
       {open && (
         <div
-          onClick={() => setOpen(false)}
-          onTouchStart={() => setOpen(false)}
-          style={{ position: "fixed", inset: 0, zIndex: 29, background: "rgba(0,0,0,0.35)" }}
+          onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); setOpen(false); }}
+          style={{ position: "fixed", inset: 0, zIndex: 29, background: "rgba(0,0,0,0.35)", touchAction: "none" }}
         />
       )}
 
