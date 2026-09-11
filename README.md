@@ -96,7 +96,7 @@ UPSTOX_ANALYTICS_TOKEN=your_upstox_analytics_token
 
 ### Deployment
 
-Deployed on Vercel. Push to `feat/upstox-migration` branch triggers automatic deployment.
+Deployed on Vercel. The Vercel project's **Production** environment tracks the `main` branch (Project → Settings → Environments), so pushing to `main` triggers the production deployment to [ipo-tracker.prateeknayak.in](https://ipo-tracker.prateeknayak.in/). Every other branch gets a Preview deployment automatically.
 
 ## License
 
