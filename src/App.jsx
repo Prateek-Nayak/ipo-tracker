@@ -962,6 +962,31 @@ function Badge({ children, color, bg, strong }) {
   );
 }
 
+/* A uniform pill: a soft tint, a hairline in a related hue and coloured text,
+   one size for the lot. Toned by category rather than by state, so a row of
+   them reads as one set. Light and dark values kept side by side. */
+const PILL_TONES = {
+  neutral: { d: { c: "#9AA0B6", bg: "#222736", b: "#2C3242" }, l: { c: "#646A80", bg: "#EDF0F8", b: "#DEE2EE" } },
+  accent:  { d: { c: "#98A0F6", bg: "#242A46", b: "#3B4270" }, l: { c: "#565FD4", bg: "#E7E9FB", b: "#B9BEF3" } },
+  env:     { d: { c: "#E7B75A", bg: "#342811", b: "#5E4A1E" }, l: { c: "#8F6200", bg: "#FBEFD3", b: "#E7C877" } },
+  ext:     { d: { c: "#5FCDB8", bg: "#12302A", b: "#265046" }, l: { c: "#1B7A69", bg: "#D9F0EA", b: "#8FCDBF" } },
+};
+function pillStyle(tone, compact) {
+  const t = PILL_TONES[tone] || PILL_TONES.neutral;
+  const p = isDark() ? t.d : t.l;
+  return {
+    display: "inline-flex", alignItems: "center", whiteSpace: "nowrap",
+    color: p.c, background: p.bg, border: `1px solid ${p.b}`, borderRadius: 6,
+    fontFamily: "'JetBrains Mono', monospace", fontWeight: 500, letterSpacing: 0.2,
+    ...(compact
+      ? { fontSize: 10, padding: "0 6px", lineHeight: 1.6 }
+      : { fontSize: 10.5, padding: "2px 8px", lineHeight: 1.45 }),
+  };
+}
+function Pill({ tone, compact, children, style }) {
+  return <span style={{ ...pillStyle(tone, compact), ...style }}>{children}</span>;
+}
+
 function Field({ label, children, error }) {
   return (
     <div style={{ display: "block", marginBottom: 14 }}>
@@ -4168,13 +4193,7 @@ function AccountList({ accounts, ipos, transfers = [], onOpen }) {
                     {pan
                       ? <span style={{ color: isDup ? COLORS.red : COLORS.inkSoft }}>{pan}{isDup ? " · duplicate" : ""}</span>
                       : <span style={{ color: COLORS.gold }}>no PAN</span>}
-                    {acc.excludeFromApply && (
-                      <span style={{
-                        display: "inline-flex", alignItems: "center", background: COLORS.chip,
-                        border: `1px solid ${COLORS.border}`, color: COLORS.inkSoft, borderRadius: 4,
-                        padding: "0 6px", fontFamily: "'JetBrains Mono', monospace", fontSize: 10, lineHeight: 1.5,
-                      }}>apply off</span>
-                    )}
+                    {acc.excludeFromApply && <Pill tone="env" compact>apply off</Pill>}
                   </div>
                   {acc.notes && <div title={acc.notes} style={{ fontSize: 11.5, color: COLORS.inkSoft, marginTop: 4, fontStyle: "italic", ...ellipsisText }}>{acc.notes}</div>}
                 </div>
@@ -4311,24 +4330,17 @@ function AccountDetailSheet({ account, ipos, transfers, accounts, onClose, onEdi
   return (
     <Sheet title={account.name} onClose={onClose}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <Badge color={COLORS.navy} bg={COLORS.chip}>{account.relation || "Self"}</Badge>
-          {account.bank && <Badge color={COLORS.inkSoft} bg="#EFEDE7">{account.bank}</Badge>}
-          {pan ? <Badge color={COLORS.inkSoft} bg="#EFEDE7">{pan}</Badge> : <Badge color={COLORS.gold} bg={COLORS.goldSoft}>No PAN</Badge>}
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          <Pill tone="accent">{account.relation || "Self"}</Pill>
+          {account.bank && <Pill tone="neutral">{account.bank}</Pill>}
+          {pan ? <Pill tone="neutral">{pan}</Pill> : <Pill tone="env">No PAN</Pill>}
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
           <button
             onClick={() => onToggleApply && onToggleApply(!account.excludeFromApply)}
             aria-pressed={!account.excludeFromApply}
             title="Show this account in the Apply IPO list"
-            style={{
-              display: "inline-flex", alignItems: "center", cursor: "pointer",
-              background: account.excludeFromApply ? COLORS.chip : COLORS.goldSoft,
-              border: `1px solid ${account.excludeFromApply ? COLORS.border : COLORS.gold}`,
-              color: account.excludeFromApply ? COLORS.inkSoft : COLORS.gold,
-              borderRadius: 5, padding: "3px 8px", fontFamily: "'JetBrains Mono', monospace",
-              fontSize: 10, fontWeight: 650, letterSpacing: 0.3, whiteSpace: "nowrap",
-            }}
+            style={{ ...pillStyle(account.excludeFromApply ? "env" : "ext"), cursor: "pointer" }}
           >
             {account.excludeFromApply ? "apply off" : "in apply list"}
           </button>
