@@ -3342,6 +3342,17 @@ function ListControls({ search, setSearch, placeholder, filters, filter, setFilt
         <BoardToggles options={boards} selected={board} onToggle={toggleBoard} />
       )}
 
+      {/* A full-screen scrim behind the panel, like the app's sheets: a tap or
+          drag anywhere off the panel closes it, and it dims what is behind so
+          the panel reads as the layer in front. Back closes it too (useBackLayer). */}
+      {open && (
+        <div
+          onClick={() => setOpen(false)}
+          onTouchStart={() => setOpen(false)}
+          style={{ position: "fixed", inset: 0, zIndex: 29, background: "rgba(0,0,0,0.35)" }}
+        />
+      )}
+
       {open && (
         <div
           ref={panelRef}
@@ -4171,8 +4182,8 @@ function AccountList({ accounts, ipos, transfers = [], onOpen }) {
                     {acc.excludeFromApply && (
                       <span style={{
                         display: "inline-flex", alignItems: "center", background: COLORS.chip,
-                        border: `1px solid ${COLORS.border}`, color: COLORS.inkSoft, borderRadius: 999,
-                        padding: "1px 7px", fontFamily: "'JetBrains Mono', monospace", fontSize: 11,
+                        border: `1px solid ${COLORS.border}`, color: COLORS.inkSoft, borderRadius: 4,
+                        padding: "0 6px", fontFamily: "'JetBrains Mono', monospace", fontSize: 10, lineHeight: 1.5,
                       }}>apply off</span>
                     )}
                   </div>
@@ -4324,13 +4335,13 @@ function AccountDetailSheet({ account, ipos, transfers, accounts, onClose, onEdi
             style={{
               display: "inline-flex", alignItems: "center", cursor: "pointer",
               background: account.excludeFromApply ? COLORS.chip : COLORS.goldSoft,
-              border: `1px solid ${COLORS.border}`,
+              border: `1px solid ${account.excludeFromApply ? COLORS.border : COLORS.gold}`,
               color: account.excludeFromApply ? COLORS.inkSoft : COLORS.gold,
-              borderRadius: 999, padding: "5px 10px", fontFamily: "Inter, sans-serif",
-              fontSize: 11, fontWeight: 700, letterSpacing: "0.04em", whiteSpace: "nowrap",
+              borderRadius: 5, padding: "3px 8px", fontFamily: "'JetBrains Mono', monospace",
+              fontSize: 10, fontWeight: 650, letterSpacing: 0.3, whiteSpace: "nowrap",
             }}
           >
-            {account.excludeFromApply ? "Apply off" : "In apply list"}
+            {account.excludeFromApply ? "apply off" : "in apply list"}
           </button>
           <button onClick={onEdit} aria-label="Edit account" style={roundIconBtn}>
             <Pencil size={14} color={COLORS.inkSoft} />
