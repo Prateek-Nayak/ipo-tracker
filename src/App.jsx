@@ -512,6 +512,24 @@ function saveTable(key, data) {
     console.error("storage save failed", key, e);
   }
 }
+/* A small piece of UI state (a chosen filter, sort or board) that should
+   outlive a reload. Kept under the same STORAGE_PREFIX as everything else, and
+   read back defensively so a stale or corrupt value never breaks the screen. */
+function usePersistedState(key, initial) {
+  const [value, setValue] = useState(() => {
+    try {
+      const raw = localStorage.getItem(STORAGE_PREFIX + key);
+      return raw != null ? JSON.parse(raw) : initial;
+    } catch {
+      return initial;
+    }
+  });
+  useEffect(() => {
+    try { localStorage.setItem(STORAGE_PREFIX + key, JSON.stringify(value)); } catch { /* not worth failing over */ }
+  }, [key, value]);
+  return [value, setValue];
+}
+
 function loadLocalState() {
   return {
     accounts: loadTable("accounts"),
@@ -2629,8 +2647,10 @@ function boardIsWorthAsking(boards) {
    two selects taking a row of their own. A list is mostly read, not filtered,
    so the row that is always there is the one you always use - and the panel
    has room to let you pick several filters at once, which a select never did. */
-function ListControls({ search, setSearch, placeholder, filters, filter, setFilter, sorts, sort, setSort, boards, board, toggleBoard }) {
+function ListControls({ search, setSearch, placeholder, filters, filter, setFilter, sorts, sort, setSort, boards, board, toggleBoard,
+  accountOptions, accountFilter, setAccountFilter, accountFilterLabel }) {
   const [open, setOpen] = useState(false);
+  const [acctQuery, setAcctQuery] = useState("");
   const panelRef = useRef(null);
   const buttonRef = useRef(null);
 
@@ -2652,14 +2672,25 @@ function ListControls({ search, setSearch, placeholder, filters, filter, setFilt
 
   const chosen = Array.isArray(filter) ? filter : [];
   const sortLabel = (sorts.find((x) => x.id === sort) || {}).label || "";
+  const acctChosen = Array.isArray(accountFilter) ? accountFilter : [];
+  const hasAccounts = Array.isArray(accountOptions) && accountOptions.length > 0 && !!setAccountFilter;
   // "All" is the absence of a filter, so it is not something narrowing you to.
-  const narrowed = chosen.length;
+  const narrowed = chosen.length + acctChosen.length;
   const hasFilters = Array.isArray(filters) && filters.length > 0;
 
   const toggleFilter = (id) => {
     if (!setFilter) return;
     setFilter(chosen.includes(id) ? chosen.filter((f) => f !== id) : [...chosen, id]);
   };
+
+  const toggleAccount = (id) => {
+    if (!setAccountFilter) return;
+    setAccountFilter(acctChosen.includes(id) ? acctChosen.filter((a) => a !== id) : [...acctChosen, id]);
+  };
+
+  const acctShown = hasAccounts
+    ? accountOptions.filter((o) => o.label.toLowerCase().includes(acctQuery.trim().toLowerCase()))
+    : [];
 
   return (
     <div style={{ marginBottom: 12, position: "relative" }}>
@@ -2748,6 +2779,51 @@ function ListControls({ search, setSearch, placeholder, filters, filter, setFilt
           </div>
           </>)}
 
+          {hasAccounts && (<>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+              <SectionLabel>{accountFilterLabel || "Account"}</SectionLabel>
+              {acctChosen.length > 0 && (
+                <button
+                  onClick={() => setAccountFilter([])}
+                  style={{ ...chipBase, padding: "4px 9px", fontSize: 11 }}
+                >Clear</button>
+              )}
+            </div>
+            {accountOptions.length > 6 && (
+              <div style={{ position: "relative", marginBottom: 8 }}>
+                <Input
+                  value={acctQuery}
+                  onChange={(e) => setAcctQuery(e.target.value)}
+                  placeholder="Search account name"
+                  style={{ paddingRight: acctQuery ? 30 : 10, minHeight: 38, fontSize: 13 }}
+                />
+                {acctQuery && (
+                  <button onClick={() => setAcctQuery("")} aria-label="Clear account search" style={{
+                    position: "absolute", right: 6, top: "50%", transform: "translateY(-50%)",
+                    background: "none", border: "none", padding: 4, cursor: "pointer", display: "flex",
+                  }}><X size={13} color={COLORS.inkSoft} /></button>
+                )}
+              </div>
+            )}
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 14, maxHeight: 148, overflowY: "auto" }}>
+              {acctShown.length === 0 ? (
+                <span style={{ fontSize: 12, color: COLORS.inkSoft }}>No matching accounts.</span>
+              ) : acctShown.map((o) => {
+                const on = acctChosen.includes(o.id);
+                return (
+                  <button
+                    key={o.id}
+                    onClick={() => toggleAccount(o.id)}
+                    aria-pressed={on}
+                    style={{ ...chipBase, padding: "6px 10px", ...(on ? chipOn : null) }}
+                  >
+                    {o.label}{o.count != null ? ` ${o.count}` : ""}
+                  </button>
+                );
+              })}
+            </div>
+          </>)}
+
           <SectionLabel>Order</SectionLabel>
           <div style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: 6 }}>
             {sorts.map((o) => {
@@ -2779,18 +2855,23 @@ function ListControls({ search, setSearch, placeholder, filters, filter, setFilt
 function IpoList({ ipos, accounts, onOpen }) {
   const [search, setSearch] = useState("");
   /* No filters chosen means everything, so there is no "All" to select - an
-     empty selection is what All meant. Several may be on at once. */
-  const [filter, setFilter] = useState([]);
+     empty selection is what All meant. Several may be on at once. These choices
+     persist across reloads, so the list you set up is the list you come back to
+     until you change or clear it. */
+  const [filter, setFilter] = usePersistedState("ipoFilter", []);
+  /* Which accounts to narrow to: an IPO shows only if it has an application from
+     one of the chosen accounts. Empty means every account. Persisted too. */
+  const [acctFilter, setAcctFilter] = usePersistedState("ipoAcctFilter", []);
   /* Which boards are showing. Mainboard is what this ledger is mostly made of,
      so that is where it opens; both can be on at once, and never neither. */
-  const [board, setBoard] = useState(["Mainboard"]);
+  const [board, setBoard] = usePersistedState("ipoBoard", ["Mainboard"]);
   const toggleBoard = (id) =>
     setBoard((cur) =>
       cur.includes(id)
         ? (cur.length === 1 ? cur : cur.filter((b) => b !== id))   // never nothing
         : [...cur, id]
     );
-  const [sort, setSort] = useState("recent");
+  const [sort, setSort] = usePersistedState("ipoSort", "recent");
 
   /* Status counts follow the board in view, so a chip never promises rows the
      board filter is about to hide. The board counts stay whole. */
@@ -2820,6 +2901,24 @@ function IpoList({ ipos, accounts, onOpen }) {
     return c;
   }, [ipos]);
 
+  /* Accounts you can narrow the list to, each with how many IPOs on the current
+     board carry an application from it. Only accounts that have actually applied
+     are offered (plus any already chosen, so a board switch never drops your
+     selection off the list). Most-active first. */
+  const acctOptions = useMemo(() => {
+    const c = {};
+    onBoard.forEach((i) => {
+      const seen = new Set();
+      (i.applications || []).forEach((a) => {
+        if (a.accountId && !seen.has(a.accountId)) { seen.add(a.accountId); c[a.accountId] = (c[a.accountId] || 0) + 1; }
+      });
+    });
+    return accounts
+      .map((a) => ({ id: a.id, label: a.name || "Unnamed", count: c[a.id] || 0 }))
+      .filter((o) => o.count > 0 || acctFilter.includes(o.id))
+      .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+  }, [onBoard, accounts, acctFilter]);
+
   /* An SME-only ledger would open on an empty screen, so the default gives way
      to whatever is actually there. */
   useEffect(() => {
@@ -2843,6 +2942,8 @@ function IpoList({ ipos, accounts, onOpen }) {
     return onBoard
       .filter((i) => {
         if (q && !`${i.company || ""} ${i.symbol || ""}`.toLowerCase().includes(q)) return false;
+        // Narrow to IPOs applied from one of the chosen accounts, if any are set.
+        if (acctFilter.length && !(i.applications || []).some((a) => acctFilter.includes(a.accountId))) return false;
         if (!filter.length) return true;
         // Any of the chosen filters, not all of them: they name kinds, not tests.
         return filter.some((f) => {
@@ -2858,7 +2959,7 @@ function IpoList({ ipos, accounts, onOpen }) {
         });
       })
       .sort(cmp);
-  }, [onBoard, search, filter, sort]);
+  }, [onBoard, search, filter, acctFilter, sort]);
 
   if (ipos.length === 0) return <EmptyState text="No IPOs yet. Use 'Add from exchange' above to sync IPOs." icon={Receipt} subtitle="Track applications, allotments and returns across your family." />;
 
@@ -2875,6 +2976,8 @@ function IpoList({ ipos, accounts, onOpen }) {
           { id: "listed", label: "Listed", count: counts.listed },
           { id: "incomplete", label: "Needs details", count: counts.incomplete },
         ]}
+        accountFilter={acctFilter} setAccountFilter={setAcctFilter}
+        accountOptions={acctOptions} accountFilterLabel="Applied from account"
         boards={[
           { id: "Mainboard", label: "Mainboard", count: boardCounts.Mainboard },
           { id: "SME", label: "SME", count: boardCounts.SME },
@@ -3412,6 +3515,7 @@ function AccountList({ accounts, ipos, transfers = [], onOpen }) {
                     {pan
                       ? <span style={{ color: isDup ? COLORS.red : COLORS.inkSoft }}>{pan}{isDup ? " · duplicate" : ""}</span>
                       : <span style={{ color: COLORS.gold }}>no PAN</span>}
+                    {acc.excludeFromApply && <span style={{ color: COLORS.inkSoft }}>· not in apply</span>}
                   </div>
                   {acc.notes && <div style={{ fontSize: 11.5, color: COLORS.inkSoft, marginTop: 4, fontStyle: "italic" }}>{acc.notes}</div>}
                 </div>
@@ -3989,10 +4093,15 @@ function IpoFormSheet({ initial, onClose, onSave }) {
 }
 
 function ApplicationFormSheet({ initial, ipo, accounts, onClose, onSave }) {
+  /* Accounts flagged out of the Apply IPO list are not offered when starting a
+     new application. An account already recorded on an application being edited
+     stays selectable, so an old record never silently loses its holder. */
+  const applyable = accounts.filter((a) => !a.excludeFromApply);
   const [f, setF] = useState(initial || {
-    id: undefined, accountId: accounts[0]?.id || "", appliedFor: "", lots: "1", amountBlocked: "",
+    id: undefined, accountId: applyable[0]?.id || "", appliedFor: "", lots: "1", amountBlocked: "",
     allotmentStatus: "Pending", sharesAllotted: "", sold: false, sellPrice: "", sellDate: "", remarks: "",
   });
+  const accountOptions = accounts.filter((a) => !a.excludeFromApply || a.id === f.accountId);
   const [errors, setErrors] = useState({});
   const set = (k) => (e) => { setF({ ...f, [k]: e.target.value }); if (errors[k]) setErrors((prev) => ({ ...prev, [k]: "" })); };
   const setBool = (k) => (e) => setF({ ...f, [k]: e.target.checked });
@@ -4030,8 +4139,8 @@ function ApplicationFormSheet({ initial, ipo, accounts, onClose, onSave }) {
     <Sheet title={initial ? "Edit Application" : "New Application"} onClose={onClose}>
       <Field label="Applied From Account" error={errors.accountId}>
         <Select value={f.accountId} onChange={set("accountId")}>
-          {accounts.length === 0 && <option value="">Add an account first</option>}
-          {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+          {accountOptions.length === 0 && <option value="">Add an account first</option>}
+          {accountOptions.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
         </Select>
       </Field>
       <Field label="Applied For (beneficiary name)">
@@ -4099,7 +4208,7 @@ function ApplicationFormSheet({ initial, ipo, accounts, onClose, onSave }) {
 const PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 
 function AccountFormSheet({ initial, accounts = [], onClose, onSave }) {
-  const [f, setF] = useState(initial || { id: undefined, name: "", relation: "", bank: "", pan: "", notes: "" });
+  const [f, setF] = useState(initial || { id: undefined, name: "", relation: "", bank: "", pan: "", notes: "", excludeFromApply: false });
   const [errors, setErrors] = useState({});
   const set = (k) => (e) => { setF({ ...f, [k]: e.target.value }); if (errors[k]) setErrors((prev) => ({ ...prev, [k]: "" })); };
 
@@ -4137,9 +4246,25 @@ function AccountFormSheet({ initial, accounts = [], onClose, onSave }) {
         </div>
       )}
       <Field label="Notes"><textarea value={f.notes} onChange={set("notes")} rows={2} style={{ ...inputStyle, resize: "vertical" }} /></Field>
+      <Field label="Apply IPOs from this account?">
+        <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 14, minHeight: 44, cursor: "pointer" }}>
+          <input
+            type="checkbox"
+            checked={!f.excludeFromApply}
+            onChange={(e) => setF({ ...f, excludeFromApply: !e.target.checked })}
+            style={{ width: 18, height: 18, flexShrink: 0, marginTop: 2 }}
+          />
+          <span style={{ color: COLORS.ink }}>
+            Show this account in the Apply IPO list
+            <span style={{ display: "block", fontSize: 11.5, color: COLORS.inkSoft, marginTop: 2 }}>
+              Turn this off to keep the account out of the Apply IPO list. It still appears everywhere else - holdings, transfers, allotment results and its own history.
+            </span>
+          </span>
+        </label>
+      </Field>
       <PrimaryButton onClick={() => {
         if (!f.name) return setErrors({ name: "Name is required" });
-        onSave(trimFields({ ...f, pan, id: f.id || uid() }));
+        onSave(trimFields({ ...f, pan, excludeFromApply: !!f.excludeFromApply, id: f.id || uid() }));
       }}>
         {initial ? "Save Changes" : "Add Account"}
       </PrimaryButton>
@@ -4632,7 +4757,10 @@ function BulkApplySheet({ ipo, accounts, onClose, onSave }) {
   );
   const usedPans = useMemo(() => pansUsedIn(ipo, accounts), [ipo, accounts]);
 
-  const available = accounts.filter((a) => !alreadyApplied.has(a.id));
+  // Accounts flagged "don't apply from here" are kept out of the apply list;
+  // they still show everywhere else in the ledger.
+  const available = accounts.filter((a) => !alreadyApplied.has(a.id) && !a.excludeFromApply);
+  const hiddenByFlag = accounts.filter((a) => !alreadyApplied.has(a.id) && a.excludeFromApply).length;
   const [picked, setPicked] = useState({});
   const [lots, setLots] = useState({});
 
@@ -4701,9 +4829,16 @@ function BulkApplySheet({ ipo, accounts, onClose, onSave }) {
       )}
 
       {available.length === 0 ? (
-        <EmptyState text="Every account already has an application on this IPO." />
+        <EmptyState text={hiddenByFlag > 0
+          ? "No accounts to apply from. Every remaining account is already on this IPO or has been hidden from the Apply IPO list."
+          : "Every account already has an application on this IPO."} />
       ) : (
         <>
+          {hiddenByFlag > 0 && (
+            <div style={{ fontSize: 11.5, color: COLORS.inkSoft, marginBottom: 8 }}>
+              {hiddenByFlag} account{hiddenByFlag === 1 ? " is" : "s are"} hidden from this list. Turn "Apply IPOs from this account?" back on in the account to include {hiddenByFlag === 1 ? "it" : "them"}.
+            </div>
+          )}
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
             <SectionLabel>Accounts ({chosen.length}/{available.length})</SectionLabel>
             <div style={{ display: "flex", gap: 6 }}>
