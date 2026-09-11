@@ -3245,17 +3245,17 @@ function boardIsWorthAsking(boards) {
    two selects taking a row of their own. A list is mostly read, not filtered,
    so the row that is always there is the one you always use - and the panel
    has room to let you pick several filters at once, which a select never did. */
-function ListControls({ search, setSearch, placeholder, filters, filter, setFilter, sorts, sort, setSort, boards, board, toggleBoard,
-  accountOptions, accountFilter, setAccountFilter, accountFilterLabel }) {
+function ListControls({ search, setSearch, placeholder, filters, filter, setFilter, sorts, sort, setSort, boards, board, toggleBoard }) {
   const [open, setOpen] = useState(false);
-  const [acctQuery, setAcctQuery] = useState("");
   const panelRef = useRef(null);
   const buttonRef = useRef(null);
 
   // Back closes this before it closes anything underneath it.
   useBackLayer(open, () => setOpen(false));
 
-  // Clicking away closes it, as a panel like this should.
+  // A tap or click anywhere outside the panel (or its trigger) closes it, the
+  // way any panel should. touchstart is listened for too so a tap on a phone
+  // dismisses it without waiting on the emulated mouse event.
   useEffect(() => {
     if (!open) return;
     const away = (e) => {
@@ -3264,38 +3264,25 @@ function ListControls({ search, setSearch, placeholder, filters, filter, setFilt
     };
     const esc = (e) => { if (e.key === "Escape") setOpen(false); };
     document.addEventListener("mousedown", away);
+    document.addEventListener("touchstart", away, { passive: true });
     document.addEventListener("keydown", esc);
     return () => {
       document.removeEventListener("mousedown", away);
+      document.removeEventListener("touchstart", away);
       document.removeEventListener("keydown", esc);
     };
   }, [open]);
 
   const chosen = Array.isArray(filter) ? filter : [];
   const sortLabel = (sorts.find((x) => x.id === sort) || {}).label || "";
-  const acctChosen = Array.isArray(accountFilter) ? accountFilter : [];
-  const hasAccounts = Array.isArray(accountOptions) && accountOptions.length > 0 && !!setAccountFilter;
   // "All" is the absence of a filter, so it is not something narrowing you to.
-  const narrowed = chosen.length + acctChosen.length;
+  const narrowed = chosen.length;
   const hasFilters = Array.isArray(filters) && filters.length > 0;
 
   const toggleFilter = (id) => {
     if (!setFilter) return;
     setFilter(chosen.includes(id) ? chosen.filter((f) => f !== id) : [...chosen, id]);
   };
-
-  const toggleAccount = (id) => {
-    if (!setAccountFilter) return;
-    setAccountFilter(acctChosen.includes(id) ? acctChosen.filter((a) => a !== id) : [...acctChosen, id]);
-  };
-
-  // Selected accounts sit above the search as removable pills; the search box
-  // offers the rest to add, the same shape as the Related IPOs field elsewhere.
-  const acctQ = acctQuery.trim().toLowerCase();
-  const acctMatches = hasAccounts
-    ? accountOptions.filter((o) => !acctChosen.includes(o.id) && (!acctQ || o.label.toLowerCase().includes(acctQ)))
-    : [];
-  const acctLabelOf = (id) => (accountOptions.find((o) => o.id === id) || {}).label || "Account";
 
   return (
     <div style={{ marginBottom: 12, position: "relative" }}>
@@ -3392,73 +3379,6 @@ function ListControls({ search, setSearch, placeholder, filters, filter, setFilt
           </div>
           </>)}
 
-          {hasAccounts && (<>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-              <SectionLabel>{accountFilterLabel || "Account"}</SectionLabel>
-              {acctChosen.length > 0 && (
-                <button
-                  onClick={() => { setAccountFilter([]); setAcctQuery(""); }}
-                  style={{ ...chipBase, padding: "4px 9px", fontSize: 11 }}
-                >Clear</button>
-              )}
-            </div>
-
-            {acctChosen.length > 0 && (
-              <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginBottom: 6 }}>
-                {acctChosen.map((id) => (
-                  <span key={id} onClick={() => toggleAccount(id)} style={{
-                    background: COLORS.chip, color: COLORS.ink, border: `1px solid ${COLORS.border}`,
-                    borderRadius: 999, padding: "3px 8px", fontSize: 11, fontWeight: 600,
-                    fontFamily: "Inter, sans-serif", cursor: "pointer", display: "inline-flex",
-                    alignItems: "center", gap: 4, whiteSpace: "nowrap",
-                  }}>{acctLabelOf(id)} <X size={10} color={COLORS.inkSoft} /></span>
-                ))}
-              </div>
-            )}
-
-            <div style={{ position: "relative" }}>
-              <Input
-                value={acctQuery}
-                onChange={(e) => setAcctQuery(e.target.value)}
-                placeholder="Search account name"
-                autoComplete="off" autoCorrect="off" autoCapitalize="none" spellCheck={false}
-                style={{ paddingRight: acctQuery ? 34 : 12, minHeight: 40, fontSize: 13 }}
-              />
-              {acctQuery && (
-                <button onClick={() => setAcctQuery("")} aria-label="Clear account search" style={{
-                  position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)",
-                  background: "none", border: "none", padding: 4, cursor: "pointer", display: "flex",
-                }}><X size={14} color={COLORS.inkSoft} /></button>
-              )}
-            </div>
-
-            {acctMatches.length > 0 && (
-              <div style={{
-                border: `1px solid ${COLORS.border}`, borderRadius: 8, marginTop: 4, marginBottom: 14,
-                background: COLORS.surface, maxHeight: 168, overflowY: "auto",
-              }}>
-                {acctMatches.map((o) => (
-                  <button key={o.id} onClick={() => { toggleAccount(o.id); setAcctQuery(""); }} style={{
-                    display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
-                    width: "100%", textAlign: "left", cursor: "pointer", background: "transparent",
-                    border: 0, borderBottom: `1px solid ${COLORS.border}`, padding: "9px 10px",
-                    fontFamily: "Inter, sans-serif", fontSize: 13, color: COLORS.ink,
-                  }}>
-                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{o.label}</span>
-                    {o.count != null && (
-                      <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: COLORS.inkSoft, flexShrink: 0 }}>{o.count}</span>
-                    )}
-                  </button>
-                ))}
-              </div>
-            )}
-            {acctMatches.length === 0 && (
-              <div style={{ fontSize: 12, color: COLORS.inkSoft, marginTop: 6, marginBottom: 14 }}>
-                {acctQuery ? "No matching accounts." : "All applying accounts selected."}
-              </div>
-            )}
-          </>)}
-
           <SectionLabel>Order</SectionLabel>
           <div style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: 6 }}>
             {sorts.map((o) => {
@@ -3494,10 +3414,6 @@ function IpoList({ ipos, accounts, onOpen }) {
      persist across reloads, so the list you set up is the list you come back to
      until you change or clear it. */
   const [filter, setFilter] = usePersistedState("ipoFilter", []);
-  /* Which accounts to narrow to. With one or more chosen, an IPO shows only if
-     it has an application from a chosen account, and the status chips below are
-     judged against that account's own applications (see appsFor). Persisted. */
-  const [acctFilter, setAcctFilter] = usePersistedState("ipoAcctFilter", []);
   /* Which boards are showing. Mainboard is what this ledger is mostly made of,
      so that is where it opens; both can be on at once, and never neither. */
   const [board, setBoard] = usePersistedState("ipoBoard", ["Mainboard"]);
@@ -3509,20 +3425,44 @@ function IpoList({ ipos, accounts, onOpen }) {
     );
   const [sort, setSort] = usePersistedState("ipoSort", "recent");
 
-  /* The applications on an IPO that the current account filter cares about:
-     when accounts are chosen, only theirs; otherwise all of them. This is what
-     makes a status chip mean "did THIS account get allotted", not "did anyone". */
-  const acctSet = useMemo(() => new Set(acctFilter), [acctFilter]);
+  const q = search.trim().toLowerCase();
+
+  /* The one search box matches a company, a symbol, or an applicant's name -
+     the same way the transfer log matches a transfer by the IPO it is tied to.
+     When the term names one or more accounts, those become the "scope": the IPO
+     list narrows to what they applied to, and the status chips are judged
+     against their own applications (so Allotted means THIS person was allotted,
+     not that anyone was). A plain company search leaves the chips whole-IPO. */
+  const nameById = useMemo(() => {
+    const m = {};
+    accounts.forEach((a) => { m[a.id] = a.name || ""; });
+    return m;
+  }, [accounts]);
+  const acctNameOf = useCallback((app) => nameById[app.accountId] || app.accountName || "", [nameById]);
+
+  const scopedIds = useMemo(() => {
+    if (!q) return new Set();
+    return new Set(accounts.filter((a) => (a.name || "").toLowerCase().includes(q)).map((a) => a.id));
+  }, [q, accounts]);
+
   const appsFor = useCallback(
-    (i) => (acctFilter.length
-      ? (i.applications || []).filter((a) => acctSet.has(a.accountId))
+    (i) => (scopedIds.size
+      ? (i.applications || []).filter((a) => scopedIds.has(a.accountId))
       : (i.applications || [])),
-    [acctFilter, acctSet]
+    [scopedIds]
   );
+
+  // Does an IPO match the search term at all (company, symbol, or an applicant).
+  const searchMatch = useCallback((i) => {
+    if (!q) return true;
+    if (`${i.company || ""} ${i.symbol || ""}`.toLowerCase().includes(q)) return true;
+    return (i.applications || []).some((a) => acctNameOf(a).toLowerCase().includes(q));
+  }, [q, acctNameOf]);
+
   /* An IPO passes a status chip. Board-, date- and completeness-based chips are
-     always IPO-level. Pending/Allotted/Not-allotted are application-level when an
-     account is chosen (any matching application of that account counts), and fall
-     back to the whole-IPO bucket when no account is chosen. */
+     always IPO-level. Pending/Allotted/Not-allotted are application-level when
+     the search names an account (any matching application of that account
+     counts), and fall back to the whole-IPO bucket otherwise. */
   const statusMatch = useCallback((f, i, apps) => {
     if (f === "incomplete") return missingIpoFields(i).length > 0;
     if (f === "listed") return hasListed(i);
@@ -3532,14 +3472,14 @@ function IpoList({ ipos, accounts, onOpen }) {
       const closeD = i.closeDate || "";
       return openD && openD <= today && (!closeD || closeD >= today);
     }
-    if (acctFilter.length) {
+    if (scopedIds.size) {
       if (f === "pending") return apps.some((a) => !a.allotmentStatus || a.allotmentStatus === "Pending");
       if (f === "allotted") return apps.some((a) => a.allotmentStatus === "Allotted" || a.allotmentStatus === "Partial");
       if (f === "rejected") return apps.some((a) => a.allotmentStatus === "Not Allotted");
       return false;
     }
     return ipoBucket(i) === f;
-  }, [acctFilter]);
+  }, [scopedIds]);
 
   /* Status counts follow the board in view, so a chip never promises rows the
      board filter is about to hide. The board counts stay whole. */
@@ -3548,18 +3488,18 @@ function IpoList({ ipos, accounts, onOpen }) {
     [ipos, board]
   );
 
-  /* Chip counts follow both the board in view and the account filter, so a chip
-     never promises rows the current narrowing is about to hide. When an account
-     is chosen, only IPOs that account applied to are counted, and the status
-     tallies are judged against that account's own applications. */
+  /* Chip counts follow the board in view and the live search, so a chip never
+     promises rows the current narrowing is about to hide. When the search names
+     an account, the pending/allotted/rejected tallies are judged against that
+     account's own applications. */
   const counts = useMemo(() => {
     const c = { all: 0, pending: 0, allotted: 0, rejected: 0, incomplete: 0, listed: 0, open: 0 };
     const today = todayISO();
     onBoard.forEach((i) => {
-      const apps = appsFor(i);
-      if (acctFilter.length && apps.length === 0) return;   // account never applied here
+      if (!searchMatch(i)) return;
       c.all++;
-      if (acctFilter.length) {
+      const apps = appsFor(i);
+      if (scopedIds.size) {
         if (apps.some((a) => !a.allotmentStatus || a.allotmentStatus === "Pending")) c.pending++;
         if (apps.some((a) => a.allotmentStatus === "Allotted" || a.allotmentStatus === "Partial")) c.allotted++;
         if (apps.some((a) => a.allotmentStatus === "Not Allotted")) c.rejected++;
@@ -3574,31 +3514,13 @@ function IpoList({ ipos, accounts, onOpen }) {
       if (openD && openD <= today && (!closeD || closeD >= today)) c.open++;
     });
     return c;
-  }, [onBoard, appsFor, acctFilter]);
+  }, [onBoard, searchMatch, appsFor, scopedIds]);
 
   const boardCounts = useMemo(() => {
     const c = { Mainboard: 0, SME: 0 };
     ipos.forEach((i) => { c[boardOf(i)]++; });
     return c;
   }, [ipos]);
-
-  /* Accounts you can narrow the list to, each with how many IPOs on the current
-     board carry an application from it. Only accounts that have actually applied
-     are offered (plus any already chosen, so a board switch never drops your
-     selection off the list). Most-active first. */
-  const acctOptions = useMemo(() => {
-    const c = {};
-    onBoard.forEach((i) => {
-      const seen = new Set();
-      (i.applications || []).forEach((a) => {
-        if (a.accountId && !seen.has(a.accountId)) { seen.add(a.accountId); c[a.accountId] = (c[a.accountId] || 0) + 1; }
-      });
-    });
-    return accounts
-      .map((a) => ({ id: a.id, label: a.name || "Unnamed", count: c[a.id] || 0 }))
-      .filter((o) => o.count > 0 || acctSet.has(o.id))
-      .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
-  }, [onBoard, accounts, acctSet]);
 
   /* An SME-only ledger would open on an empty screen, so the default gives way
      to whatever is actually there. */
@@ -3610,7 +3532,6 @@ function IpoList({ ipos, accounts, onOpen }) {
   }, [board, ipos.length, boardCounts]);
 
   const shown = useMemo(() => {
-    const q = search.trim().toLowerCase();
     const dateKey = (i) => i.applicationDate || i.openDate || i.closeDate || "";
     const cmp = {
       recent: (a, b) => dateKey(b).localeCompare(dateKey(a)),
@@ -3622,23 +3543,21 @@ function IpoList({ ipos, accounts, onOpen }) {
 
     return onBoard
       .filter((i) => {
-        if (q && !`${i.company || ""} ${i.symbol || ""}`.toLowerCase().includes(q)) return false;
-        const apps = appsFor(i);
-        // With accounts chosen, keep only IPOs those accounts actually applied to.
-        if (acctFilter.length && apps.length === 0) return false;
+        if (!searchMatch(i)) return false;
         if (!filter.length) return true;
         // Any of the chosen filters, not all of them: they name kinds, not tests.
+        const apps = appsFor(i);
         return filter.some((f) => statusMatch(f, i, apps));
       })
       .sort(cmp);
-  }, [onBoard, search, filter, acctFilter, sort, appsFor, statusMatch]);
+  }, [onBoard, searchMatch, filter, sort, appsFor, statusMatch]);
 
   if (ipos.length === 0) return <EmptyState text="No IPOs yet. Use 'Add from exchange' above to sync IPOs." icon={Receipt} subtitle="Track applications, allotments and returns across your family." />;
 
   return (
     <div>
       <ListControls
-        search={search} setSearch={setSearch} placeholder="Search company or symbol"
+        search={search} setSearch={setSearch} placeholder="Search company, symbol or account"
         filter={filter} setFilter={setFilter}
         filters={[
           ...(counts.open ? [{ id: "open", label: "Open now", count: counts.open }] : []),
@@ -3648,8 +3567,6 @@ function IpoList({ ipos, accounts, onOpen }) {
           { id: "listed", label: "Listed", count: counts.listed },
           { id: "incomplete", label: "Needs details", count: counts.incomplete },
         ]}
-        accountFilter={acctFilter} setAccountFilter={setAcctFilter}
-        accountOptions={acctOptions} accountFilterLabel="Applied from account"
         boards={[
           { id: "Mainboard", label: "Mainboard", count: boardCounts.Mainboard },
           { id: "SME", label: "SME", count: boardCounts.SME },
@@ -4255,9 +4172,8 @@ function AccountList({ accounts, ipos, transfers = [], onOpen }) {
                       <span style={{
                         display: "inline-flex", alignItems: "center", background: COLORS.chip,
                         border: `1px solid ${COLORS.border}`, color: COLORS.inkSoft, borderRadius: 999,
-                        padding: "2px 8px", fontFamily: "Inter, sans-serif", fontSize: 10, fontWeight: 700,
-                        letterSpacing: "0.06em", textTransform: "uppercase", lineHeight: 1.4,
-                      }}>Apply off</span>
+                        padding: "1px 7px", fontFamily: "'JetBrains Mono', monospace", fontSize: 11,
+                      }}>apply off</span>
                     )}
                   </div>
                   {acc.notes && <div title={acc.notes} style={{ fontSize: 11.5, color: COLORS.inkSoft, marginTop: 4, fontStyle: "italic", ...ellipsisText }}>{acc.notes}</div>}
