@@ -979,12 +979,23 @@ function pillStyle(tone, compact) {
     color: p.c, background: p.bg, border: `1px solid ${p.b}`, borderRadius: 6,
     fontFamily: "'JetBrains Mono', monospace", fontWeight: 500, letterSpacing: 0.2,
     ...(compact
-      ? { fontSize: 10, padding: "0 6px", lineHeight: 1.6 }
-      : { fontSize: 10.5, padding: "2px 8px", lineHeight: 1.45 }),
+      ? { fontSize: 9, padding: "0 5px", lineHeight: 1.55 }
+      : { fontSize: 9.5, padding: "1px 7px", lineHeight: 1.4 }),
   };
 }
-function Pill({ tone, compact, children, style }) {
-  return <span style={{ ...pillStyle(tone, compact), ...style }}>{children}</span>;
+/* truncate makes the pill a flexible cell that ellipsizes its own text, so a
+   row of pills can be told to keep to one line and the longest simply shortens
+   (with the full value kept in the title for a tap/hover). */
+function Pill({ tone, compact, truncate, title, children, style }) {
+  const s = pillStyle(tone, compact);
+  if (truncate) {
+    s.display = "inline-block";
+    s.overflow = "hidden";
+    s.textOverflow = "ellipsis";
+    s.whiteSpace = "nowrap";
+    s.minWidth = 0;
+  }
+  return <span title={title} style={{ ...s, ...style }}>{children}</span>;
 }
 
 function Field({ label, children, error }) {
@@ -4329,11 +4340,13 @@ function AccountDetailSheet({ account, ipos, transfers, accounts, onClose, onEdi
 
   return (
     <Sheet title={account.name} onClose={onClose}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-          <Pill tone="accent">{account.relation || "Self"}</Pill>
-          {account.bank && <Pill tone="neutral">{account.bank}</Pill>}
-          {pan ? <Pill tone="neutral">{pan}</Pill> : <Pill tone="env">No PAN</Pill>}
+      {/* One row, always. The info pills share the space that is left after the
+          actions and ellipsize the longest rather than wrapping to a new line. */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
+        <div style={{ display: "flex", gap: 6, minWidth: 0, flex: 1, overflow: "hidden" }}>
+          <Pill tone="accent" truncate title={account.relation || "Self"}>{account.relation || "Self"}</Pill>
+          {account.bank && <Pill tone="neutral" truncate title={account.bank}>{account.bank}</Pill>}
+          {pan ? <Pill tone="neutral" truncate title={pan}>{pan}</Pill> : <Pill tone="env">No PAN</Pill>}
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
           <button
@@ -4342,7 +4355,7 @@ function AccountDetailSheet({ account, ipos, transfers, accounts, onClose, onEdi
             title="Show this account in the Apply IPO list"
             style={{ ...pillStyle(account.excludeFromApply ? "env" : "ext"), cursor: "pointer" }}
           >
-            {account.excludeFromApply ? "apply off" : "in apply list"}
+            {account.excludeFromApply ? "apply off" : "apply on"}
           </button>
           <button onClick={onEdit} aria-label="Edit account" style={roundIconBtn}>
             <Pencil size={14} color={COLORS.inkSoft} />
