@@ -3746,7 +3746,7 @@ function AllotmentCounts({ tally }) {
   }
   return (
     <div style={{
-      display: "flex", gap: 10, flexWrap: "wrap", alignItems: "baseline",
+      display: "flex", flex: 1, minWidth: 0, gap: 10, alignItems: "baseline",
       fontFamily: "'JetBrains Mono', monospace", fontSize: 11.5,
     }}>
       <span style={{ color: tally.won ? COLORS.green : COLORS.inkSoft, fontWeight: 700 }}>
@@ -3754,8 +3754,9 @@ function AllotmentCounts({ tally }) {
       </span>
       {/* Rejections are not spelled out: with the tally and what is still
           pending, they are simply the rest, and "0/8 allotted * 8 rejected"
-          says one thing twice. The bar above still shows them in red. */}
-      {tally.pending > 0 && <span style={{ color: COLORS.gold }}>{tally.pending} pending</span>}
+          says one thing twice. The bar above still shows them in red.
+          Pending sits at the far right of the line. */}
+      {tally.pending > 0 && <span style={{ marginLeft: "auto", color: COLORS.gold }}>{tally.pending} pending</span>}
     </div>
   );
 }

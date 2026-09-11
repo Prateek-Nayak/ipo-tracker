@@ -5,6 +5,11 @@ html, body, #root {
   margin: 0;
   min-height: 100%;
   background: var(--ledger-bg, #F7F5F0);
+  /* No browser pull-to-refresh or scroll-chaining anywhere. The app drives its
+     own pull-to-refresh, and a panel portalled to the body (the filter sheet)
+     sits outside the container that used to suppress it - so guard it globally,
+     which also lets that sheet's own swipe-down-to-close work. */
+  overscroll-behavior: none;
 }
 html {
   -webkit-text-size-adjust: 100%;
