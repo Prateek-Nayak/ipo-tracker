@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback, useRef, useContext } from "react";
+import React, { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef, useContext } from "react";
 import { createPortal } from "react-dom";
 
 /* ---------------------------------------------------------
@@ -190,6 +190,7 @@ const Clock = (p) => <SvgIcon {...p}><circle cx="12" cy="12" r="10" /><polyline 
 const XCircle = (p) => <SvgIcon {...p}><circle cx="12" cy="12" r="10" /><path d="m15 9-6 6" /><path d="m9 9 6 6" /></SvgIcon>;
 const Landmark = (p) => <SvgIcon {...p}><line x1="3" x2="21" y1="22" y2="22" /><line x1="6" x2="6" y1="18" y2="11" /><line x1="10" x2="10" y1="18" y2="11" /><line x1="14" x2="14" y1="18" y2="11" /><line x1="18" x2="18" y1="18" y2="11" /><polygon points="12 2 20 7 4 7" /></SvgIcon>;
 const Loader2 = (p) => <SvgIcon {...p}><path d="M21 12a9 9 0 1 1-6.219-8.56" /></SvgIcon>;
+const RefreshCw = (p) => <SvgIcon {...p}><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" /><path d="M21 3v5h-5" /><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" /><path d="M8 16H3v5" /></SvgIcon>;
 const CloudIcon = (p) => <SvgIcon {...p}><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z" /></SvgIcon>;
 const CloudOff = (p) => <SvgIcon {...p}><path d="m2 2 20 20" /><path d="M5.782 5.782A7 7 0 0 0 9 19h8.5a4.5 4.5 0 0 0 1.307-.193" /><path d="M21.532 16.5A4.5 4.5 0 0 0 17.5 10h-1.79A7.008 7.008 0 0 0 10 5.07" /></SvgIcon>;
 const DownloadIcon = (p) => <SvgIcon {...p}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" x2="12" y1="15" y2="3" /></SvgIcon>;
@@ -221,7 +222,33 @@ const inr = (n) => "₹" + (Number(n) || 0).toLocaleString("en-IN", { maximumFra
    than saying nothing - so unknown values render as an em dash instead. */
 const isBlank = (v) => v === "" || v == null || !Number.isFinite(Number(v));
 const inrOrDash = (v) => (isBlank(v) ? "--" : inr(v));
+
+/* Lakhs and crores where the room is fixed. A stat card is half a phone wide
+   and clips what it cannot fit without saying so, which around a crore turns a
+   figure into a different, smaller, wrong-looking one. The exact number is kept
+   on the element's title. */
+const inrShort = (n) => {
+  const v = Number(n) || 0;
+  const abs = Math.abs(v);
+  if (abs < 1e5) return inr(v);
+  const [div, unit, dp] = abs >= 1e7 ? [1e7, "Cr", 2] : [1e5, "L", 1];
+  return "₹" + (v / div).toFixed(dp).replace(/.0+$/, "") + unit;
+};
 const trimFields = (obj) => { const out = { ...obj }; for (const k in out) { if (typeof out[k] === "string") out[k] = out[k].trimEnd(); } return out; };
+
+/* What a person types has no length limit, and a note long enough - or one
+   unbroken run of characters with nowhere to wrap - used to carry on straight
+   past the edge of the card holding it. Every place text is shown now takes one
+   of these three.
+
+   On a card the text is cut, because a card is for finding a record rather than
+   reading it and the whole of it is one tap away in the sheet the card opens: a
+   line or two and an ellipsis says there is more without the card growing to
+   fit. In a sheet, which is where it is read, it wraps instead - but breaks
+   mid-word rather than leaving the box. */
+const ellipsisText = { whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" };
+// Newlines in a note are kept: it is a note, and it was typed with them.
+const wrapText = { overflowWrap: "anywhere", wordBreak: "break-word", whiteSpace: "pre-wrap" };
 
 function isNonTradingDay(iso) {
   if (!iso) return false;
@@ -279,9 +306,57 @@ const hasListed = (ipo) => !!ipo?.listingDate && ipo.listingDate <= todayISO();
    "undefinedholidays". */
 const STORAGE_PREFIX = "ipo_ledger_";
 
+// Stamped in at build time by vite.config.js; MMDD.HHMM, IST.
+const BUILD_ID = typeof __BUILD_ID__ === "string" ? __BUILD_ID__ : "dev";
+
 // The four screens, in nav order. Named here so a remembered tab can be checked
 // against them before it is trusted.
 const TABS = ["dashboard", "ipos", "transfers", "accounts"];
+
+/* Everything back has to peel off before it is allowed to leave, in the order
+   it comes off. Each layer that is on screen owns one history entry, so the
+   count below and the number of entries pushed are the same number and can be
+   compared directly. Being off Overview counts as a layer too - back from a
+   tab returns to Overview before it returns to the home screen. */
+const BACK_LAYERS = [
+  "confirmOpen", "appSheet", "bulkApplyFor", "bulkStatusFor", "allotmentFor", "ipoSheet", "acctSheet",
+  "acctDetail", "holdingDetail", "transferSheet", "liveOpen", "dataSheetOpen", "ipoDetail",
+];
+const layerDepth = (v) =>
+  BACK_LAYERS.reduce((n, k) => n + (v[k] ? 1 : 0), 0) + (v.transient || 0)
+  + (v.tab !== "dashboard" ? 1 : 0);
+
+/* An overlay that belongs to a screen rather than to the app - a popover, a
+   picker - keeps its own state, which back could not see. So back looked past
+   it and closed whatever was underneath: on a list that meant going back to
+   Overview, which unmounted the screen and took the popover down with it. It
+   looked as though back had closed the popover, when it had really spent the
+   entry belonging to the tab - and the next press, finding nothing left to
+   close, left the app. Anything of that kind registers itself here and is
+   closed in its turn like every other layer. */
+const transientLayers = new Set();
+const transientListeners = new Set();
+const announceTransient = () => transientListeners.forEach((fn) => fn());
+function useBackLayer(open, close) {
+  // Held in a ref so a new closure every render does not re-register the layer.
+  const closeRef = useRef(close);
+  closeRef.current = close;
+  useEffect(() => {
+    if (!open) return;
+    const entry = () => closeRef.current();
+    transientLayers.add(entry);
+    announceTransient();
+    return () => { transientLayers.delete(entry); announceTransient(); };
+  }, [open]);
+}
+
+// Anything that counts as the first sign of a person, for the history entries.
+const ARM_EVENTS = ["touchstart", "pointerdown", "mousedown", "keydown"];
+
+// Anyone who has asked for less movement gets the screen change without the slide.
+const prefersReducedMotion = () =>
+  typeof window !== "undefined" && typeof window.matchMedia === "function" &&
+  window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 /* NSE's holiday calendars, kept module-wide because every date calculation
    needs them. Both are required, and which one applies depends on the event:
@@ -463,6 +538,25 @@ const fmtDate = (d) => {
 };
 const fmtTime = (d) => (d ? d.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }) : "");
 
+/* Day and month only, for a row that has to fit its whole line across a phone.
+   An open-to-close pair written out in full - 2026-08-31 -> 2026-09-02 - took
+   more width than there was and wrapped, and the fix is not a smaller font on
+   a line that is already 11px. The year comes back whenever it is not this
+   one, so an older listing is still unambiguous. */
+/* Written out rather than left to toLocaleDateString, which gives "Sept" for
+   September under en-IN and three letters for every other month. In a monospace
+   column that one extra character shifts the arrow out of line on every
+   September row, and it varies by platform besides. */
+const MONTHS_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const fmtDayMon = (d) => {
+  if (!d) return "--";
+  const dt = new Date(d + "T00:00:00");
+  if (isNaN(dt)) return d;
+  const year = dt.getFullYear() === new Date().getFullYear()
+    ? "" : " " + String(dt.getFullYear()).slice(2);
+  return String(dt.getDate()).padStart(2, "0") + " " + MONTHS_SHORT[dt.getMonth()] + year;
+};
+
 const ALLOTMENT_STATUSES = ["Pending", "Allotted", "Partial", "Not Allotted"];
 let STATUS_META = {};
 function buildStatusMeta() {
@@ -489,6 +583,34 @@ const TABLES = ["accounts", "ipos", "transfers", "trash"];
 // be pushed over a populated cloud.
 const LEDGER_TABLES = ["accounts", "ipos", "transfers"];
 
+/* A transfer made on somebody's behalf is two hops rather than one. Rishabh
+   pays Dadasaheb for Prateek: what Rishabh owed Prateek is squared off by that
+   much, and Dadasaheb takes on the same debt to Prateek in his place. Prateek's
+   own position does not move, which is what passing money along means - he is
+   owed the same amount before and after, only by somebody else.
+
+   That falls out of splitting it in two - sender to bearer, bearer to receiver -
+   and it settles both readings of the arrangement with no choice to make. Where
+   the sender already owed the bearer, the first hop clears the debt and the
+   sender ends up square. Where he did not, the same hop says the bearer now owes
+   the sender, which is exactly right: he was out of pocket for someone else.
+
+   Written as one hop, crediting the bearer and leaving the sender out of it,
+   only the first of those came out right - and only while the sender's own debt
+   was missing from the ledger. Once it was recorded the same money was counted
+   twice, and the sender was left still owing what he had just paid off. */
+const transferLegs = (t) => {
+  const via = t.onBehalfOfId;
+  return via && via !== t.fromAccountId && via !== t.toAccountId
+    ? [[t.fromAccountId, via], [via, t.toAccountId]]
+    : [[t.fromAccountId, t.toAccountId]];
+};
+
+// The three accounts a transfer can touch, for anything that asks "is this
+// account involved" rather than "what does this account owe".
+const touchesAccount = (t, id) =>
+  t.fromAccountId === id || t.toAccountId === id || t.onBehalfOfId === id;
+
 /* ---------------------------------------------------------
    LOCAL STORAGE
    Keys are deliberately identical to the original single-file
@@ -512,24 +634,6 @@ function saveTable(key, data) {
     console.error("storage save failed", key, e);
   }
 }
-/* A small piece of UI state (a chosen filter, sort or board) that should
-   outlive a reload. Kept under the same STORAGE_PREFIX as everything else, and
-   read back defensively so a stale or corrupt value never breaks the screen. */
-function usePersistedState(key, initial) {
-  const [value, setValue] = useState(() => {
-    try {
-      const raw = localStorage.getItem(STORAGE_PREFIX + key);
-      return raw != null ? JSON.parse(raw) : initial;
-    } catch {
-      return initial;
-    }
-  });
-  useEffect(() => {
-    try { localStorage.setItem(STORAGE_PREFIX + key, JSON.stringify(value)); } catch { /* not worth failing over */ }
-  }, [key, value]);
-  return [value, setValue];
-}
-
 function loadLocalState() {
   return {
     accounts: loadTable("accounts"),
@@ -903,8 +1007,12 @@ function ConfirmModal({ state, onResolve }) {
   );
 }
 
-// Module-level ref for dismissing confirm modal from back button handler
+/* The confirm modal is mounted above the app and never re-renders it, so the
+   back handler cannot find it in state the way it finds every other layer. It
+   announces itself instead: the ref is how it is dismissed, the listeners are
+   how the app learns it is on screen and counts it as one more layer. */
 const confirmDismissRef = { current: null };
+const confirmListeners = new Set();
 
 function ConfirmProvider({ children }) {
   const [state, setState] = useState(null);
@@ -918,11 +1026,24 @@ function ConfirmProvider({ children }) {
   }, []);
   const onResolve = useCallback((result) => {
     setState(null);
+    /* Announced here rather than left to the effect below. When back dismisses
+       this, the app has to see it gone in the same batch of work: a render that
+       still counts the modal is a render one layer deeper than the truth, and
+       the history is made to match by pushing an entry - from inside the
+       popstate handler, which is the one place a push must never happen.
+       Chrome marks the entry such a push came from as one to skip, so the next
+       back steps over it and leaves the app. Sheets never had the problem;
+       their state is the app's own and falls in the same batch already. */
+    confirmDismissRef.current = null;
+    confirmListeners.forEach((fn) => fn());
     if (resolveRef.current) { resolveRef.current(result); resolveRef.current = null; }
   }, []);
   // Expose dismiss for back button handling
   dismissRef.current = state ? () => onResolve(false) : null;
-  confirmDismissRef.current = dismissRef.current;
+  useEffect(() => {
+    confirmDismissRef.current = dismissRef.current;
+    confirmListeners.forEach((fn) => fn());
+  }, [state]);
   return (
     <ConfirmContext.Provider value={show}>
       {children}
@@ -1000,7 +1121,10 @@ function Sheet({ title, onClose, children }) {
         onTouchCancel={onTouchEnd}
         style={{
           background: COLORS.bg, width: "100%", maxWidth: 480,
-          maxHeight: "92vh", borderRadius: "18px 18px 0 0",
+          /* dvh, not vh, like the rest of the app: vh is the viewport with the
+             browser's own chrome ignored, so a tall sheet ran its last inch -
+             and its save button - underneath the address bar. */
+          maxHeight: "92dvh", borderRadius: "18px 18px 0 0",
           display: "flex", flexDirection: "column", minHeight: 0,
           boxShadow: "0 -8px 30px rgba(0,0,0,0.2)",
           transform: closing ? "translateY(100%)" : dragY ? `translateY(${dragY}px)` : undefined,
@@ -1012,8 +1136,9 @@ function Sheet({ title, onClose, children }) {
           display: "flex", justifyContent: "space-between", alignItems: "center",
           padding: "18px 18px 16px", flexShrink: 0,
         }}>
-          <h2 style={{
+          <h2 title={typeof title === "string" ? title : undefined} style={{
             fontFamily: "'Fraunces', serif", fontWeight: 600, fontSize: 20, color: COLORS.heading, margin: 0,
+            minWidth: 0, ...ellipsisText,
           }}>{title}</h2> 
           {title && title == "Sync & Data" ? <div style={{
           display: "flex", 
@@ -1134,7 +1259,8 @@ function AppInner() {
      the bottom of the transfers - a list you had never scrolled. Each screen
      now starts where a screen should. */
   useEffect(() => {
-    if (contentRef.current) contentRef.current.scrollTop = 0;
+    const el = pageRefs.current[tab];
+    if (el) el.scrollTop = 0;
   }, [tab]);
   const [accounts, setAccounts] = useState([]);
   const [ipos, setIpos] = useState([]);
@@ -1167,15 +1293,44 @@ function AppInner() {
   const [dataSheetOpen, setDataSheetOpen] = useState(false);
   const [bulkApplyFor, setBulkApplyFor] = useState(null);   // ipo id
   const [bulkStatusFor, setBulkStatusFor] = useState(null); // ipo id
+  const [allotmentFor, setAllotmentFor] = useState(null);   // ipo id
   const [liveOpen, setLiveOpen] = useState(false);
+
+  /* The confirm modal is not this component's to own - it is mounted above it -
+     but back has to treat it as the topmost layer, so it is mirrored here. */
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  useEffect(() => {
+    const listener = () => setConfirmOpen(!!confirmDismissRef.current);
+    confirmListeners.add(listener);
+    listener();
+    return () => { confirmListeners.delete(listener); };
+  }, []);
+
+  // And the same for the popovers the screens own - see useBackLayer.
+  const [transient, setTransient] = useState(0);
+  useEffect(() => {
+    const listener = () => setTransient(transientLayers.size);
+    transientListeners.add(listener);
+    listener();
+    return () => { transientListeners.delete(listener); };
+  }, []);
+
   const [pricing, setPricing] = useState(false);
   const [priceInfo, setPriceInfo] = useState({ asOf: "", matched: 0, total: 0, error: "" });
 
   const skipNextAutoSync = useRef(true);
   const pricedOnce = useRef(false);
   const swipeNav = useRef(null);
-  const [swipeDx, setSwipeDx] = useState(0);
-  const contentRef = useRef(null);
+  const pagerRef = useRef(null);
+  const pageRefs = useRef({});
+  const swipeDx = useRef(0);
+  const swipeMs = useRef(0);
+  const pullRef = useRef(null);
+  const pullY = useRef(0);
+  const pullMs = useRef(0);
+  const settling = useRef(false);
+  const settleTimer = useRef(null);
+  const [swipeDir, setSwipeDir] = useState(0);
   const [, bumpHolidays] = useState(0);
 
   // The palette is mutated in place, so a theme change needs a nudge to redraw.
@@ -1366,14 +1521,18 @@ function AppInner() {
 
      The handler reads through a ref so the listener can be registered once and
      still see current state; re-registering on every state change would drop
-     the buffered history entry. */
-  const backLayers = { appSheet, bulkApplyFor, bulkStatusFor, ipoSheet, acctSheet,
-    transferSheet, liveOpen, dataSheetOpen, ipoDetail, acctDetail, holdingDetail, tab };
+     the history bookkeeping below. */
+  const backLayers = { confirmOpen, transient, appSheet, bulkApplyFor, bulkStatusFor, allotmentFor, ipoSheet,
+    acctSheet, transferSheet, liveOpen, dataSheetOpen, ipoDetail, acctDetail, holdingDetail, tab };
 
   /* A sheet covers the screen but the page behind it still scrolls, so dragging
      anywhere outside the panel moved the list underneath and you came back to
      somewhere else entirely. Held still while a sheet is open. */
-  const sheetIsOpen = Object.entries(backLayers).some(([k, v]) => k !== "tab" && !!v);
+  /* A popover is not one of these: it covers a corner, not the screen, and it
+     should not stop the page being swiped or pulled. Swiping away simply takes
+     it with the screen it belongs to. */
+  const sheetIsOpen = Object.entries(backLayers)
+    .some(([k, v]) => k !== "tab" && k !== "transient" && !!v);
   useEffect(() => {
     if (typeof document === "undefined" || !document.body) return;
     if (!sheetIsOpen) return;
@@ -1387,10 +1546,21 @@ function AppInner() {
   const closeTopLayer = useCallback(() => {
     const v = backRef.current;
     const clear = (key, setter, val) => { setter(val !== undefined ? val : null); backRef.current = { ...backRef.current, [key]: val !== undefined ? val : null }; return true; };
-    if (confirmDismissRef.current) { confirmDismissRef.current(); return true; }
+    if (confirmDismissRef.current) { confirmDismissRef.current(); backRef.current = { ...backRef.current, confirmOpen: false }; return true; }
+    if (transientLayers.size) {
+      // The last to open is the one on top, and the one back is for.
+      const top = [...transientLayers].pop();
+      transientLayers.delete(top);
+      top();
+      // At once, for the reason the confirm modal does it: see onResolve.
+      announceTransient();
+      backRef.current = { ...backRef.current, transient: transientLayers.size };
+      return true;
+    }
     if (v.appSheet) return clear("appSheet", setAppSheet);
     if (v.bulkApplyFor) return clear("bulkApplyFor", setBulkApplyFor);
     if (v.bulkStatusFor) return clear("bulkStatusFor", setBulkStatusFor);
+    if (v.allotmentFor) return clear("allotmentFor", setAllotmentFor);
     if (v.ipoSheet) return clear("ipoSheet", setIpoSheet);
     if (v.acctSheet) return clear("acctSheet", setAcctSheet);
     if (v.acctDetail) return clear("acctDetail", setAcctDetail);
@@ -1403,21 +1573,83 @@ function AppInner() {
     return false;
   }, []);
 
+  /* An entry per open layer, pushed as the layer opens and popped as it closes,
+     with the depth it stands for written into the entry. Back then lands on an
+     entry that says how much should still be on screen, and anything above that
+     is closed - which is self-correcting, so a stack that ever drifts out of
+     step is put right by the next press rather than staying wrong.
+
+     Entries are never pushed from inside the popstate handler. Chrome treats a
+     history entry created without a user gesture as one to skip past, and a
+     back press is not a gesture on the page: the old code pushed a replacement
+     entry from the handler, which worked for the first back and then took the
+     second one straight out of the app - two panels deep, one back closed the
+     top panel and the next closed the app. */
+  const depth = layerDepth(backLayers);
+  const histDepth = useRef(0);
+  const histMoving = useRef(false);
+  const popTurn = useRef(false);
+  const popTurnTimer = useRef(null);
+  const [histPops, setHistPops] = useState(0);
+
+  /* The same rule applies at startup: the tab you were last on is restored
+     before anyone has touched anything, and an entry pushed for it then would
+     be skipped over. Nothing is pushed until the first touch or key, and every
+     way a browser might report one is watched - if this never arms, back walks
+     straight out of the first panel that is opened. */
+  const [histArmed, setHistArmed] = useState(false);
+  useEffect(() => {
+    if (histArmed || typeof window === "undefined" || !window.history) return;
+    window.history.replaceState({ ...(window.history.state || {}), ledger: 0 }, "");
+    const arm = () => setHistArmed(true);
+    ARM_EVENTS.forEach((type) => window.addEventListener(type, arm, { capture: true, once: true }));
+    return () => ARM_EVENTS.forEach((type) => window.removeEventListener(type, arm, true));
+  }, [histArmed]);
+
   useEffect(() => {
     if (typeof window === "undefined" || !window.history) return;
-    window.history.replaceState({ ledger: "root" }, "");
-    window.history.pushState({ ledger: "layer" }, "");
+    if (!histArmed || histMoving.current) return;
+    if (depth > histDepth.current) {
+      /* Never while a back press is still being answered, whatever the layers
+         say. A push from there is the one Chrome punishes, and a layer that is
+         slow to report itself closed would otherwise ask for exactly that.
+         It is only ever deferred - the tick below asks again. */
+      if (popTurn.current) return;
+      for (let n = histDepth.current + 1; n <= depth; n++) window.history.pushState({ ledger: n }, "");
+      histDepth.current = depth;
+    } else if (depth < histDepth.current) {
+      // Closed by tapping rather than by back: give the entries back.
+      const steps = histDepth.current - depth;
+      histDepth.current = depth;
+      histMoving.current = true;
+      window.history.go(-steps);
+    }
+  }, [depth, histArmed, histPops]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
     const onPop = (e) => {
-      if (closeTopLayer()) {
-        window.history.pushState({ ledger: "layer" }, "");
-      } else {
-        window.history.back();
+      histMoving.current = false;
+      const landed = e.state && typeof e.state.ledger === "number" ? e.state.ledger : 0;
+      histDepth.current = landed;
+      popTurn.current = true;
+      for (let guard = BACK_LAYERS.length + 2; layerDepth(backRef.current) > landed && guard > 0; guard--) {
+        if (!closeTopLayer()) break;
       }
+      setHistPops((n) => n + 1);
+      /* Once everything React does in answer to this press has landed, which is
+         inside this task, the stack is looked at again with a free hand. */
+      clearTimeout(popTurnTimer.current);
+      popTurnTimer.current = setTimeout(() => {
+        popTurn.current = false;
+        setHistPops((n) => n + 1);
+      }, 0);
     };
-
     window.addEventListener("popstate", onPop);
-    return () => window.removeEventListener("popstate", onPop);
+    return () => {
+      window.removeEventListener("popstate", onPop);
+      clearTimeout(popTurnTimer.current);
+    };
   }, [closeTopLayer]);
 
   /* ---------- writes ---------- */
@@ -1695,7 +1927,8 @@ function AppInner() {
   const enrichedDatesOnce = useRef(false);
   useEffect(() => {
     if (!reconciled || enrichedDatesOnce.current) return;
-    const needDates = ipos.filter((i) => i.closeDate && (!i.allotmentDate || !i.listingDate) && !hasListed(i));
+    const needDates = ipos.filter((i) =>
+      i.closeDate && !hasListed(i) && (!i.allotmentDate || !i.listingDate || !i.registrar));
     if (!needDates.length) return;
     enrichedDatesOnce.current = true;
     (async () => {
@@ -1714,6 +1947,8 @@ function AppInner() {
           const patch = {};
           if (!ipo.allotmentDate && hit.allotmentDate) patch.allotmentDate = hit.allotmentDate;
           if (!ipo.listingDate && hit.listingDate) patch.listingDate = hit.listingDate;
+          // Issues imported before the registrar was kept have none on record.
+          if (!ipo.registrar && hit.registrar) patch.registrar = hit.registrar;
           if (!Object.keys(patch).length) return ipo;
           changed = true;
           return { ...ipo, ...patch };
@@ -1763,12 +1998,83 @@ function AppInner() {
       TABLES.forEach((k) => saveTable(k, remote[k] || []));
       // Already in step with the cloud; no need to push it straight back.
       skipNextAutoSync.current = true;
+      setLastSync(new Date());
+      setSyncError("");
+      // Handed back so a caller can go on with these rather than React's copy
+      // from the render before, which is a beat behind until this commits.
+      return remote.ipos;
     } catch (e) {
       setSyncError(e.message || "Could not reach the cloud.");
     }
+    return null;
   }, [pushToCloud, userId]);
   const syncNowRef = useRef(syncNow);
   syncNowRef.current = syncNow;
+
+  /* Everything the ledger shows, brought up to date in one go. There is no
+     per-screen refresh to write: the four screens are one set of records seen
+     four ways, so the cloud round trip and the price feed between them cover
+     the lot - what other devices have changed, allotments, transfers, and
+     today's valuations. Whichever screen the pull happens on, all four are
+     current when it finishes. */
+  const [refreshing, setRefreshing] = useState(false);
+  const refreshingRef = useRef(false);
+  const iposRef = useRef(ipos);
+  iposRef.current = ipos;
+
+  /* An issue appears on its registrar's status page only once the basis of
+     allotment is done, which is the moment the answer exists. So rather than
+     asking after each issue in turn, both indexes are fetched at once and
+     matched against whatever is still Pending here - one request, and the
+     Overview can then say which ones are ready to be checked. */
+  const [published, setPublished] = useState([]);
+  const watchRef = useRef({ at: 0, busy: false });
+
+  const checkPublished = useCallback(async (list) => {
+    const waiting = (list || []).filter(awaitingAllotmentEntry);
+    if (!waiting.length) { setPublished([]); return; }
+    if (watchRef.current.busy || Date.now() - watchRef.current.at < 5 * 60 * 1000) return;
+    watchRef.current.busy = true;
+    try {
+      const res = await fetch("/api/allotment?index=1");
+      if (!res.ok) return;
+      const idx = await res.json();
+      const names = [...(idx.kfintech || []), ...(idx.mufg || [])].map(nameKey);
+      const listed = (a) => names.some((n) => n === a || (n.length > 6 && a.length > 6 && (n.includes(a) || a.includes(n))));
+      setPublished(waiting.filter((i) => listed(nameKey(i.company))).map((i) => i.id));
+      watchRef.current.at = Date.now();
+    } catch {
+      /* No answer means no news, which is the same as the quiet case. */
+    } finally {
+      watchRef.current.busy = false;
+    }
+  }, []);
+
+  useEffect(() => { if (reconciled) checkPublished(ipos); }, [reconciled, ipos, checkPublished]);
+
+  const refreshAll = useCallback(async () => {
+    if (refreshingRef.current) return;
+    refreshingRef.current = true;
+    setRefreshing(true);
+    const startedAt = Date.now();
+    try {
+      const fresh = await syncNowRef.current();
+      await refreshPricesFrom(fresh || iposRef.current, { silent: true });
+      watchRef.current.at = 0;
+      await checkPublished(fresh || iposRef.current);
+    } catch {
+      /* Both halves report for themselves - the cloud through the sync status
+         in the header, prices through the panel that shows them. */
+    } finally {
+      /* Held a moment even when the answer comes back instantly, because a
+         spinner that vanishes on the same frame reads as a gesture that did
+         nothing rather than a refresh that found nothing to change. */
+      const left = 500 - (Date.now() - startedAt);
+      if (left > 0) await new Promise((r) => setTimeout(r, left));
+      refreshingRef.current = false;
+      setRefreshing(false);
+    }
+  }, [refreshPricesFrom, checkPublished]);
 
   /* When the browser regains connectivity, reconcile and refresh in the
      background - no reload, and no need to notice the app looks stale and
@@ -1845,6 +2151,177 @@ function AppInner() {
     return { invested, realized, unrealized, pendingCount, activeCount, missingLtp };
   }, [ipos]);
 
+  /* ---------- page swipe ---------- */
+  /* Swiping between the four screens used to snap from one to the next. They
+     sit side by side now: the screen you are on follows your finger, the one
+     you are heading for comes in beside it, and on release the pair settles
+     onto whichever is more than a third of the way across - the way a phone's
+     home screen moves. Only the neighbour you are dragging towards is mounted,
+     so a swipe never costs more than two screens.
+
+     The drag is painted straight onto the two nodes instead of going through
+     state, because re-rendering this component on every touchmove drops frames
+     on a long list. Neither property is set from the style prop, so React never
+     overwrites what is written here. */
+  /* A flick counts for as much as a long drag. A phone's home screen does not
+     make you carry the page a third of the way across - a short, quick push is
+     enough, and the page then keeps the speed you gave it. Anything moving
+     faster than this many pixels per millisecond is read as a flick. */
+  const FLICK_SPEED = 0.28;
+  const FLICK_MIN_PX = 24;
+  const reducedMotion = prefersReducedMotion();
+
+  /* How far down the indicator comes: far enough to be a decision, not so far
+     that it is a haul. It parks a little short of the trigger while the work
+     is going on, the way a phone's own does. */
+  const PULL_TRIGGER = 64;
+  const PULL_MAX = 96;
+  const PULL_PARK = 52;
+
+  /* Speed over the tail of the drag rather than the whole of it: a finger that
+     wandered, stopped, and then flicked should be judged on the flick. */
+  const swipeSpeed = (s) => {
+    const last = s.samples[s.samples.length - 1];
+    const first = s.samples.find((p) => last.t - p.t <= 120) || s.samples[0];
+    const dt = last.t - first.t;
+    return dt > 0 ? (last.x - first.x) / dt : 0;
+  };
+
+  const paintPages = () => {
+    const here = TABS.indexOf(tab);
+    TABS.forEach((id, i) => {
+      const el = pageRefs.current[id];
+      if (!el) return;
+      el.style.transition = swipeMs.current
+        ? `transform ${swipeMs.current}ms cubic-bezier(0.22, 0.61, 0.36, 1)`
+        : "none";
+      el.style.transform = `translate3d(calc(${(i - here) * 100}% + ${swipeDx.current}px), 0, 0)`;
+    });
+  };
+  /* Over the screens rather than pushing them down, so nothing below it
+     reflows while it is being held. */
+  const paintPull = () => {
+    const el = pullRef.current;
+    if (!el) return;
+    const y = pullY.current;
+    el.style.transition = pullMs.current
+      ? `transform ${pullMs.current}ms ease-out, opacity ${pullMs.current}ms ease-out`
+      : "none";
+    el.style.transform = `translate3d(-50%, ${y - 46}px, 0) rotate(${Math.round(y * 2.2)}deg)`;
+    el.style.opacity = String(Math.min(1, y / PULL_TRIGGER));
+  };
+
+  /* After every render, so a neighbour that has just mounted is put in its
+     place in the same frame rather than flashing over the screen you are on. */
+  useLayoutEffect(() => { paintPages(); paintPull(); });
+
+  // Down to where it waits when the work starts, back up when it is done.
+  useEffect(() => {
+    pullMs.current = reducedMotion ? 0 : 240;
+    pullY.current = refreshing ? PULL_PARK : 0;
+    paintPull();
+  }, [refreshing]);
+  useEffect(() => () => clearTimeout(settleTimer.current), []);
+
+  /* dir 0 slides back to the screen you started on. */
+  const settleSwipe = (dir, width, speed = 0) => {
+    /* However far is left to go, taken at roughly the speed the finger was
+       already going, so a flick lands quickly and a slow drag eases into
+       place instead of every swipe taking the same quarter of a second. */
+    const remaining = dir ? Math.max(width - Math.abs(swipeDx.current), 0) : Math.abs(swipeDx.current);
+    const ms = reducedMotion ? 0
+      : Math.round(Math.min(300, Math.max(130, remaining / Math.max(Math.abs(speed), 1.1))));
+    settling.current = true;
+    swipeMs.current = ms;
+    swipeDx.current = dir ? -dir * width : 0;
+    paintPages();
+    clearTimeout(settleTimer.current);
+    settleTimer.current = setTimeout(() => {
+      /* The screen that has slid into place keeps its node - the pages are
+         keyed by tab - so changing which tab is active under it leaves it
+         sitting exactly where the animation left it, at an offset of nothing. */
+      settling.current = false;
+      swipeMs.current = 0;
+      swipeDx.current = 0;
+      setSwipeDir(0);
+      if (dir) setTab((t) => TABS[TABS.indexOf(t) + dir] || t);
+    }, ms + 30);
+  };
+
+  const onSwipeStart = (e) => {
+    if (sheetIsOpen || settling.current || e.touches.length > 1) return;
+    const box = pagerRef.current && pagerRef.current.getBoundingClientRect();
+    swipeNav.current = {
+      x: e.touches[0].clientX, y: e.touches[0].clientY,
+      axis: null, dx: 0, dir: 0, width: (box && box.width) || window.innerWidth,
+      samples: [{ x: e.touches[0].clientX, t: Date.now() }], pull: 0,
+    };
+  };
+
+  const onSwipeMove = (e) => {
+    const s = swipeNav.current;
+    if (!s || sheetIsOpen) return;
+    /* A second finger means a pinch, now that the page can be zoomed into.
+       Whatever it is, it is not a page turn. */
+    if (e.touches.length > 1) { swipeNav.current = null; pullY.current = 0; pullMs.current = 0; paintPull(); return; }
+    const dx = e.touches[0].clientX - s.x;
+    const dy = e.touches[0].clientY - s.y;
+    if (!s.axis) {
+      /* The first decisive movement decides the axis and it is not revisited,
+         so a slightly slanted scroll cannot drag the page sideways halfway
+         down a list, and a slanted swipe cannot scroll it. */
+      if (Math.abs(dx) < 12 && Math.abs(dy) < 12) return;
+      if (Math.abs(dx) > Math.abs(dy) * 1.2) s.axis = "x";
+      else {
+        /* Downwards, from a screen already at its top, is the refresh; every
+           other vertical movement belongs to the scroller and is left alone. */
+        const top = pageRefs.current[tab];
+        if (dy > 0 && !refreshing && top && top.scrollTop <= 0) s.axis = "pull";
+        else { swipeNav.current = null; return; }
+      }
+    }
+    if (s.axis === "pull") {
+      // Half of what the finger does, so it never feels like it is falling out.
+      s.pull = Math.min(PULL_MAX, Math.max(0, dy) * 0.5);
+      pullY.current = s.pull;
+      pullMs.current = 0;
+      paintPull();
+      return;
+    }
+    const dir = dx < 0 ? 1 : -1;
+    const room = !!TABS[TABS.indexOf(tab) + dir];
+    // Past the first and last screens there is nowhere to go, so the drag resists.
+    s.dx = room ? dx : dx * 0.25;
+    s.samples.push({ x: e.touches[0].clientX, t: Date.now() });
+    if (s.samples.length > 8) s.samples.shift();
+    swipeDx.current = s.dx;
+    swipeMs.current = 0;
+    if (s.dir !== (room ? dir : 0)) { s.dir = room ? dir : 0; setSwipeDir(s.dir); }
+    paintPages();
+  };
+
+  const onSwipeEnd = () => {
+    const s = swipeNav.current;
+    swipeNav.current = null;
+    if (!s) return;
+    if (s.axis === "pull") {
+      pullMs.current = reducedMotion ? 0 : 240;
+      if (s.pull >= PULL_TRIGGER) { pullY.current = PULL_PARK; paintPull(); refreshAll(); }
+      else { pullY.current = 0; paintPull(); }
+      return;
+    }
+    if (s.axis !== "x") return;
+    const speed = swipeSpeed(s);
+    const thrown = speed !== 0 && Math.sign(speed) === Math.sign(s.dx);
+    /* A flick settles it either way - thrown forward the page goes, pulled
+       back it stays - and only a drag slow enough to have no throw left in it
+       falls back on how far across it got. */
+    const commit = Math.abs(speed) > FLICK_SPEED
+      ? thrown && Math.abs(s.dx) > FLICK_MIN_PX
+      : Math.abs(s.dx) > s.width * 0.3;
+    settleSwipe(s.dir && commit ? s.dir : 0, s.width, speed);
+  };
+
   /* ---------- gates ---------- */
   if (linkBusy) return <LedgerSkeleton text="SIGNING YOU IN" tab={tab} />;
 
@@ -1865,6 +2342,7 @@ function AppInner() {
       <Header
         tab={tab}
         syncing={syncing}
+        pricing={pricing}
         syncError={syncError}
         cloudOn={cloudEnabled()}
         onOpenData={() => setDataSheetOpen(true)}
@@ -1888,48 +2366,85 @@ function AppInner() {
       )}
 
       <div
-        ref={contentRef}
-        className="ledger-scroll"
-        onTouchStart={(e) => {
-          if (sheetIsOpen) return;
-          swipeNav.current = { x: e.touches[0].clientX, y: e.touches[0].clientY, committed: false };
-        }}
-        onTouchEnd={(e) => {
-          const s = swipeNav.current;
-          if (!s || sheetIsOpen) { swipeNav.current = null; return; }
-          swipeNav.current = null;
-          const dx = e.changedTouches[0].clientX - s.x;
-          const dy = e.changedTouches[0].clientY - s.y;
-          if (Math.abs(dx) < 60 || Math.abs(dy) > Math.abs(dx) * 0.5) return;
-          const idx = TABS.indexOf(tab);
-          if (dx < 0 && idx < TABS.length - 1) setTab(TABS[idx + 1]);
-          if (dx > 0 && idx > 0) setTab(TABS[idx - 1]);
-        }}
-        style={{ padding: "14px 14px 14px", flex: "1 1 auto", overflowY: "auto", WebkitOverflowScrolling: "touch", overscrollBehaviorY: "auto" }}>
-        {tab === "dashboard" && (
-          <Dashboard stats={stats} ipos={ipos} accounts={accounts} onOpenIpo={(id) => setIpoDetail(id)} onOpenHolding={(id) => setHoldingDetail(id)} />
-        )}
-        {tab === "ipos" && (
-          <IpoList ipos={ipos} accounts={accounts} onOpen={(id) => setIpoDetail(id)} />
-        )}
-        {tab === "accounts" && (
-          <AccountList transfers={transfers} accounts={accounts} ipos={ipos} onOpen={(id) => setAcctDetail(id)} />
-        )}
-        {tab === "transfers" && (
-          <TransfersScreen transfers={transfers} accounts={accounts} ipos={ipos}
-            onEdit={(transfer) => setTransferSheet({ transfer })}
-            onDelete={(id) => {
-              const gone = transfers.find((x) => x.id === id);
-              if (!gone) return;
-              const who = (aid) => accounts.find((a) => a.id === aid)?.name || "Unknown";
-              discard("transfer", gone, `${inr(gone.amount)} · ${who(gone.fromAccountId)} to ${who(gone.toAccountId)}`);
-              persistTransfers(transfers.filter((x) => x.id !== id));
-            }}
-          />
-        )}
+        ref={pagerRef}
+        onTouchStart={onSwipeStart}
+        onTouchMove={onSwipeMove}
+        onTouchEnd={onSwipeEnd}
+        onTouchCancel={onSwipeEnd}
+        style={{
+          position: "relative", flex: "1 1 auto", minHeight: 0,
+          overflow: "hidden", overscrollBehaviorX: "contain",
+        }}>
+        {/* Neither transform nor opacity is set from here: both are written
+            straight onto the node as the finger moves, and React would
+            overwrite them on its next render if it thought it owned them. */}
+        <div ref={pullRef} aria-hidden="true" style={{
+          position: "absolute", top: 10, left: "50%", zIndex: 6, pointerEvents: "none",
+          width: 34, height: 34, borderRadius: 17,
+          background: COLORS.surface, border: `1px solid ${COLORS.border}`,
+          boxShadow: "0 3px 10px rgba(0,0,0,0.14)",
+          display: "flex", alignItems: "center", justifyContent: "center",
+        }}>
+          {refreshing
+            ? <Loader2 size={16} color={COLORS.gold} className="spin" />
+            : <RefreshCw size={16} color={COLORS.gold} />}
+        </div>
+        {TABS.map((id, i) => {
+          // The screen you are on, plus the one you are swiping towards.
+          if (id !== tab && i !== TABS.indexOf(tab) + swipeDir) return null;
+          return (
+            <div
+              key={id}
+              ref={(el) => { if (el) pageRefs.current[id] = el; else delete pageRefs.current[id]; }}
+              className="ledger-scroll"
+              style={{
+                position: "absolute", inset: 0, overflowY: "auto", padding: "14px 14px 14px",
+                /* Contained, so pulling past the top is the ledger's own
+                   refresh rather than the browser's - which reloaded the whole
+                   app, and did it by accident as often as on purpose. */
+                WebkitOverflowScrolling: "touch", overscrollBehaviorY: "contain",
+                // Vertical scrolling stays the browser's; sideways is ours.
+                touchAction: "pan-y", willChange: "transform",
+              }}>
+              {id === "dashboard" && (
+                <Dashboard stats={stats} ipos={ipos} accounts={accounts} published={published} onOpenIpo={(x) => setIpoDetail(x)} onOpenHolding={(x) => setHoldingDetail(x)} />
+              )}
+              {id === "ipos" && (
+                <IpoList ipos={ipos} accounts={accounts} onOpen={(x) => setIpoDetail(x)} />
+              )}
+              {id === "accounts" && (
+                <AccountList transfers={transfers} accounts={accounts} ipos={ipos} onOpen={(x) => setAcctDetail(x)} />
+              )}
+              {id === "transfers" && (
+                <TransfersScreen transfers={transfers} accounts={accounts} ipos={ipos}
+                  onEdit={(transfer) => setTransferSheet({ transfer })}
+                  onDelete={(x) => {
+                    const gone = transfers.find((t) => t.id === x);
+                    if (!gone) return;
+                    const who = (aid) => accounts.find((a) => a.id === aid)?.name || "Unknown";
+                    discard("transfer", gone, `${inr(gone.amount)} · ${who(gone.fromAccountId)} to ${who(gone.toAccountId)}`);
+                    persistTransfers(transfers.filter((t) => t.id !== x));
+                  }}
+                />
+              )}
+            </div>
+          );
+        })}
       </div>
 
-      <BottomNav tab={tab} setTab={setTab} />
+      <BottomNav
+        tab={tab}
+        setTab={setTab}
+        /* Tapping the screen you are already on takes you back to the top of
+           it, which is the one thing a bottom bar is expected to do and the
+           only way back up a long list without scrolling all of it. */
+        onReselect={() => {
+          const el = pageRefs.current[tab];
+          if (!el) return;
+          if (el.scrollTo) el.scrollTo({ top: 0, behavior: reducedMotion ? "auto" : "smooth" });
+          else el.scrollTop = 0;
+        }}
+      />
 
       {ipoDetail && (
         <IpoDetailSheet
@@ -1941,6 +2456,7 @@ function AppInner() {
           onSaveNote={(id,noteValue)=>{ persistIpos(ipos.map((i)=>i.id===id?{...i,remarks:(noteValue||"").trimEnd()}:i)); }}
           onBulkApply={(ipoId) => { setBulkApplyFor(ipoId); }}
           onBulkStatus={(ipoId) => { setBulkStatusFor(ipoId); }}
+          onCheckAllotment={(ipoId) => { setAllotmentFor(ipoId); }}
           onEditApplication={(ipoId, application) => setAppSheet({ ipoId, application })}
           onDeleteApplication={(ipoId, appId) => {
             const owner = ipos.find((i) => i.id === ipoId);
@@ -2034,6 +2550,40 @@ function AppInner() {
         />
       )}
 
+      {allotmentFor && (
+        <AllotmentSheet
+          ipo={ipos.find((i) => i.id === allotmentFor)}
+          accounts={accounts}
+          onClose={() => { setAllotmentFor(null); backRef.current = { ...backRef.current, allotmentFor: null }; }}
+          onApply={(results) => {
+            /* Written per account, and only where the registrar actually
+               answered - an account it could not reach is left exactly as it
+               was rather than being recorded as rejected. The share count is
+               the registrar's; the status follows from it, with Partial kept
+               for the case where some of what was applied for came through. */
+            const byAccount = {};
+            results.forEach((r) => { if (r.accountId) byAccount[r.accountId] = r; });
+            persistIpos(ipos.map((i) => (i.id === allotmentFor
+              ? {
+                  ...i,
+                  applications: (i.applications || []).map((a) => {
+                    const hit = byAccount[a.accountId];
+                    if (!hit) return a;
+                    const status = hit.allotted <= 0 ? "Not Allotted"
+                      : hit.appliedQty > 0 && hit.allotted < hit.appliedQty ? "Partial"
+                      : "Allotted";
+                    return {
+                      ...a,
+                      sharesAllotted: hit.allotted > 0 ? String(hit.allotted) : "",
+                      allotmentStatus: status,
+                    };
+                  }),
+                }
+              : i)));
+          }}
+        />
+      )}
+
       {liveOpen && (
         <LiveIposSheet
           existing={ipos}
@@ -2066,6 +2616,14 @@ function AppInner() {
             const gone = accounts.find((x) => x.id === id);
             if (!gone) return;
             discard("account", gone, gone.name || "Unnamed account");
+            const goneName = accounts.find((x) => x.id === id)?.name || "";
+            if (goneName) {
+              persistIpos(ipos.map((i) => {
+                const apps = i.applications || [];
+                if (!apps.some((a) => a.accountId === id && !a.accountName)) return i;
+                return { ...i, applications: apps.map((a) => (a.accountId === id && !a.accountName ? { ...a, accountName: goneName } : a)) };
+              }));
+            }
             persistAccounts(accounts.filter((x) => x.id !== id));
             setAcctDetail(null);
           }}
@@ -2162,7 +2720,7 @@ function Bone({ w = "100%", h = 12, r = 6, style = {} }) {
    replacing a white one. */
 function LedgerSkeleton({ text, tab = "dashboard" }) {
   const titles = {
-    dashboard: "The Ledger", ipos: "IPOs", transfers: "Transfers", accounts: "Accounts",
+    dashboard: "Overview", ipos: "IPOs", transfers: "Transfers", accounts: "Accounts",
   };
   const items = [
     { id: "dashboard", label: "Overview" }, { id: "ipos", label: "IPOs" },
@@ -2187,16 +2745,19 @@ function LedgerSkeleton({ text, tab = "dashboard" }) {
         padding: "calc(18px + env(safe-area-inset-top)) 14px 14px",
         borderBottom: `3px double ${COLORS.gold}`,
       }}>
-        <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 700, fontSize: 21, color: "#fff" }}>
-          {titles[tab] || "The Ledger"}
+        {/* Title only, the same as the real header, or the two would differ in
+            height and the ledger would jump into place as it arrived. What is
+            being waited for is said below instead. */}
+        <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 700, fontSize: 21, color: "#fff", minHeight: 36, display: "flex", alignItems: "center" }}>
+          {titles[tab] || "Overview"}
         </div>
-        <div style={{
-          fontFamily: "'JetBrains Mono', monospace", fontSize: 10.5, color: COLORS.gold,
-          marginTop: 2, letterSpacing: 0.5,
-        }}>{text}</div>
       </div>
 
       <div style={{ padding: 14 }}>
+        <div style={{
+          fontFamily: "'JetBrains Mono', monospace", fontSize: 10.5, color: COLORS.gold,
+          letterSpacing: 0.5, marginBottom: 14,
+        }}>{text}</div>
         {isDashboard ? (
           <>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
@@ -2268,11 +2829,18 @@ function LedgerSkeleton({ text, tab = "dashboard" }) {
 /* ---------------------------------------------------------
    CHROME
 ---------------------------------------------------------- */
-function Header({ tab, onAdd, onOpenData, onFetchLive, syncing, syncError, cloudOn }) {
-  const titles = { dashboard: "The Ledger", ipos: "IPOs", accounts: "Accounts", transfers: "Transfers" };
+function Header({ tab, onAdd, onOpenData, onFetchLive, syncing, pricing, syncError, cloudOn }) {
+  /* The same word the bottom nav uses, on every screen. The app's own name is
+     on the home screen icon and in the manifest, which is where a name belongs;
+     spending a line of the header on it made Overview taller than the other
+     three, and the extra height showed as a jolt when the screens slid. */
+  const titles = { dashboard: "Overview", ipos: "IPOs", accounts: "Accounts", transfers: "Transfers" };
   const showAdd = tab !== "dashboard";
   const statusColor = !cloudOn ? COLORS.inkSoft : syncError ? COLORS.red : COLORS.gold;
-  const StatusIcon = !cloudOn ? CloudOff : syncing ? Loader2 : Settings;
+  /* Fetching prices is work the same as syncing is, and it is the only sign
+     that a pull to refresh is still going once the indicator has gone up. */
+  const busy = syncing || pricing;
+  const StatusIcon = busy ? Loader2 : !cloudOn ? CloudOff : Settings;
   return (
     <div style={{
       background: COLORS.navyDeep,
@@ -2282,16 +2850,13 @@ function Header({ tab, onAdd, onOpenData, onFetchLive, syncing, syncError, cloud
       rowGap: 10, columnGap: 8, borderBottom: `3px double ${COLORS.gold}`,
     }}>
       <div style={{ minWidth: 0, flexShrink: 1 }}>
-        <div style={{
+        {/* Keyed by tab so the node is replaced when the screen changes, which
+            replays the fade. Everything below the header slides; a title that
+            simply cut from one word to the next was the one thing that did not. */}
+        <div key={tab} className="ledger-title" style={{
           fontFamily: "'Fraunces', serif", fontWeight: 700, fontSize: 21, color: "#fff",
           whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
         }}>{titles[tab]}</div>
-        {tab === "dashboard" && (
-          <div style={{
-            fontFamily: "'JetBrains Mono', monospace", fontSize: 10.5, color: COLORS.gold,
-            marginTop: 2, letterSpacing: 0.5,
-          }}>FAMILY IPO REGISTER</div>
-        )}
       </div>
       <div style={{ display: "flex", gap: 8, flexShrink: 0, marginLeft: "auto" }}>
         {tab === "ipos" && (
@@ -2304,18 +2869,9 @@ function Header({ tab, onAdd, onOpenData, onFetchLive, syncing, syncError, cloud
             <span style={{ color: COLORS.gold, fontSize: 12, fontWeight: 600, fontFamily: "Inter, sans-serif", whiteSpace: "nowrap" }}>Add from exchange</span>
           </button>
         )}
-        <button
-          onClick={onOpenData}
-          aria-label="Sync and data"
-          title={!cloudOn ? "Cloud sync is off" : syncError ? "Sync problem" : syncing ? "Syncing..." : "Synced"}
-          style={{
-            width: 36, height: 36, borderRadius: 18, border: `1px solid ${statusColor}`,
-            background: "transparent", display: "flex", alignItems: "center", justifyContent: "center",
-            cursor: "pointer", flexShrink: 0,
-          }}
-        >
-          <StatusIcon size={17} color={statusColor} className={syncing ? "spin" : undefined} />
-        </button>
+        {/* Add comes first and sync last, so the one button that is on every
+            screen keeps the same corner. With them the other way round, sync
+            slid sideways whenever Overview dropped the add button. */}
         {showAdd && (
           <button onClick={onAdd} aria-label="Add" style={{
             width: 36, height: 36, borderRadius: 18, border: `1px solid ${COLORS.gold}`,
@@ -2323,12 +2879,24 @@ function Header({ tab, onAdd, onOpenData, onFetchLive, syncing, syncError, cloud
             cursor: "pointer", flexShrink: 0,
           }}><Plus size={18} color={COLORS.gold} /></button>
         )}
+        <button
+          onClick={onOpenData}
+          aria-label="Sync and data"
+          title={syncing ? "Syncing..." : pricing ? "Updating prices..." : !cloudOn ? "Cloud sync is off" : syncError ? "Sync problem" : "Synced"}
+          style={{
+            width: 36, height: 36, borderRadius: 18, border: `1px solid ${statusColor}`,
+            background: "transparent", display: "flex", alignItems: "center", justifyContent: "center",
+            cursor: "pointer", flexShrink: 0,
+          }}
+        >
+          <StatusIcon size={17} color={statusColor} className={busy ? "spin" : undefined} />
+        </button>
       </div>
     </div>
   );
 }
 
-function BottomNav({ tab, setTab }) {
+function BottomNav({ tab, setTab, onReselect }) {
   const items = [
     { id: "dashboard", label: "Overview", icon: LayoutDashboard },
     { id: "ipos", label: "IPOs", icon: Receipt },
@@ -2346,7 +2914,7 @@ function BottomNav({ tab, setTab }) {
       {items.map(({ id, label, icon: Icon }) => {
         const active = tab === id;
         return (
-          <button key={id} onClick={() => setTab(id)} style={{
+          <button key={id} aria-current={active ? "page" : undefined} onClick={() => (active ? onReselect && onReselect() : setTab(id))} style={{
             background: "none", border: "none", display: "flex", flexDirection: "column",
             alignItems: "center", gap: 4, cursor: "pointer", color: active ? COLORS.gold : "#8592A6",
             padding: "4px 10px",
@@ -2363,7 +2931,7 @@ function BottomNav({ tab, setTab }) {
 /* ---------------------------------------------------------
    SCREENS
 ---------------------------------------------------------- */
-function Dashboard({ stats, ipos, accounts, onOpenIpo, onOpenHolding }) {
+function Dashboard({ stats, ipos, accounts, published = [], onOpenIpo, onOpenHolding }) {
   const holding = ipos.filter((ipo) =>
     (ipo.applications || []).some((a) =>
       (a.allotmentStatus === "Allotted" || a.allotmentStatus === "Partial") && !a.sold
@@ -2383,16 +2951,25 @@ function Dashboard({ stats, ipos, accounts, onOpenIpo, onOpenHolding }) {
     const closing = [];
     const allotting = [];
     const listing = [];
+    const ready = ipos.filter((i) => published.includes(i.id));
     ipos.forEach((i) => {
       if (i.closeDate && i.closeDate === today) closing.push(i);
       if (awaitingAllotmentEntry(i)) allotting.push(i);
       const lists = i.listingDate || listingDateOf(i).date;
       if (lists && lists === today) listing.push(i);
     });
-    return { closing, allotting, listing };
-  }, [ipos, today]);
+    return { closing, allotting, listing, ready };
+  }, [ipos, today, published]);
 
   const lines = [
+    /* First, because it is the only one of these that has just become true and
+       can be acted on immediately - the registrar has the answer now. */
+    todo.ready.length && {
+      key: "ready",
+      text: `Allotment is out for ${todo.ready.length === 1 ? "1 issue" : todo.ready.length + " issues"}`,
+      detail: todo.ready.map((i) => i.company).join(", "),
+      tone: COLORS.green,
+    },
     todo.closing.length && {
       key: "closing",
       text: `${todo.closing.length === 1 ? "1 issue closes" : todo.closing.length + " issues close"} today`,
@@ -2415,9 +2992,9 @@ function Dashboard({ stats, ipos, accounts, onOpenIpo, onOpenHolding }) {
   return (
     <div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
-        <StatCard label="Capital Deployed" value={inr(stats.invested)} icon={Landmark} tone="navy" />
-        <StatCard label="Realized Gain" value={inr(stats.realized)} icon={stats.realized >= 0 ? TrendingUp : TrendingDown} tone={stats.realized >= 0 ? "green" : "red"} />
-        <StatCard label={marked ? "Unrealized (at today's price)" : "Unrealized (at listing)"} value={inr(stats.unrealized)} icon={stats.unrealized >= 0 ? TrendingUp : TrendingDown} tone={stats.unrealized >= 0 ? "green" : "red"} warning={stats.missingLtp > 0 ? `${stats.missingLtp} listed holding${stats.missingLtp === 1 ? "" : "s"} without a current price -- refresh to update` : ""} />
+        <StatCard label="Capital Deployed" value={inrShort(stats.invested)} full={inr(stats.invested)} icon={Landmark} tone="navy" />
+        <StatCard label="Realized Gain" value={inrShort(stats.realized)} full={inr(stats.realized)} icon={stats.realized >= 0 ? TrendingUp : TrendingDown} tone={stats.realized >= 0 ? "green" : "red"} />
+        <StatCard label={marked ? "Unrealized (at today's price)" : "Unrealized (at listing)"} value={inrShort(stats.unrealized)} full={inr(stats.unrealized)} icon={stats.unrealized >= 0 ? TrendingUp : TrendingDown} tone={stats.unrealized >= 0 ? "green" : "red"} warning={stats.missingLtp > 0 ? `${stats.missingLtp} listed holding${stats.missingLtp === 1 ? "" : "s"} without a current price -- refresh to update` : ""} />
         <StatCard label="Pending Allotment" value={stats.pendingCount} icon={Clock} tone="gold" />
       </div>
 
@@ -2529,7 +3106,7 @@ function Dashboard({ stats, ipos, accounts, onOpenIpo, onOpenHolding }) {
   );
 }
 
-function StatCard({ label, value, icon: Icon, tone, warning }) {
+function StatCard({ label, value, full, icon: Icon, tone, warning }) {
   const toneColor = { navy: COLORS.navy, green: COLORS.green, red: COLORS.red, gold: COLORS.gold }[tone];
   return (
     <div style={{
@@ -2539,7 +3116,7 @@ function StatCard({ label, value, icon: Icon, tone, warning }) {
       <div style={{ position: "absolute", top: 0, left: 0, width: 4, height: "100%", background: toneColor }} />
       <Icon size={16} color={toneColor} style={{ marginBottom: 8 }} />
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-        <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 18, fontWeight: 700, color: COLORS.ink }}>{value}</span>
+        <span title={full || undefined} style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 18, fontWeight: 700, color: COLORS.ink, whiteSpace: "nowrap" }}>{value}</span>
         {warning && <span title={warning} style={{ cursor: "help", fontSize: 14 }}>&#9888;</span>}
       </div>
       <div style={{ fontSize: 11, color: COLORS.inkSoft, marginTop: 2 }}>{label}</div>
@@ -2647,12 +3224,13 @@ function boardIsWorthAsking(boards) {
    two selects taking a row of their own. A list is mostly read, not filtered,
    so the row that is always there is the one you always use - and the panel
    has room to let you pick several filters at once, which a select never did. */
-function ListControls({ search, setSearch, placeholder, filters, filter, setFilter, sorts, sort, setSort, boards, board, toggleBoard,
-  accountOptions, accountFilter, setAccountFilter, accountFilterLabel }) {
+function ListControls({ search, setSearch, placeholder, filters, filter, setFilter, sorts, sort, setSort, boards, board, toggleBoard }) {
   const [open, setOpen] = useState(false);
-  const [acctQuery, setAcctQuery] = useState("");
   const panelRef = useRef(null);
   const buttonRef = useRef(null);
+
+  // Back closes this before it closes anything underneath it.
+  useBackLayer(open, () => setOpen(false));
 
   // Clicking away closes it, as a panel like this should.
   useEffect(() => {
@@ -2672,25 +3250,14 @@ function ListControls({ search, setSearch, placeholder, filters, filter, setFilt
 
   const chosen = Array.isArray(filter) ? filter : [];
   const sortLabel = (sorts.find((x) => x.id === sort) || {}).label || "";
-  const acctChosen = Array.isArray(accountFilter) ? accountFilter : [];
-  const hasAccounts = Array.isArray(accountOptions) && accountOptions.length > 0 && !!setAccountFilter;
   // "All" is the absence of a filter, so it is not something narrowing you to.
-  const narrowed = chosen.length + acctChosen.length;
+  const narrowed = chosen.length;
   const hasFilters = Array.isArray(filters) && filters.length > 0;
 
   const toggleFilter = (id) => {
     if (!setFilter) return;
     setFilter(chosen.includes(id) ? chosen.filter((f) => f !== id) : [...chosen, id]);
   };
-
-  const toggleAccount = (id) => {
-    if (!setAccountFilter) return;
-    setAccountFilter(acctChosen.includes(id) ? acctChosen.filter((a) => a !== id) : [...acctChosen, id]);
-  };
-
-  const acctShown = hasAccounts
-    ? accountOptions.filter((o) => o.label.toLowerCase().includes(acctQuery.trim().toLowerCase()))
-    : [];
 
   return (
     <div style={{ marginBottom: 12, position: "relative" }}>
@@ -2700,6 +3267,14 @@ function ListControls({ search, setSearch, placeholder, filters, filter, setFilt
             <Search size={15} color={COLORS.inkSoft} />
           </span>
           <Input
+            type="search"
+            /* So the phone offers a search key that closes the keyboard, and
+               does not try to autocorrect or capitalise a company name. */
+            enterKeyHint="search"
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="none"
+            spellCheck={false}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder={placeholder}
@@ -2779,51 +3354,6 @@ function ListControls({ search, setSearch, placeholder, filters, filter, setFilt
           </div>
           </>)}
 
-          {hasAccounts && (<>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-              <SectionLabel>{accountFilterLabel || "Account"}</SectionLabel>
-              {acctChosen.length > 0 && (
-                <button
-                  onClick={() => setAccountFilter([])}
-                  style={{ ...chipBase, padding: "4px 9px", fontSize: 11 }}
-                >Clear</button>
-              )}
-            </div>
-            {accountOptions.length > 6 && (
-              <div style={{ position: "relative", marginBottom: 8 }}>
-                <Input
-                  value={acctQuery}
-                  onChange={(e) => setAcctQuery(e.target.value)}
-                  placeholder="Search account name"
-                  style={{ paddingRight: acctQuery ? 30 : 10, minHeight: 38, fontSize: 13 }}
-                />
-                {acctQuery && (
-                  <button onClick={() => setAcctQuery("")} aria-label="Clear account search" style={{
-                    position: "absolute", right: 6, top: "50%", transform: "translateY(-50%)",
-                    background: "none", border: "none", padding: 4, cursor: "pointer", display: "flex",
-                  }}><X size={13} color={COLORS.inkSoft} /></button>
-                )}
-              </div>
-            )}
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 14, maxHeight: 148, overflowY: "auto" }}>
-              {acctShown.length === 0 ? (
-                <span style={{ fontSize: 12, color: COLORS.inkSoft }}>No matching accounts.</span>
-              ) : acctShown.map((o) => {
-                const on = acctChosen.includes(o.id);
-                return (
-                  <button
-                    key={o.id}
-                    onClick={() => toggleAccount(o.id)}
-                    aria-pressed={on}
-                    style={{ ...chipBase, padding: "6px 10px", ...(on ? chipOn : null) }}
-                  >
-                    {o.label}{o.count != null ? ` ${o.count}` : ""}
-                  </button>
-                );
-              })}
-            </div>
-          </>)}
-
           <SectionLabel>Order</SectionLabel>
           <div style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: 6 }}>
             {sorts.map((o) => {
@@ -2855,23 +3385,18 @@ function ListControls({ search, setSearch, placeholder, filters, filter, setFilt
 function IpoList({ ipos, accounts, onOpen }) {
   const [search, setSearch] = useState("");
   /* No filters chosen means everything, so there is no "All" to select - an
-     empty selection is what All meant. Several may be on at once. These choices
-     persist across reloads, so the list you set up is the list you come back to
-     until you change or clear it. */
-  const [filter, setFilter] = usePersistedState("ipoFilter", []);
-  /* Which accounts to narrow to: an IPO shows only if it has an application from
-     one of the chosen accounts. Empty means every account. Persisted too. */
-  const [acctFilter, setAcctFilter] = usePersistedState("ipoAcctFilter", []);
+     empty selection is what All meant. Several may be on at once. */
+  const [filter, setFilter] = useState([]);
   /* Which boards are showing. Mainboard is what this ledger is mostly made of,
      so that is where it opens; both can be on at once, and never neither. */
-  const [board, setBoard] = usePersistedState("ipoBoard", ["Mainboard"]);
+  const [board, setBoard] = useState(["Mainboard"]);
   const toggleBoard = (id) =>
     setBoard((cur) =>
       cur.includes(id)
         ? (cur.length === 1 ? cur : cur.filter((b) => b !== id))   // never nothing
         : [...cur, id]
     );
-  const [sort, setSort] = usePersistedState("ipoSort", "recent");
+  const [sort, setSort] = useState("recent");
 
   /* Status counts follow the board in view, so a chip never promises rows the
      board filter is about to hide. The board counts stay whole. */
@@ -2901,24 +3426,6 @@ function IpoList({ ipos, accounts, onOpen }) {
     return c;
   }, [ipos]);
 
-  /* Accounts you can narrow the list to, each with how many IPOs on the current
-     board carry an application from it. Only accounts that have actually applied
-     are offered (plus any already chosen, so a board switch never drops your
-     selection off the list). Most-active first. */
-  const acctOptions = useMemo(() => {
-    const c = {};
-    onBoard.forEach((i) => {
-      const seen = new Set();
-      (i.applications || []).forEach((a) => {
-        if (a.accountId && !seen.has(a.accountId)) { seen.add(a.accountId); c[a.accountId] = (c[a.accountId] || 0) + 1; }
-      });
-    });
-    return accounts
-      .map((a) => ({ id: a.id, label: a.name || "Unnamed", count: c[a.id] || 0 }))
-      .filter((o) => o.count > 0 || acctFilter.includes(o.id))
-      .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
-  }, [onBoard, accounts, acctFilter]);
-
   /* An SME-only ledger would open on an empty screen, so the default gives way
      to whatever is actually there. */
   useEffect(() => {
@@ -2942,8 +3449,6 @@ function IpoList({ ipos, accounts, onOpen }) {
     return onBoard
       .filter((i) => {
         if (q && !`${i.company || ""} ${i.symbol || ""}`.toLowerCase().includes(q)) return false;
-        // Narrow to IPOs applied from one of the chosen accounts, if any are set.
-        if (acctFilter.length && !(i.applications || []).some((a) => acctFilter.includes(a.accountId))) return false;
         if (!filter.length) return true;
         // Any of the chosen filters, not all of them: they name kinds, not tests.
         return filter.some((f) => {
@@ -2959,7 +3464,7 @@ function IpoList({ ipos, accounts, onOpen }) {
         });
       })
       .sort(cmp);
-  }, [onBoard, search, filter, acctFilter, sort]);
+  }, [onBoard, search, filter, sort]);
 
   if (ipos.length === 0) return <EmptyState text="No IPOs yet. Use 'Add from exchange' above to sync IPOs." icon={Receipt} subtitle="Track applications, allotments and returns across your family." />;
 
@@ -2976,8 +3481,6 @@ function IpoList({ ipos, accounts, onOpen }) {
           { id: "listed", label: "Listed", count: counts.listed },
           { id: "incomplete", label: "Needs details", count: counts.incomplete },
         ]}
-        accountFilter={acctFilter} setAccountFilter={setAcctFilter}
-        accountOptions={acctOptions} accountFilterLabel="Applied from account"
         boards={[
           { id: "Mainboard", label: "Mainboard", count: boardCounts.Mainboard },
           { id: "SME", label: "SME", count: boardCounts.SME },
@@ -3056,6 +3559,48 @@ function ipoBucket(ipo) {
 }
 
 const panOf = (account) => (account?.pan || "").trim().toUpperCase();
+
+/* Everyone here is on first-name terms, and the on-behalf-of line names three
+   people in a row - it only fits, and only reads like a sentence, short. */
+const firstNameOf = (name) => String(name || "").trim().split(/\s+/)[0] || "";
+
+/* Deleting an account deliberately leaves its applications on their IPOs - the
+   money was applied and the totals still count it - but the name went with the
+   account, and every one of those rows then read "Unknown". The name is copied
+   onto the applications as the account goes, so they can still say whose they
+   were. Anything from before this keeps saying Unknown, which is the truth
+   about it. */
+const accountLabel = (accounts, app) => {
+  const live = accounts.find((a) => a.id === app?.accountId);
+  if (live) return live.name || "Unnamed account";
+  return app?.accountName ? app.accountName + " (deleted)" : "Unknown account";
+};
+
+/* Worth offering only once the registrar could plausibly have an answer. They
+   publish on the evening of allotment day, so the day itself is the earliest
+   there is any point asking - and before that the sheet could only ever say
+   it was not listed, which reads as a fault rather than as "too early". */
+function allotmentCheckable(ipo) {
+  if (!(ipo?.applications || []).length) return false;
+  const { date } = allotmentDateOf(ipo);
+  return !!date && date <= todayISO();
+}
+
+/* Registrars write themselves out at full legal length. The short name is what
+   anyone actually calls them, and it is what the allotment check reports back,
+   so the two agree. An unrecognised one is shown as it came. */
+const REGISTRAR_NAMES = [
+  [/kfin/i, "KFintech"], [/mufg|link\s*intime|mpms/i, "MUFG Intime"],
+  [/bigshare/i, "Bigshare"], [/cameo/i, "Cameo"], [/skyline/i, "Skyline"],
+  [/maashitla/i, "Maashitla"], [/purva/i, "Purva Sharegistry"],
+  [/integrated/i, "Integrated Registry"], [/\bmas\b/i, "MAS Services"],
+];
+const registrarLabel = (name) => {
+  const hit = REGISTRAR_NAMES.find(([re]) => re.test(String(name || "")));
+  return hit ? hit[1] : String(name || "");
+};
+// The two that answer without a captcha - see api/allotment.js.
+const registrarReachable = (name) => /kfin|mufg|link\s*intime|mpms/i.test(String(name || ""));
 
 /* One PAN may submit only one application per IPO - a duplicate gets every
    application under that PAN rejected, not just the extra one. Worth catching. */
@@ -3207,7 +3752,7 @@ function IpoCard({ ipo, accounts, onClick }) {
    rather than fit inside it. */
 
 
-function IpoDetailSheet({ ipo, accounts, onClose, onDeleteIpo, onEditIpo, onSaveNote, onAddApplication, onBulkApply, onBulkStatus, onEditApplication, onDeleteApplication }) {
+function IpoDetailSheet({ ipo, accounts, onClose, onDeleteIpo, onEditIpo, onSaveNote, onAddApplication, onBulkApply, onBulkStatus, onCheckAllotment, onEditApplication, onDeleteApplication }) {
   const confirm = useConfirm();
   if (!ipo) return null;
   const apps = ipo.applications || [];
@@ -3271,6 +3816,15 @@ function IpoDetailSheet({ ipo, accounts, onClose, onDeleteIpo, onEditIpo, onSave
         <DateCell label="Allotment" value={allotValue} />
         <DateCell label="Listing" value={listValue} />
       </div>
+      {ipo.registrar && (
+        <div style={{
+          display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10,
+          marginBottom: 16, fontFamily: "Inter, sans-serif",
+        }}>
+          <span style={{ fontSize: 11, color: COLORS.inkSoft, textTransform: "uppercase", letterSpacing: 0.6, fontWeight: 600, flexShrink: 0 }}>Registrar</span>
+          <span title={ipo.registrar} style={{ fontSize: 12.5, color: COLORS.ink, fontWeight: 600, minWidth: 0, textAlign: "right", ...ellipsisText }}>{registrarLabel(ipo.registrar)}</span>
+        </div>
+      )}
       <div style={{ marginBottom: 16 }}>
         <SectionLabel>Note</SectionLabel>
         <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={3} placeholder="Add a personal note about this IPO" aria-label="IPO note" style={{ ...inputStyle, resize: "vertical", marginTop: 6 }} />
@@ -3327,6 +3881,17 @@ function IpoDetailSheet({ ipo, accounts, onClose, onDeleteIpo, onEditIpo, onSave
           padding: "11px 10px", fontSize: 12.5, fontWeight: 600,
           cursor: apps.length ? "pointer" : "default", opacity: apps.length ? 1 : 0.6,
         }}><ClipboardCheck size={14} color={apps.length ? COLORS.ink : COLORS.inkSoft} /> Record allotment</button>
+        {/* The registrar knows the answer; there is no reason to type it in.
+            Shown only once there is something to apply for and a day on which
+            an answer could exist - see allotmentCheckable. */}
+        {allotmentCheckable(ipo) && (
+          <button onClick={() => onCheckAllotment(ipo.id)} style={{
+            flex: 1, minHeight: 44, borderRadius: 10, border: `1px solid ${COLORS.gold}`,
+            background: COLORS.goldSoft, color: COLORS.ink, fontSize: 13, fontWeight: 600,
+            cursor: "pointer", fontFamily: "Inter, sans-serif",
+            display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+          }}><Sparkles size={14} color={COLORS.gold} /> Check allotment</button>
+        )}
       </div>
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
@@ -3362,7 +3927,8 @@ function ApplicationRow({ app, ipo, accounts, onEdit, onDelete }) {
     const mark = valuationPrice(ipo);
     if (mark) pnl = shares * (mark - price);
   }
-  const accountName = accounts.find((a) => a.id === app.accountId)?.name;
+  const liveAccount = accounts.find((a) => a.id === app.accountId);
+  const accountName = liveAccount?.name;
   const strongStatus = app.allotmentStatus === "Allotted" || app.allotmentStatus === "Not Allotted";
   return (
     <div style={{
@@ -3370,9 +3936,10 @@ function ApplicationRow({ app, ipo, accounts, onEdit, onDelete }) {
     }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
         <div style={{ minWidth: 0, flex: 1 }}>
-          <div style={{ fontFamily: "Inter, sans-serif", fontWeight: 600, fontSize: 14, color: COLORS.ink }}>
-            {accountName || "Unknown account"}
-          </div>
+          <div title={accountLabel(accounts, app)} style={{
+            fontFamily: "Inter, sans-serif", fontWeight: 600, fontSize: 14,
+            color: liveAccount ? COLORS.ink : COLORS.inkSoft, ...ellipsisText,
+          }}>{accountLabel(accounts, app)}</div>
           {app.appliedFor && app.appliedFor !== accountName && (
             <div style={{ fontSize: 11.5, color: COLORS.inkSoft, fontFamily: "Inter, sans-serif" }}>on behalf of {app.appliedFor}</div>
           )}
@@ -3391,7 +3958,7 @@ function ApplicationRow({ app, ipo, accounts, onEdit, onDelete }) {
           </span>
         )}
       </div>
-      {app.remarks && <div style={{ fontSize: 11.5, color: COLORS.inkSoft, marginTop: 4, fontFamily: "Inter, sans-serif", fontStyle: "italic" }}>"{app.remarks}"</div>}
+      {app.remarks && <div title={app.remarks} style={{ fontSize: 11.5, color: COLORS.inkSoft, marginTop: 4, fontFamily: "Inter, sans-serif", fontStyle: "italic", ...ellipsisText }}>"{app.remarks}"</div>}
     </div>
   );
 }
@@ -3436,9 +4003,7 @@ function AccountList({ accounts, ipos, transfers = [], onOpen }) {
     const apps = ipos.reduce(
       (n, i) => n + (i.applications || []).filter((a) => a.accountId === acc.id).length, 0
     );
-    const moves = transfers.filter(
-      (t) => t.fromAccountId === acc.id || t.toAccountId === acc.id
-    ).length;
+    const moves = transfers.filter((t) => touchesAccount(t, acc.id)).length;
     if (!apps && !moves) {
       return confirm(`Delete ${acc.name || "this account"}?`);
     }
@@ -3501,9 +4066,9 @@ function AccountList({ accounts, ipos, transfers = [], onOpen }) {
                 borderRadius: 12, padding: "12px 14px", cursor: "pointer",
                 display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10,
               }}>
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 600, fontSize: 15.5, color: COLORS.heading }}>{acc.name}</div>
-                  <div style={{ fontSize: 12, color: COLORS.inkSoft, marginTop: 2 }}>
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ fontFamily: "'Fraunces', serif", fontWeight: 600, fontSize: 15.5, color: COLORS.heading, ...ellipsisText }}>{acc.name}</div>
+                  <div style={{ fontSize: 12, color: COLORS.inkSoft, marginTop: 2, ...ellipsisText }}>
                     {acc.relation || "Self"}{acc.bank ? ` · ${acc.bank}` : ""}
                   </div>
                   <div style={{
@@ -3515,9 +4080,8 @@ function AccountList({ accounts, ipos, transfers = [], onOpen }) {
                     {pan
                       ? <span style={{ color: isDup ? COLORS.red : COLORS.inkSoft }}>{pan}{isDup ? " · duplicate" : ""}</span>
                       : <span style={{ color: COLORS.gold }}>no PAN</span>}
-                    {acc.excludeFromApply && <span style={{ color: COLORS.inkSoft }}>· not in apply</span>}
                   </div>
-                  {acc.notes && <div style={{ fontSize: 11.5, color: COLORS.inkSoft, marginTop: 4, fontStyle: "italic" }}>{acc.notes}</div>}
+                  {acc.notes && <div title={acc.notes} style={{ fontSize: 11.5, color: COLORS.inkSoft, marginTop: 4, fontStyle: "italic", ...ellipsisText }}>{acc.notes}</div>}
                 </div>
                 <ChevronRight size={14} color={COLORS.inkSoft} style={{ flexShrink: 0 }} />
               </div>
@@ -3581,7 +4145,7 @@ function HoldingDetailSheet({ ipo, accounts, onClose }) {
       <SectionLabel>Holding Accounts ({holdingApps.length})</SectionLabel>
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {holdingApps.map((app) => {
-          const accountName = accounts.find((a) => a.id === app.accountId)?.name || "Unknown";
+          const accountName = accountLabel(accounts, app);
           const shares = Number(app.sharesAllotted) || 0;
           const lots = Math.round(shares / lotSize) || 1;
           const appPnl = currentPrice > 0 ? shares * (currentPrice - entryPrice) : 0;
@@ -3642,7 +4206,7 @@ function AccountDetailSheet({ account, ipos, transfers, accounts, onClose, onEdi
   }, [apps]);
 
   const acctTransfers = useMemo(() =>
-    transfers.filter((t) => t.fromAccountId === account.id || t.toAccountId === account.id)
+    transfers.filter((t) => touchesAccount(t, account.id))
       .sort((a, b) => (b.date || "").localeCompare(a.date || "")),
     [account.id, transfers]
   );
@@ -3662,7 +4226,7 @@ function AccountDetailSheet({ account, ipos, transfers, accounts, onClose, onEdi
         </button>
       </div>
       {account.notes && (
-        <div style={{ fontSize: 12.5, color: COLORS.inkSoft, fontFamily: "Inter, sans-serif", fontStyle: "italic", marginBottom: 14 }}>
+        <div style={{ fontSize: 12.5, color: COLORS.inkSoft, fontFamily: "Inter, sans-serif", fontStyle: "italic", marginBottom: 14, ...wrapText }}>
           "{account.notes}"
         </div>
       )}
@@ -3726,16 +4290,34 @@ function AccountDetailSheet({ account, ipos, transfers, accounts, onClose, onEdi
           <SectionLabel>Fund Transfers ({acctTransfers.length})</SectionLabel>
           <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
             {acctTransfers.map((t) => {
-              const from = accounts.find((a) => a.id === t.fromAccountId)?.name || "Unknown";
-              const to = accounts.find((a) => a.id === t.toAccountId)?.name || "Unknown";
-              const isOutgoing = t.fromAccountId === account.id;
+              const nameOf = (id) => accounts.find((a) => a.id === id)?.name || "Unknown";
+              const from = nameOf(t.fromAccountId);
+              const to = nameOf(t.toAccountId);
+/* Three ways an account can appear on a transfer, and the
+                 middle one is worth nothing to it either way. Whoever paid is
+                 out of pocket and whoever received it owes; the one it was done
+                 for is owed the same amount afterwards as before, only by
+                 somebody else, so it shows without a sign. */
+              const via = firstNameOf(nameOf(t.onBehalfOfId));
+              const payer = t.fromAccountId === account.id;
+              const receiver = t.toAccountId === account.id;
+              const bearer = !payer && !receiver && t.onBehalfOfId === account.id;
+              const heading = bearer ? `${from} -> ${to}` : payer ? `To ${to}` : `From ${from}`;
+              const behalf = !t.onBehalfOfId ? ""
+                : bearer ? "on your behalf, settling between them"
+                : payer ? `counts against ${via}`
+                : `owed to ${via}`;
               return (
                 <div key={t.id} style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: "8px 10px", fontFamily: "Inter, sans-serif", fontSize: 12.5 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <span style={{ color: COLORS.ink, fontWeight: 600 }}>{isOutgoing ? `To ${to}` : `From ${from}`}</span>
-                    <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, color: isOutgoing ? COLORS.red : COLORS.green }}>{isOutgoing ? "-" : "+"}{inrOrDash(t.amount)}</span>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                    <span style={{ color: COLORS.ink, fontWeight: 600 }}>{heading}</span>
+                    <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, flexShrink: 0, color: bearer ? COLORS.inkSoft : payer ? COLORS.red : COLORS.green }}>{bearer ? "" : payer ? "-" : "+"}{inrOrDash(t.amount)}</span>
                   </div>
-                  <div style={{ fontSize: 11, color: COLORS.inkSoft, marginTop: 2 }}>{fmtDate(t.date)}{t.remarks ? ` · ${t.remarks}` : ""}</div>
+                  <div title={t.remarks || undefined} style={{ fontSize: 11, color: COLORS.inkSoft, marginTop: 2, ...ellipsisText }}>
+                    {fmtDate(t.date)}
+                    {behalf ? <span style={{ color: COLORS.gold, fontWeight: 600 }}> · {behalf}</span> : null}
+                    {t.remarks ? ` · ${t.remarks}` : ""}
+                  </div>
                 </div>
               );
             })}
@@ -3784,8 +4366,10 @@ function ReconciliationView({ transfers, accounts }) {
     accounts.forEach((a) => { map[a.id] = 0; });
     transfers.forEach((t) => {
       const amt = Number(t.amount) || 0;
-      map[t.fromAccountId] = (map[t.fromAccountId] || 0) + amt;
-      map[t.toAccountId] = (map[t.toAccountId] || 0) - amt;
+      transferLegs(t).forEach(([x, y]) => {
+        map[x] = (map[x] || 0) + amt;
+        map[y] = (map[y] || 0) - amt;
+      });
     });
     return accounts.map((a) => ({ id: a.id, name: a.name, net: map[a.id] || 0 }))
       .filter((x) => x.net !== 0)
@@ -3796,11 +4380,12 @@ function ReconciliationView({ transfers, accounts }) {
     const map = {};
     transfers.forEach((t) => {
       const amt = Number(t.amount) || 0;
-      const [x, y] = [t.fromAccountId, t.toAccountId];
-      if (!x || !y || x === y) return;
-      const key = x < y ? `${x}|${y}` : `${y}|${x}`;
-      const sign = x < y ? 1 : -1;
-      map[key] = (map[key] || 0) + sign * amt;
+      transferLegs(t).forEach(([x, y]) => {
+        if (!x || !y || x === y) return;
+        const key = x < y ? `${x}|${y}` : `${y}|${x}`;
+        const sign = x < y ? 1 : -1;
+        map[key] = (map[key] || 0) + sign * amt;
+      });
     });
     return Object.entries(map)
       .map(([key, net]) => {
@@ -3884,7 +4469,7 @@ function TransferList({ transfers, accounts, ipos = [], onEdit, onDelete }) {
     return transfers
       .filter((t) => {
         if (q) {
-          const hay = `${name(t.fromAccountId)} ${name(t.toAccountId)} ${t.remarks || ""} ${ipoName(t.relatedIpoId)} ${(t.relatedIpoIds || []).map(ipoName).join(" ")}`.toLowerCase();
+          const hay = `${name(t.fromAccountId)} ${name(t.toAccountId)} ${t.onBehalfOfId ? name(t.onBehalfOfId) : ""} ${t.remarks || ""} ${ipoName(t.relatedIpoId)} ${(t.relatedIpoIds || []).map(ipoName).join(" ")}`.toLowerCase();
           if (!hay.includes(q)) return false;
         }
         return true;
@@ -3936,6 +4521,9 @@ function TransferList({ transfers, accounts, ipos = [], onEdit, onDelete }) {
               }}
             >
               {fmtDate(t.date)}
+              {/* Who the money was really for. Kept off the headline, which
+                  stays the movement you would find on a bank statement. */}
+              {t.onBehalfOfId ? <span style={{ color: COLORS.gold, fontWeight: 600 }}> · for {firstNameOf(name(t.onBehalfOfId))}</span> : null}
               {t.remarks ? <span style={{ fontStyle: "italic" }}> · "{t.remarks}"</span> : null}
             </div>
           </div>
@@ -4093,15 +4681,10 @@ function IpoFormSheet({ initial, onClose, onSave }) {
 }
 
 function ApplicationFormSheet({ initial, ipo, accounts, onClose, onSave }) {
-  /* Accounts flagged out of the Apply IPO list are not offered when starting a
-     new application. An account already recorded on an application being edited
-     stays selectable, so an old record never silently loses its holder. */
-  const applyable = accounts.filter((a) => !a.excludeFromApply);
   const [f, setF] = useState(initial || {
-    id: undefined, accountId: applyable[0]?.id || "", appliedFor: "", lots: "1", amountBlocked: "",
+    id: undefined, accountId: accounts[0]?.id || "", appliedFor: "", lots: "1", amountBlocked: "",
     allotmentStatus: "Pending", sharesAllotted: "", sold: false, sellPrice: "", sellDate: "", remarks: "",
   });
-  const accountOptions = accounts.filter((a) => !a.excludeFromApply || a.id === f.accountId);
   const [errors, setErrors] = useState({});
   const set = (k) => (e) => { setF({ ...f, [k]: e.target.value }); if (errors[k]) setErrors((prev) => ({ ...prev, [k]: "" })); };
   const setBool = (k) => (e) => setF({ ...f, [k]: e.target.checked });
@@ -4139,8 +4722,8 @@ function ApplicationFormSheet({ initial, ipo, accounts, onClose, onSave }) {
     <Sheet title={initial ? "Edit Application" : "New Application"} onClose={onClose}>
       <Field label="Applied From Account" error={errors.accountId}>
         <Select value={f.accountId} onChange={set("accountId")}>
-          {accountOptions.length === 0 && <option value="">Add an account first</option>}
-          {accountOptions.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+          {accounts.length === 0 && <option value="">Add an account first</option>}
+          {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
         </Select>
       </Field>
       <Field label="Applied For (beneficiary name)">
@@ -4208,7 +4791,7 @@ function ApplicationFormSheet({ initial, ipo, accounts, onClose, onSave }) {
 const PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 
 function AccountFormSheet({ initial, accounts = [], onClose, onSave }) {
-  const [f, setF] = useState(initial || { id: undefined, name: "", relation: "", bank: "", pan: "", notes: "", excludeFromApply: false });
+  const [f, setF] = useState(initial || { id: undefined, name: "", relation: "", bank: "", pan: "", notes: "" });
   const [errors, setErrors] = useState({});
   const set = (k) => (e) => { setF({ ...f, [k]: e.target.value }); if (errors[k]) setErrors((prev) => ({ ...prev, [k]: "" })); };
 
@@ -4246,25 +4829,9 @@ function AccountFormSheet({ initial, accounts = [], onClose, onSave }) {
         </div>
       )}
       <Field label="Notes"><textarea value={f.notes} onChange={set("notes")} rows={2} style={{ ...inputStyle, resize: "vertical" }} /></Field>
-      <Field label="Apply IPOs from this account?">
-        <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 14, minHeight: 44, cursor: "pointer" }}>
-          <input
-            type="checkbox"
-            checked={!f.excludeFromApply}
-            onChange={(e) => setF({ ...f, excludeFromApply: !e.target.checked })}
-            style={{ width: 18, height: 18, flexShrink: 0, marginTop: 2 }}
-          />
-          <span style={{ color: COLORS.ink }}>
-            Show this account in the Apply IPO list
-            <span style={{ display: "block", fontSize: 11.5, color: COLORS.inkSoft, marginTop: 2 }}>
-              Turn this off to keep the account out of the Apply IPO list. It still appears everywhere else - holdings, transfers, allotment results and its own history.
-            </span>
-          </span>
-        </label>
-      </Field>
       <PrimaryButton onClick={() => {
         if (!f.name) return setErrors({ name: "Name is required" });
-        onSave(trimFields({ ...f, pan, excludeFromApply: !!f.excludeFromApply, id: f.id || uid() }));
+        onSave(trimFields({ ...f, pan, id: f.id || uid() }));
       }}>
         {initial ? "Save Changes" : "Add Account"}
       </PrimaryButton>
@@ -4281,13 +4848,18 @@ function TransferFormSheet({ initial, accounts, ipos, onClose, onSave, onDelete 
   const [f, setF] = useState({
     ...(initial || {
       id: undefined, fromAccountId: accounts[0]?.id || "", toAccountId: accounts[1]?.id || accounts[0]?.id || "",
-      amount: "", date: todayISO(), remarks: "",
+      amount: "", date: todayISO(), remarks: "", onBehalfOfId: "",
     }),
+    onBehalfOfId: initial?.onBehalfOfId || "",
     relatedIpoIds: initIds,
   });
   const change = (k) => (e) => {
     const v = e.target.value;
     const next = { ...f, [k]: v };
+    /* Neither end of a transfer can also be the one it was made for - a hop to
+       itself is no hop - so picking either drops the name rather than leaving
+       the field pointing at a choice it no longer offers. */
+    if ((k === "fromAccountId" || k === "toAccountId") && v === next.onBehalfOfId) next.onBehalfOfId = "";
     setF(next);
     const errs = {};
     if (k === "fromAccountId" || k === "toAccountId") {
@@ -4322,6 +4894,10 @@ function TransferFormSheet({ initial, accounts, ipos, onClose, onSave, onDelete 
   const addIpo = (id) => { setF((prev) => ({ ...prev, relatedIpoIds: [...prev.relatedIpoIds, id] })); setIpoSearch(""); };
   const removeIpo = (id) => { setF((prev) => ({ ...prev, relatedIpoIds: prev.relatedIpoIds.filter((x) => x !== id) })); };
   const ipoNameOf = (id) => ipos.find((i) => i.id === id)?.company || "Unknown IPO";
+  const name = (id) => accounts.find((a) => a.id === id)?.name || "";
+  // Just the first name in the chain below: three full names do not fit a line,
+  // and within one family the first name is the whole of what distinguishes them.
+  const firstName = (id) => firstNameOf(name(id));
 
   return (
     <Sheet title={initial ? "Edit Transfer" : "New Transfer"} onClose={onClose}>
@@ -4335,6 +4911,21 @@ function TransferFormSheet({ initial, accounts, ipos, onClose, onSave, onDelete 
           {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
         </Select>
       </Field>
+      {/* Whose money it really was. Left blank - which is every transfer that
+          was ever recorded before this existed - the sender keeps the claim. */}
+      <Field label="On Behalf Of (optional)">
+        <Select value={f.onBehalfOfId} onChange={change("onBehalfOfId")}>
+          <option value="">Nobody - {name(f.fromAccountId) || "the sender"} is owed this</option>
+          {accounts.filter((a) => a.id !== f.fromAccountId && a.id !== f.toAccountId).map((a) => (
+            <option key={a.id} value={a.id}>{a.name}</option>
+          ))}
+        </Select>
+        {f.onBehalfOfId && f.onBehalfOfId !== f.fromAccountId && f.onBehalfOfId !== f.toAccountId && (
+          <div style={{ fontSize: 11.5, color: COLORS.inkSoft, marginTop: 6, fontFamily: "Inter, sans-serif" }}>
+            Counts as {firstName(f.fromAccountId)} → <strong style={{ color: COLORS.ink }}>{firstName(f.onBehalfOfId)}</strong> → {firstName(f.toAccountId)}
+          </div>
+        )}
+      </Field>
       <div style={{ display: "flex", gap: 10 }}>
         <div style={{ flex: 1 }}><Field label="Amount (₹)" error={errors.amount}><Input type="number" inputMode="numeric" value={f.amount} onChange={change("amount")} /></Field></div>
         <div style={{ flex: 1 }}><Field label="Date" error={errors.date}><Input type="date" value={f.date} onChange={change("date")} /></Field></div>
@@ -4347,8 +4938,8 @@ function TransferFormSheet({ initial, accounts, ipos, onClose, onSave, onDelete 
                 background: COLORS.chip, color: COLORS.navy, border: `1px solid ${COLORS.border}`,
                 borderRadius: 999, padding: "3px 8px", fontSize: 11, fontWeight: 600,
                 fontFamily: "Inter, sans-serif", cursor: "pointer", display: "inline-flex",
-                alignItems: "center", gap: 4, whiteSpace: "nowrap",
-              }}>{ipoNameOf(id)} <X size={10} color={COLORS.inkSoft} /></span>
+                alignItems: "center", gap: 4, maxWidth: "100%",
+              }}><span style={{ ...ellipsisText, minWidth: 0 }}>{ipoNameOf(id)}</span> <X size={10} color={COLORS.inkSoft} style={{ flexShrink: 0 }} /></span>
             ))}
           </div>
         )}
@@ -4394,7 +4985,10 @@ function TransferFormSheet({ initial, accounts, ipos, onClose, onSave, onDelete 
         if (!f.amount || Number(f.amount) <= 0) e.amount = "Must be greater than 0";
         if (!f.date) e.date = "Required";
         if (Object.keys(e).length) return setErrors(e);
-        onSave(trimFields({ ...f, relatedIpoId: f.relatedIpoIds[0] || "", id: f.id || uid() }));
+        // Naming either end is the same as naming nobody; store it as nobody.
+        const onBehalfOfId =
+          (f.onBehalfOfId === f.fromAccountId || f.onBehalfOfId === f.toAccountId) ? "" : f.onBehalfOfId;
+        onSave(trimFields({ ...f, onBehalfOfId, relatedIpoId: f.relatedIpoIds[0] || "", id: f.id || uid() }));
       }}>
         {initial ? "Save Changes" : "Add Transfer"}
       </PrimaryButton>
@@ -4485,6 +5079,13 @@ function DataSheet({ state, session, cloudOn, syncing, syncError, lastSync, onCl
           </>
         )}
         <div style={{ fontSize: 11.5, color: COLORS.inkSoft, marginTop: 6, fontFamily: "'JetBrains Mono', monospace" }}>{counts}</div>
+        {/* Which build this actually is. An installed app keeps running the
+            bundle it started with however often the site is redeployed, so
+            without this there is no way to tell a fixed bug from a stale one
+            except by guessing at deployment times. */}
+        <div style={{ fontSize: 11.5, color: COLORS.inkSoft, marginTop: 4, fontFamily: "'JetBrains Mono', monospace" }}>
+          build {BUILD_ID}
+        </div>
       </div>
 
       {cloudOn && (
@@ -4757,10 +5358,7 @@ function BulkApplySheet({ ipo, accounts, onClose, onSave }) {
   );
   const usedPans = useMemo(() => pansUsedIn(ipo, accounts), [ipo, accounts]);
 
-  // Accounts flagged "don't apply from here" are kept out of the apply list;
-  // they still show everywhere else in the ledger.
-  const available = accounts.filter((a) => !alreadyApplied.has(a.id) && !a.excludeFromApply);
-  const hiddenByFlag = accounts.filter((a) => !alreadyApplied.has(a.id) && a.excludeFromApply).length;
+  const available = accounts.filter((a) => !alreadyApplied.has(a.id));
   const [picked, setPicked] = useState({});
   const [lots, setLots] = useState({});
 
@@ -4829,16 +5427,9 @@ function BulkApplySheet({ ipo, accounts, onClose, onSave }) {
       )}
 
       {available.length === 0 ? (
-        <EmptyState text={hiddenByFlag > 0
-          ? "No accounts to apply from. Every remaining account is already on this IPO or has been hidden from the Apply IPO list."
-          : "Every account already has an application on this IPO."} />
+        <EmptyState text="Every account already has an application on this IPO." />
       ) : (
         <>
-          {hiddenByFlag > 0 && (
-            <div style={{ fontSize: 11.5, color: COLORS.inkSoft, marginBottom: 8 }}>
-              {hiddenByFlag} account{hiddenByFlag === 1 ? " is" : "s are"} hidden from this list. Turn "Apply IPOs from this account?" back on in the account to include {hiddenByFlag === 1 ? "it" : "them"}.
-            </div>
-          )}
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
             <SectionLabel>Accounts ({chosen.length}/{available.length})</SectionLabel>
             <div style={{ display: "flex", gap: 6 }}>
@@ -5013,7 +5604,7 @@ function BulkStatusSheet({ ipo, accounts, onClose, onSave }) {
             }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
                 <div style={{ minWidth: 0 }}>
-                  <div style={{ fontWeight: 600, fontSize: 14, color: COLORS.ink }}>{nameOf(app.accountId)}</div>
+                  <div title={accountLabel(accounts, app)} style={{ fontWeight: 600, fontSize: 14, color: COLORS.ink, ...ellipsisText }}>{accountLabel(accounts, app)}</div>
                   <div style={{ fontSize: 11, color: COLORS.inkSoft, fontFamily: "'JetBrains Mono', monospace" }}>
                     {app.lots || 0} lot(s) applied · {inrOrDash(app.amountBlocked)}
                   </div>
@@ -5071,6 +5662,323 @@ const normaliseName = (s) =>
 /* Two ways in: the issues open or coming up, and everything that listed in a
    given year. The second exists because a ledger started late would otherwise
    have to be typed out by hand, an IPO at a time. */
+/* What the registrar says, account by account.
+
+   The exchanges hold only the bids routed through their own platform, and which
+   one a bid took is the broker's choice, made invisibly - so asking there misses
+   applications without ever saying it missed them. The registrar has the whole
+   issue. Two of the three answer directly; an issue registered with the third,
+   or one too old to still be on a status page, says which and why.
+
+   Asked one account at a time and shown as each answers, rather than held back
+   until all of them have. A dozen accounts take a few seconds, and watching the
+   list fill in is the difference between waiting and wondering.
+
+   The registrar's own reply is kept and shown beneath the numbers. A figure that
+   looks plausible but is wrong is worse than an error, and the only way to tell
+   those apart is to read what was actually said. */
+function AllotmentSheet({ ipo, accounts, onClose, onApply }) {
+  const [phase, setPhase] = useState("resolving");   // resolving | asking | done | dead
+  const [registrar, setRegistrar] = useState(null);
+  const [note, setNote] = useState("");
+  const [error, setError] = useState(null);
+  const [rows, setRows] = useState([]);
+  const [raw, setRaw] = useState(null);
+  const [showRaw, setShowRaw] = useState(false);
+  const [written, setWritten] = useState(0);
+
+  const holders = useMemo(
+    () => accounts.filter((a) => /^[A-Z]{5}[0-9]{4}[A-Z]$/.test(panOf(a))),
+    [accounts]
+  );
+
+  const started = useRef(false);
+  const alive = useRef(true);
+  useEffect(() => () => { alive.current = false; }, []);
+
+  const ask = async (pans) => {
+    const url = "/api/allotment?company=" + encodeURIComponent(ipo.company || "")
+      + "&registrar=" + encodeURIComponent(ipo.registrar || "")
+      + "&pans=" + encodeURIComponent(pans);
+    const res = await fetch(url);
+    const text = await res.text();
+    let data = null;
+    try { data = JSON.parse(text); } catch { /* raised below */ }
+    if (!data) throw Object.assign(new Error("The reply was not JSON."), { raw: { httpStatus: res.status, body: text.slice(0, 600) } });
+    if (!res.ok) throw Object.assign(new Error(data.error || ("The server answered " + res.status + ".")), { raw: data });
+    return data;
+  };
+
+  /* Started on opening. There is nothing to decide before asking, and a button
+     that only ever gets pressed once is a button that should not be there. */
+  const run = useCallback(async () => {
+    if (typeof navigator !== "undefined" && navigator.onLine === false) {
+      setError({ title: "You are offline", detail: "The registrar can only be asked with a connection." });
+      setPhase("dead");
+      return;
+    }
+    setError(null);
+    setWritten(0);
+    setPhase("resolving");
+    setRows(holders.map((a) => ({ pan: panOf(a), account: a, status: "waiting" })));
+    try {
+      // Who has it, before troubling anyone about a PAN.
+      const head = await ask("");
+      if (!alive.current) return;
+      setRaw(head);
+      if (!head.registrar) {
+        setNote(head.note || "");
+        setRegistrar(null);
+        setPhase("dead");
+        return;
+      }
+      setRegistrar({ id: head.registrar, label: head.registrar === "kfintech" ? "KFintech" : "MUFG Intime", listedAs: head.listedAs });
+      setPhase("asking");
+
+      /* One PAN per request meant thirteen round trips for a dozen accounts,
+         and the round trip - browser to the function and back - cost more than
+         the registrar did. Asked four at a time instead: still filling in as
+         the answers come, at a quarter of the waiting.
+
+         Asked once per PAN, not once per account. The same person often holds
+         two demats, and the registrar's answer is about the PAN, so asking
+         twice would only get the same reply twice. */
+      const seen = new Set();
+      const wanted = [];
+      holders.forEach((a) => {
+        const pan = panOf(a);
+        if (!seen.has(pan)) { seen.add(pan); wanted.push(pan); }
+      });
+
+      const settle = (r) =>
+        // Every account on that PAN, each keeping its own name.
+        setRows((prev) => prev.map((x) => (x.pan === r.pan ? { ...r, account: x.account } : x)));
+
+      const collected = [];
+      for (let i = 0; i < wanted.length; i += 4) {
+        if (!alive.current) return;
+        const group = wanted.slice(i, i + 4);
+        try {
+          const answer = await ask(group.join(","));
+          const byPan = new Map((answer.results || []).map((r) => [r.pan, r]));
+          group.forEach((pan) => {
+            const r = byPan.get(pan) || { pan, status: "error", message: "no answer for this PAN" };
+            collected.push(r);
+            settle(r);
+          });
+        } catch (e) {
+          group.forEach((pan) => {
+            const r = { pan, status: "error", message: e.message || "could not be checked" };
+            collected.push(r);
+            settle(r);
+          });
+        }
+      }
+      if (!alive.current) return;
+      setRaw({ ...head, results: collected });
+      setPhase("done");
+    } catch (e) {
+      if (!alive.current) return;
+      setError({ title: "Could not reach the registrar", detail: e.message || "The request did not complete." });
+      if (e.raw) setRaw(e.raw);
+      setPhase("dead");
+    }
+  }, [holders, ipo.company, ipo.registrar]);
+
+  useEffect(() => {
+    if (started.current || !holders.length) return;
+    started.current = true;
+    run();
+  }, [holders.length, run]);
+
+  const withQty = rows.map((r) => ({
+    ...r,
+    allotted: (r.bids || []).reduce((n, b) => n + (Number(b.allotted) || 0), 0),
+    appliedQty: (r.bids || []).reduce((n, b) => n + (Number(b.applied) || 0), 0),
+  }));
+  const answered = withQty.filter((r) => r.status !== "waiting");
+  const found = withQty.filter((r) => r.status === "found");
+  const failed = withQty.filter((r) => r.status === "error");
+  const wins = found.filter((r) => r.allotted > 0);
+
+  const heading = phase === "resolving" ? "Finding the registrar..."
+    : phase === "asking" ? `Checking ${answered.length} of ${holders.length}`
+      + (registrar ? ` · ${registrar.label}` : "")
+      : phase === "done" ? `${holders.length} checked` + (registrar ? ` · ${registrar.label}` : "")
+        : holders.length + (holders.length === 1 ? " account" : " accounts") + " to check";
+
+  return (
+    <Sheet title="Check allotment" onClose={onClose}>
+      <div style={{
+        background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 12,
+        padding: "10px 12px", marginBottom: 14,
+      }}>
+        <div title={ipo.company} style={{ fontFamily: "'Fraunces', serif", fontWeight: 600, fontSize: 15, color: COLORS.heading, ...ellipsisText }}>{ipo.company}</div>
+        <div style={{
+          fontFamily: "'JetBrains Mono', monospace", fontSize: 11.5, color: COLORS.inkSoft,
+          marginTop: 3, display: "flex", alignItems: "center", gap: 6, ...ellipsisText,
+        }}>
+          {(phase === "resolving" || phase === "asking") && <Loader2 size={12} color={COLORS.gold} className="spin" />}
+          {heading}
+        </div>
+      </div>
+
+      {holders.length === 0 ? (
+        <EmptyState
+          icon={AlertTriangle}
+          text="No PANs on file."
+          subtitle="The registrar is asked by PAN, so add one to an account first - Accounts, then the account, then edit."
+        />
+      ) : (
+        <>
+          {error && (
+            <div style={{
+              background: COLORS.redSoft, border: `1px solid ${COLORS.red}`, borderRadius: 10,
+              padding: "10px 12px", marginBottom: 14, fontSize: 12.5, color: COLORS.ink,
+              fontFamily: "Inter, sans-serif",
+            }}>
+              <div style={{ fontWeight: 700, marginBottom: 3 }}>{error.title}</div>
+              <div style={{ color: COLORS.inkSoft, ...wrapText }}>{error.detail}</div>
+              <button onClick={run} style={{
+                marginTop: 10, minHeight: 36, padding: "0 14px", borderRadius: 8,
+                border: `1px solid ${COLORS.red}`, background: "transparent", color: COLORS.red,
+                fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "Inter, sans-serif",
+              }}>Try again</button>
+            </div>
+          )}
+
+          {/* Short, because there is nothing to be done about it here. */}
+          {!error && phase === "dead" && note && (
+            <div style={{
+              background: COLORS.goldSoft, borderRadius: 10, padding: "10px 12px", marginBottom: 14,
+              fontSize: 12.5, color: COLORS.ink, display: "flex", gap: 8, alignItems: "flex-start",
+              fontFamily: "Inter, sans-serif",
+            }}>
+              <AlertTriangle size={14} color={COLORS.gold} style={{ flexShrink: 0, marginTop: 1 }} />
+              <span style={wrapText}>{note}</span>
+            </div>
+          )}
+
+          {rows.length > 0 && phase !== "dead" && (
+            <>
+              {phase === "done" && (
+                <SectionLabel>
+                  {wins.length
+                    ? `Allotted to ${wins.length} of ${found.length}`
+                    : found.length
+                      ? `Nothing allotted (${found.length} application${found.length === 1 ? "" : "s"})`
+                      : "No applications found"}
+                </SectionLabel>
+              )}
+              <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
+                {withQty.map((r) => {
+                  const label = r.account?.name || r.name || r.pan;
+                  const tone = r.status === "waiting" ? COLORS.border
+                    : r.status === "error" ? COLORS.red
+                      : r.allotted > 0 ? COLORS.green : COLORS.inkSoft;
+                  return (
+                    <div key={r.pan} style={{
+                      background: COLORS.surface, border: `1px solid ${COLORS.border}`,
+                      borderLeft: `3px solid ${tone}`, borderRadius: 10, padding: "8px 10px",
+                      fontFamily: "Inter, sans-serif", fontSize: 12.5,
+                      opacity: r.status === "waiting" ? 0.55 : 1,
+                      transition: "opacity 200ms ease-out",
+                    }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                        <span title={label} style={{ color: COLORS.ink, fontWeight: 600, minWidth: 0, ...ellipsisText }}>{label}</span>
+                        {r.status === "found" && (
+                          <span style={{
+                            fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, flexShrink: 0,
+                            color: r.allotted > 0 ? COLORS.green : COLORS.inkSoft,
+                          }}>{r.allotted > 0 ? `${r.allotted} allotted` : "not allotted"}</span>
+                        )}
+                        {r.status === "waiting" && <Loader2 size={13} color={COLORS.inkSoft} className="spin" style={{ flexShrink: 0 }} />}
+                      </div>
+                      <div title={r.message || undefined} style={{
+                        fontSize: 11, color: r.status === "error" ? COLORS.red : COLORS.inkSoft,
+                        marginTop: 2, fontFamily: "'JetBrains Mono', monospace", ...ellipsisText,
+                      }}>
+                        {r.status === "waiting" && `${r.pan} · asking...`}
+                        {r.status === "found" && `${r.pan} · applied ${r.appliedQty}`}
+                        {r.status === "no_application" && `${r.pan} · no application under this PAN`}
+                        {r.status === "error" && `${r.pan} · ${r.message || "could not be checked"}`}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
+
+          {phase === "done" && failed.length > 0 && (
+            <div style={{
+              background: COLORS.goldSoft, borderRadius: 10, padding: "9px 12px", marginBottom: 14,
+              fontSize: 12, color: COLORS.ink, fontFamily: "Inter, sans-serif", ...wrapText,
+            }}>
+              {failed.length} could not be checked and {failed.length === 1 ? "is" : "are"} left as
+              {failed.length === 1 ? " it was" : " they were"}. Try again rather than reading a blank
+              as a rejection.
+            </div>
+          )}
+
+          {phase === "done" && found.length > 0 && (
+            written > 0 ? (
+              /* Said plainly. A button that greys out looks like a button that
+                 failed, and leaves you wondering whether anything happened. */
+              <div style={{
+                background: COLORS.greenSoft, border: `1px solid ${COLORS.green}`, borderRadius: 10,
+                padding: "10px 12px", fontSize: 12.5, color: COLORS.ink, fontFamily: "Inter, sans-serif",
+                display: "flex", gap: 8, alignItems: "center",
+              }}>
+                <CheckCircle2 size={15} color={COLORS.green} style={{ flexShrink: 0 }} />
+                <span style={wrapText}>
+                  Written to the ledger - {written} application{written === 1 ? "" : "s"} updated.
+                </span>
+              </div>
+            ) : (
+              <PrimaryButton onClick={() => {
+                onApply(found.map((r) => ({
+                  accountId: r.account?.id, allotted: r.allotted, appliedQty: r.appliedQty,
+                })));
+                setWritten(found.length);
+              }}>
+                Write {found.length} result{found.length === 1 ? "" : "s"} to the ledger
+              </PrimaryButton>
+            )
+          )}
+
+          {/* The registrar's own words, for when a number looks wrong. */}
+          {raw && (
+            <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px solid ${COLORS.border}` }}>
+              <button onClick={() => setShowRaw((v) => !v)} aria-expanded={showRaw} style={{
+                width: "100%", minHeight: 40, borderRadius: 8, border: `1px solid ${COLORS.border}`,
+                background: COLORS.surface, color: COLORS.inkSoft, fontSize: 12.5, fontWeight: 600,
+                cursor: "pointer", fontFamily: "Inter, sans-serif", display: "flex",
+                alignItems: "center", justifyContent: "space-between", padding: "0 12px", gap: 8,
+              }}>
+                <span>Exactly what came back</span>
+                <ChevronRight size={14} color={COLORS.inkSoft} style={{
+                  flexShrink: 0, transform: showRaw ? "rotate(90deg)" : "none",
+                  transition: "transform 150ms ease-out",
+                }} />
+              </button>
+              {showRaw && (
+                <pre style={{
+                  margin: "8px 0 0", padding: "10px 12px", background: COLORS.field,
+                  border: `1px solid ${COLORS.border}`, borderRadius: 8,
+                  fontFamily: "'JetBrains Mono', monospace", fontSize: 10.5, lineHeight: 1.5,
+                  color: COLORS.ink, overflowX: "auto", maxHeight: 340, overflowY: "auto",
+                  whiteSpace: "pre", WebkitOverflowScrolling: "touch",
+                }}>{JSON.stringify(raw, null, 2)}</pre>
+              )}
+            </div>
+          )}
+        </>
+      )}
+    </Sheet>
+  );
+}
+
 function LiveIposSheet({ existing, onClose, onImport }) {
   const thisYear = new Date().getFullYear();
   const [mode, setMode] = useState("current");           // "current" · "year"
@@ -5294,6 +6202,9 @@ function LiveIposSheet({ existing, onClose, onImport }) {
       openDate: r.openDate || "",
       closeDate: r.closeDate || "",
       allotmentDate: r.allotmentDate || "",
+      // Who allots it. Fetched all along and dropped here, which left the
+      // allotment check unable to say anything more useful than "not listed".
+      registrar: r.registrar || "",
       listingDate: r.listedOn || r.listingDate || "",
       // Same rule as a refresh: no closing price until the day has closed.
       ...(() => {
@@ -5359,7 +6270,7 @@ function LiveIposSheet({ existing, onClose, onImport }) {
               <span style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)", display: "flex", pointerEvents: "none" }}>
                 <Search size={15} color={COLORS.inkSoft} />
               </span>
-              <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search company" style={{ paddingLeft: 34 }} />
+              <Input type="search" enterKeyHint="search" autoComplete="off" autoCorrect="off" autoCapitalize="none" spellCheck={false} value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search company" style={{ paddingLeft: 34 }} />
             </div>
           )}
 
@@ -5420,18 +6331,18 @@ function LiveIposSheet({ existing, onClose, onImport }) {
                     />
                     <div style={{ minWidth: 0, flex: 1 }}>
                       <div style={{ display: "flex", justifyContent: "space-between", gap: 6, alignItems: "flex-start" }}>
-                        <span style={{ fontWeight: 600, fontSize: 14, color: COLORS.ink }}>{r.company}</span>
+                        <span title={r.company} style={{ fontWeight: 600, fontSize: 14, color: COLORS.ink, minWidth: 0, ...ellipsisText }}>{r.company}</span>
                         {r.category && <Badge color={COLORS.navy} bg={COLORS.chip}>{r.category}</Badge>}
                       </div>
 
-                      <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: COLORS.inkSoft, marginTop: 4 }}>
+                      <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: COLORS.inkSoft, marginTop: 4, ...ellipsisText }}>
                         {r.priceMin != null && r.priceMax != null
                           ? `₹${r.priceMin}-${r.priceMax}`
                           : r.priceMax != null ? `₹${r.priceMax}` : "price not published"}
                         {r.lotSize ? ` · lot ${r.lotSize}` : ""}
                         {r.listedOn
-                          ? ` · listed ${fmtDate(r.listedOn)}`
-                          : r.closeDate ? ` · ${r.openDate || "--"} -> ${r.closeDate}` : ""}
+                          ? ` · listed ${fmtDayMon(r.listedOn)}`
+                          : r.closeDate ? ` · ${fmtDayMon(r.openDate)} -> ${fmtDayMon(r.closeDate)}` : ""}
                       </div>
 
                       {(r.listingOpen != null || r.currentPrice != null) && (

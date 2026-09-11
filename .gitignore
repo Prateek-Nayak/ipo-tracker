@@ -5,3 +5,6 @@ dist/
 !.env.example
 
 .vercel
+
+# allotment probe output holds PANs and UPI ids
+tests/allotment/
