@@ -558,6 +558,8 @@ const fmtDayMon = (d) => {
 };
 
 const ALLOTMENT_STATUSES = ["Pending", "Allotted", "Partial", "Not Allotted"];
+// Distinct pill tones per outcome (Partial gets its own teal, not Pending's amber).
+const STATUS_TONE = { Pending: "env", Allotted: "green", Partial: "ext", "Not Allotted": "red" };
 let STATUS_META = {};
 function buildStatusMeta() {
   STATUS_META = {
@@ -937,26 +939,21 @@ function mergeIpos(current, incoming) {
 /* ---------------------------------------------------------
    SMALL UI PRIMITIVES
 ---------------------------------------------------------- */
-/* A badge is a label, not a highlight. It carries its colour in the text and a
-   hairline, on a background barely off the card - a filled block of colour on
-   every row is what made a list of IPOs read as a colour chart. */
-function Badge({ children, color, bg, strong }) {
-  const dark = isDark();
-  const emphasis = strong && !dark;
-  /* In light mode every badge gets its tinted fill so the colour reads as
-     clearly as the allotment bar it sits beside. In dark mode the soft fills
-     are too close to the surface to help, so badges stay transparent. */
-  const fill = dark ? "transparent" : (bg || "transparent");
+/* Which pill tone a legacy colour maps to, so the whole app's badges share the
+   one uniform pill (soft tint + hairline + coloured text) toned by meaning. */
+function toneForColor(color) {
+  if (color === COLORS.green) return "green";
+  if (color === COLORS.gold) return "env";
+  if (color === COLORS.red) return "red";
+  if (color === COLORS.navy) return "accent";
+  return "neutral";
+}
+/* A badge is a label, not a highlight - now the shared pill, toned from the
+   colour each caller already passes, so stage, status and header badges read as
+   one set in both themes. */
+function Badge({ children, color, strong }) {
   return (
-    <span
-      style={{
-        color, background: fill,
-        border: `1px solid ${color}`,
-        fontFamily: "'JetBrains Mono', monospace",
-        fontSize: 8, fontWeight: emphasis ? 700 : 650, letterSpacing: 0.3,
-        padding: "2px 7px", borderRadius: 5, whiteSpace: "nowrap",
-      }}
-    >
+    <span style={{ ...pillStyle(toneForColor(color)), ...(strong ? { fontWeight: 600 } : null) }}>
       {children}
     </span>
   );
@@ -970,6 +967,8 @@ const PILL_TONES = {
   accent:  { d: { c: "#98A0F6", bg: "#242A46", b: "#3B4270" }, l: { c: "#565FD4", bg: "#E7E9FB", b: "#B9BEF3" } },
   env:     { d: { c: "#E7B75A", bg: "#342811", b: "#5E4A1E" }, l: { c: "#8F6200", bg: "#FBEFD3", b: "#E7C877" } },
   ext:     { d: { c: "#5FCDB8", bg: "#12302A", b: "#265046" }, l: { c: "#1B7A69", bg: "#D9F0EA", b: "#8FCDBF" } },
+  green:   { d: { c: "#6FBF8F", bg: "#12301F", b: "#235038" }, l: { c: "#1F7A45", bg: "#DCF0E4", b: "#A6D5B9" } },
+  red:     { d: { c: "#E0736B", bg: "#331A1A", b: "#5E2E2E" }, l: { c: "#B23B3B", bg: "#FBE7E5", b: "#EDB9B4" } },
 };
 function pillStyle(tone, compact) {
   const t = PILL_TONES[tone] || PILL_TONES.neutral;
@@ -3283,21 +3282,10 @@ function boardIsWorthAsking(boards) {
    has room to let you pick several filters at once, which a select never did. */
 function ListControls({ search, setSearch, placeholder, filters, filter, setFilter, sorts, sort, setSort, boards, board, toggleBoard }) {
   const [open, setOpen] = useState(false);
-  const panelRef = useRef(null);
-  const buttonRef = useRef(null);
 
-  // Back closes this before it closes anything underneath it.
+  // Back closes it before anything underneath (the panel is a real Sheet below,
+  // which also closes on a backdrop tap or a swipe down, like every other panel).
   useBackLayer(open, () => setOpen(false));
-
-  // Escape closes it on a keyboard; outside taps are handled by the scrim below
-  // (a document listener would fire on touchstart and let the same tap fall
-  // through to whatever was under it - e.g. open an IPO the moment it closed).
-  useEffect(() => {
-    if (!open) return;
-    const esc = (e) => { if (e.key === "Escape") setOpen(false); };
-    document.addEventListener("keydown", esc);
-    return () => document.removeEventListener("keydown", esc);
-  }, [open]);
 
   const chosen = Array.isArray(filter) ? filter : [];
   const sortLabel = (sorts.find((x) => x.id === sort) || {}).label || "";
@@ -3340,7 +3328,6 @@ function ListControls({ search, setSearch, placeholder, filters, filter, setFilt
         </div>
 
         <button
-          ref={buttonRef}
           onClick={() => setOpen((v) => !v)}
           aria-label="Filter and sort"
           aria-expanded={open}
@@ -3368,51 +3355,36 @@ function ListControls({ search, setSearch, placeholder, filters, filter, setFilt
         <BoardToggles options={boards} selected={board} onToggle={toggleBoard} />
       )}
 
-      {/* A full-screen scrim behind the panel, like the app's sheets: a tap or
-          drag anywhere off the panel closes it, and it dims what is behind so
-          the panel reads as the layer in front. Back closes it too (useBackLayer). */}
-      {open && (
-        <div
-          onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); setOpen(false); }}
-          style={{ position: "fixed", inset: 0, zIndex: 29, background: "rgba(0,0,0,0.35)", touchAction: "none" }}
-        />
-      )}
-
-      {open && (
-        <div
-          ref={panelRef}
-          style={{
-            position: "absolute", top: "calc(100% + 6px)", right: 0, zIndex: 30,
-            width: "min(300px, 100%)", background: COLORS.surface,
-            border: `1px solid ${COLORS.border}`, borderRadius: 12,
-            boxShadow: "0 10px 30px rgba(0,0,0,0.28)", padding: 12,
-          }}
-        >
+      {/* The panel itself is the app's bottom Sheet, portalled to the body so it
+          escapes the swipeable (transformed) screen and cannot be tapped
+          through. A backdrop tap, a swipe down, Back or Escape all close it. */}
+      {open && typeof document !== "undefined" && createPortal(
+        <Sheet title="Filter & sort" onClose={() => setOpen(false)}>
           {hasFilters && (<>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-            <SectionLabel>Show</SectionLabel>
-            {narrowed > 0 && (
-              <button
-                onClick={() => setFilter([])}
-                style={{ ...chipBase, padding: "4px 9px", fontSize: 11 }}
-              >Clear</button>
-            )}
-          </div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 14 }}>
-            {filters.map((f) => {
-              const on = chosen.includes(f.id);
-              return (
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+              <SectionLabel>Show</SectionLabel>
+              {narrowed > 0 && (
                 <button
-                  key={f.id}
-                  onClick={() => toggleFilter(f.id)}
-                  aria-pressed={on}
-                  style={{ ...chipBase, padding: "6px 10px", ...(on ? chipOn : null) }}
-                >
-                  {f.label}{f.count != null ? ` ${f.count}` : ""}
-                </button>
-              );
-            })}
-          </div>
+                  onClick={() => setFilter([])}
+                  style={{ ...chipBase, padding: "4px 9px", fontSize: 11 }}
+                >Clear</button>
+              )}
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 18 }}>
+              {filters.map((f) => {
+                const on = chosen.includes(f.id);
+                return (
+                  <button
+                    key={f.id}
+                    onClick={() => toggleFilter(f.id)}
+                    aria-pressed={on}
+                    style={{ ...chipBase, padding: "8px 12px", ...(on ? chipOn : null) }}
+                  >
+                    {f.label}{f.count != null ? ` ${f.count}` : ""}
+                  </button>
+                );
+              })}
+            </div>
           </>)}
 
           <SectionLabel>Order</SectionLabel>
@@ -3426,18 +3398,19 @@ function ListControls({ search, setSearch, placeholder, filters, filter, setFilt
                   style={{
                     display: "flex", alignItems: "center", justifyContent: "space-between",
                     width: "100%", textAlign: "left", cursor: "pointer",
-                    background: "transparent", border: 0, padding: "8px 6px", borderRadius: 6,
-                    fontFamily: "Inter, sans-serif", fontSize: 13,
+                    background: "transparent", border: 0, padding: "12px 6px", borderRadius: 6,
+                    fontFamily: "Inter, sans-serif", fontSize: 14,
                     color: on ? COLORS.ink : COLORS.inkSoft, fontWeight: on ? 700 : 500,
                   }}
                 >
                   {o.label}
-                  {on && <Check size={14} color={COLORS.navy} />}
+                  {on && <Check size={15} color={COLORS.navy} />}
                 </button>
               );
             })}
           </div>
-        </div>
+        </Sheet>,
+        document.body
       )}
     </div>
   );
@@ -4067,7 +4040,7 @@ function ApplicationRow({ app, ipo, accounts, onEdit, onDelete }) {
           )}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
-          <Badge color={meta.color} bg={meta.bg} strong={strongStatus}>{app.allotmentStatus}</Badge>
+          <Pill tone={STATUS_TONE[app.allotmentStatus] || "neutral"} style={strongStatus ? { fontWeight: 600 } : null}>{app.allotmentStatus}</Pill>
           <button onClick={onEdit} aria-label="Edit application" style={smallIconBtn}><Pencil size={13} color={COLORS.inkSoft} /></button>
           <button onClick={onDelete} aria-label="Delete application" style={smallIconBtn}><Trash2 size={13} color={COLORS.red} /></button>
         </div>
@@ -4407,7 +4380,7 @@ function AccountDetailSheet({ account, ipos, transfers, accounts, onClose, onEdi
                   <div style={{ fontFamily: "Inter, sans-serif", fontWeight: 600, fontSize: 13.5, color: COLORS.ink, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                     {app.ipo.company || "Untitled IPO"}
                   </div>
-                  <Badge color={meta.color} bg={meta.bg} strong={strongStatus}>{app.allotmentStatus}</Badge>
+                  <Pill tone={STATUS_TONE[app.allotmentStatus] || "neutral"} style={strongStatus ? { fontWeight: 600 } : null}>{app.allotmentStatus}</Pill>
                 </div>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 4, fontFamily: "'JetBrains Mono', monospace", fontSize: 11.5 }}>
                   <span style={{ color: COLORS.inkSoft }}>{app.lots || 0} lot(s){app.sold ? " · Sold" : ""}</span>
