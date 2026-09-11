@@ -1121,7 +1121,7 @@ function Sheet({ title, onClose, children }) {
   const animateClose = useCallback(() => {
     if (closing) return;
     setClosing(true);
-    setTimeout(() => { window.scrollTo(0, window.scrollY); onClose(); }, 180);
+    setTimeout(() => { window.scrollTo(0, window.scrollY); onClose(); }, 150);
   }, [closing, onClose]);
 
   const onTouchStart = (e) => {
@@ -1181,8 +1181,8 @@ function Sheet({ title, onClose, children }) {
           display: "flex", flexDirection: "column", minHeight: 0,
           boxShadow: "0 -8px 30px rgba(0,0,0,0.2)",
           transform: closing ? "translateY(100%)" : dragY ? `translateY(${dragY}px)` : undefined,
-          transition: dragging ? "none" : "transform 200ms ease-out",
-          animation: closing ? "none" : "sheetSlideUp 280ms ease-out",
+          transition: dragging ? "none" : "transform 150ms ease-out",
+          animation: closing ? "none" : "sheetSlideUp 200ms ease-out",
         }}
       >
         <div style={{
