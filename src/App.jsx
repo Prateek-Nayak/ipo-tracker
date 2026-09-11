@@ -3013,9 +3013,9 @@ function Dashboard({ stats, ipos, accounts, published = [], onOpenIpo, onOpenHol
   return (
     <div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
-        <StatCard label="Capital Deployed" value={inrShort(stats.invested)} full={inr(stats.invested)} icon={Landmark} tone="navy" />
+        <StatCard label="Capital Deployed" value={inr(stats.invested)} icon={Landmark} tone="navy" />
         <StatCard label="Realized Gain" value={inrShort(stats.realized)} full={inr(stats.realized)} icon={stats.realized >= 0 ? TrendingUp : TrendingDown} tone={stats.realized >= 0 ? "green" : "red"} />
-        <StatCard label={marked ? "Unrealized (at today's price)" : "Unrealized (at listing)"} value={inrShort(stats.unrealized)} full={inr(stats.unrealized)} icon={stats.unrealized >= 0 ? TrendingUp : TrendingDown} tone={stats.unrealized >= 0 ? "green" : "red"} warning={stats.missingLtp > 0 ? `${stats.missingLtp} listed holding${stats.missingLtp === 1 ? "" : "s"} without a current price -- refresh to update` : ""} />
+        <StatCard label={marked ? "Unrealized (at today's price)" : "Unrealized (at listing)"} value={inr(stats.unrealized)} icon={stats.unrealized >= 0 ? TrendingUp : TrendingDown} tone={stats.unrealized >= 0 ? "green" : "red"} warning={stats.missingLtp > 0 ? `${stats.missingLtp} listed holding${stats.missingLtp === 1 ? "" : "s"} without a current price -- refresh to update` : ""} />
         <StatCard label="Pending Allotment" value={stats.pendingCount} icon={Clock} tone="gold" />
       </div>
 
