@@ -1,4 +1,4 @@
-const CACHE = "ipo-ledger-v3";
+const CACHE = "ipo-ledger-v4";
 const APP_SHELL = ["/", "/index.html", "/manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {
@@ -43,5 +43,22 @@ self.addEventListener("fetch", (event) => {
       .catch(() =>
         caches.match(request).then((r) => r || caches.match("/index.html"))
       )
+  );
+});
+
+// Tapping a listing-day reminder brings the ledger to the front (or opens it).
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const url = (event.notification.data && event.notification.data.url) || "/";
+  event.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((list) => {
+      for (const client of list) {
+        if ("focus" in client) {
+          if (client.navigate) { try { client.navigate(url); } catch (e) { /* focus is enough */ } }
+          return client.focus();
+        }
+      }
+      return self.clients.openWindow ? self.clients.openWindow(url) : undefined;
+    })
   );
 });

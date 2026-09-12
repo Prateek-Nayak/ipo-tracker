@@ -306,6 +306,39 @@ const hasListed = (ipo) => !!ipo?.listingDate && ipo.listingDate <= todayISO();
    "undefinedholidays". */
 const STORAGE_PREFIX = "ipo_ledger_";
 
+/* Listing-day reminders (best-effort, no backend). Fired from the foreground
+   when the app is open at/after 9:45 IST on a listing day - with the listing
+   gain when the price is already in - and, where the browser supports the
+   Notification Triggers API, scheduled for a plain 9:45 nudge even when closed.
+   The scheduled and foreground notifications share a tag, so the richer one
+   replaces the plain one rather than doubling up. */
+const NOTIFY_KEY = STORAGE_PREFIX + "notifyListing";
+const NOTIFIED_KEY = STORAGE_PREFIX + "notifiedListings";
+const listingNotifyOn = () => { try { return localStorage.getItem(NOTIFY_KEY) === "on"; } catch { return false; } };
+// 09:45 on the Indian market clock, whatever the device's own timezone is.
+const listingReminderAt = (dateISO) => Date.parse(`${dateISO}T09:45:00+05:30`);
+const listingTag = (ipo, dateISO) => `listing-${ipo.id}-${dateISO}`;
+
+function listingNotice(ipo) {
+  const company = ipo.company || "An IPO";
+  const issue = Number(ipo.priceBand) || 0;
+  const ltp = valuationPrice(ipo);
+  const lotSize = Number(ipo.lotSize) || 0;
+  const shares = (ipo.applications || []).reduce(
+    (s, a) => s + ((a.allotmentStatus === "Allotted" || a.allotmentStatus === "Partial") ? (Number(a.sharesAllotted) || 0) : 0), 0);
+  const lots = lotSize && shares ? Math.round(shares / lotSize) : 0;
+  if (ltp && issue > 0) {
+    const pct = ((ltp - issue) / issue) * 100;
+    const sign = pct >= 0 ? "+" : "−";
+    const title = `${company} listed — ${sign}${Math.abs(pct).toFixed(1)}%`;
+    const body = shares > 0
+      ? `LTP ₹${ltp} vs ₹${issue} issue. Your ${lots} allotted lot${lots === 1 ? "" : "s"} ${(ltp - issue) >= 0 ? "up" : "down"} ${inr(Math.abs(shares * (ltp - issue)))}.`
+      : `LTP ₹${ltp} vs ₹${issue} issue. No allotment on this one.`;
+    return { title, body };
+  }
+  return { title: `${company} lists today`, body: "Listing price isn't in yet — open The Ledger to record it." };
+}
+
 // Stamped in at build time by vite.config.js; MMDD.HHMM, IST.
 const BUILD_ID = typeof __BUILD_ID__ === "string" ? __BUILD_ID__ : "dev";
 
@@ -2129,6 +2162,83 @@ function AppInner() {
     }
   }, [refreshPricesFrom, checkPublished]);
 
+  /* ---------- listing-day reminders ---------- */
+  const [notifyOn, setNotifyOn] = useState(listingNotifyOn());
+
+  // Fire (or catch up on) today's listing reminders, once past 9:45 IST.
+  const maybeNotifyListings = useCallback(async () => {
+    if (!listingNotifyOn()) return;
+    if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+    const today = todayISO();
+    if (Date.now() < listingReminderAt(today)) return;   // before 9:45 - not yet
+    let map = {};
+    try { map = JSON.parse(localStorage.getItem(NOTIFIED_KEY) || "{}"); } catch { map = {}; }
+    const due = iposRef.current.filter(
+      (i) => i.listingDate === today && (i.applications || []).length > 0 && !map[`${i.id}|${today}`]
+    );
+    if (!due.length) return;
+    const reg = await (navigator.serviceWorker ? navigator.serviceWorker.ready.catch(() => null) : Promise.resolve(null));
+    for (const ipo of due) {
+      const { title, body } = listingNotice(ipo);
+      const opts = { body, tag: listingTag(ipo, today), icon: "/icon-192.png", badge: "/icon-192.png", data: { url: "/" } };
+      try {
+        if (reg && reg.showNotification) await reg.showNotification(title, opts);
+        else new Notification(title, opts);
+        map[`${ipo.id}|${today}`] = true;
+      } catch { /* one failure should not block the rest */ }
+    }
+    try { localStorage.setItem(NOTIFIED_KEY, JSON.stringify(map)); } catch { /* nothing to do */ }
+  }, []);
+
+  // Best-effort closed-app plain nudge at 9:45 on each upcoming listing day.
+  const scheduleClosedReminders = useCallback(async () => {
+    if (!listingNotifyOn() || typeof Notification === "undefined" || Notification.permission !== "granted") return;
+    if (typeof window === "undefined" || typeof window.TimestampTrigger === "undefined") return;
+    const reg = await (navigator.serviceWorker ? navigator.serviceWorker.ready.catch(() => null) : Promise.resolve(null));
+    if (!reg || !reg.showNotification) return;
+    const today = todayISO();
+    const soon = iposRef.current.filter(
+      (i) => (i.applications || []).length > 0 && i.listingDate && i.listingDate >= today
+    );
+    for (const ipo of soon) {
+      const when = listingReminderAt(ipo.listingDate);
+      if (when <= Date.now()) continue;   // today-before-now is the foreground path's job
+      try {
+        await reg.showNotification(`${ipo.company || "An IPO"} lists today`, {
+          body: "Open The Ledger to see the listing price and your gains.",
+          tag: listingTag(ipo, ipo.listingDate), icon: "/icon-192.png", badge: "/icon-192.png",
+          showTrigger: new window.TimestampTrigger(when), data: { url: "/" },
+        });
+      } catch { /* trigger unsupported or refused - foreground path still covers it */ }
+    }
+  }, []);
+
+  const enableNotify = useCallback(async (want) => {
+    if (!want) {
+      try { localStorage.setItem(NOTIFY_KEY, "off"); } catch { /* nothing */ }
+      setNotifyOn(false);
+      return;
+    }
+    if (typeof Notification === "undefined") return;   // browser has no notifications
+    let perm = Notification.permission;
+    if (perm === "default") { try { perm = await Notification.requestPermission(); } catch { perm = "denied"; } }
+    if (perm !== "granted") { setNotifyOn(false); return; }
+    try { localStorage.setItem(NOTIFY_KEY, "on"); } catch { /* nothing */ }
+    setNotifyOn(true);
+    scheduleClosedReminders();
+    maybeNotifyListings();
+  }, [scheduleClosedReminders, maybeNotifyListings]);
+
+  // Check shortly after load and every few minutes while open, so a listing that
+  // crosses 9:45 with the app in hand still gets its nudge.
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const run = () => { maybeNotifyListings(); scheduleClosedReminders(); };
+    const t = setTimeout(run, 4000);
+    const iv = setInterval(run, 5 * 60 * 1000);
+    return () => { clearTimeout(t); clearInterval(iv); };
+  }, [maybeNotifyListings, scheduleClosedReminders]);
+
   /* When the browser regains connectivity, reconcile and refresh in the
      background - no reload, and no need to notice the app looks stale and
      do it yourself. The cached ledger stays on screen throughout; this only
@@ -2739,6 +2849,8 @@ function AppInner() {
           pricing={pricing}
           priceInfo={priceInfo}
           onRefreshPrices={refreshPrices}
+          notifyOn={notifyOn}
+          onToggleNotify={enableNotify}
           onSignOut={async () => {
             setDataSheetOpen(false);
             await cloudSignOut();
@@ -5151,8 +5263,10 @@ function priceAge(asOf) {
   return hrs < 12 ? `${hrs} hr ago (${at})` : `as of ${at}`;
 }
 
-function DataSheet({ state, session, cloudOn, syncing, syncError, lastSync, onClose, onSyncNow, onSignOut, pricing, priceInfo, onRefreshPrices }) {
+function DataSheet({ state, session, cloudOn, syncing, syncError, lastSync, onClose, onSyncNow, onSignOut, pricing, priceInfo, onRefreshPrices, notifyOn, onToggleNotify }) {
   const [notice, setNotice] = useState("");
+  const notifySupported = typeof Notification !== "undefined";
+  const notifyDenied = notifySupported && Notification.permission === "denied";
 
   const counts = `${state.accounts.length} accounts · ${state.ipos.length} IPOs · ${state.transfers.length} transfers`;
 
@@ -5252,6 +5366,32 @@ function DataSheet({ state, session, cloudOn, syncing, syncError, lastSync, onCl
           }}
         >{pricing ? "Updating..." : "Refresh"}</button>
       </div>
+      </div>
+
+      <div style={{ marginTop: 18 }}>
+        <SectionLabel>Notifications</SectionLabel>
+        <label style={{
+          display: "flex", alignItems: "flex-start", gap: 10, cursor: notifySupported && !notifyDenied ? "pointer" : "default",
+          marginTop: 8, opacity: notifySupported && !notifyDenied ? 1 : 0.6,
+        }}>
+          <input
+            type="checkbox"
+            checked={!!notifyOn}
+            disabled={!notifySupported || notifyDenied}
+            onChange={(e) => onToggleNotify && onToggleNotify(e.target.checked)}
+            style={{ width: 18, height: 18, flexShrink: 0, marginTop: 1 }}
+          />
+          <span style={{ fontSize: 13.5, color: COLORS.ink }}>
+            Listing-day reminders
+            <span style={{ display: "block", fontSize: 11.5, color: COLORS.inkSoft, marginTop: 2 }}>
+              {!notifySupported
+                ? "This browser can't show notifications."
+                : notifyDenied
+                  ? "Notifications are blocked for this app in your browser settings - allow them there to switch this on."
+                  : "A nudge at 9:45 AM on each listing day, with your gain once the price is in. Best delivered with the app installed."}
+            </span>
+          </span>
+        </label>
       </div>
 
 
