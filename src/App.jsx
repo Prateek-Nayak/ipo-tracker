@@ -2213,6 +2213,21 @@ function AppInner() {
     }
   }, []);
 
+  // Fire a sample reminder now, so delivery can be checked without a real listing.
+  const testNotify = useCallback(async () => {
+    if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+    const reg = await (navigator.serviceWorker ? navigator.serviceWorker.ready.catch(() => null) : Promise.resolve(null));
+    const title = "Sample listing — +33.5%";
+    const opts = {
+      body: "LTP ₹338.6 vs ₹201 issue. Your 8 allotted lots up ₹1,10,208. (test)",
+      tag: "listing-test", icon: "/icon-192.png", badge: "/icon-192.png", data: { url: "/" },
+    };
+    try {
+      if (reg && reg.showNotification) await reg.showNotification(title, opts);
+      else new Notification(title, opts);
+    } catch { /* nothing more to do */ }
+  }, []);
+
   const enableNotify = useCallback(async (want) => {
     if (!want) {
       try { localStorage.setItem(NOTIFY_KEY, "off"); } catch { /* nothing */ }
@@ -2851,6 +2866,7 @@ function AppInner() {
           onRefreshPrices={refreshPrices}
           notifyOn={notifyOn}
           onToggleNotify={enableNotify}
+          onTestNotify={testNotify}
           onSignOut={async () => {
             setDataSheetOpen(false);
             await cloudSignOut();
@@ -5263,7 +5279,7 @@ function priceAge(asOf) {
   return hrs < 12 ? `${hrs} hr ago (${at})` : `as of ${at}`;
 }
 
-function DataSheet({ state, session, cloudOn, syncing, syncError, lastSync, onClose, onSyncNow, onSignOut, pricing, priceInfo, onRefreshPrices, notifyOn, onToggleNotify }) {
+function DataSheet({ state, session, cloudOn, syncing, syncError, lastSync, onClose, onSyncNow, onSignOut, pricing, priceInfo, onRefreshPrices, notifyOn, onToggleNotify, onTestNotify }) {
   const [notice, setNotice] = useState("");
   const notifySupported = typeof Notification !== "undefined";
   const notifyDenied = notifySupported && Notification.permission === "denied";
@@ -5392,6 +5408,12 @@ function DataSheet({ state, session, cloudOn, syncing, syncError, lastSync, onCl
             </span>
           </span>
         </label>
+        {notifyOn && !notifyDenied && (
+          <button
+            onClick={() => onTestNotify && onTestNotify()}
+            style={{ ...chipBase, marginTop: 10, color: COLORS.navy, fontWeight: 700 }}
+          >Send a test reminder</button>
+        )}
       </div>
 
 
