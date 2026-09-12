@@ -9,5 +9,11 @@
       "source": "/((?!api/).*)",
       "destination": "/index.html"
     }
+  ],
+  "crons": [
+    {
+      "path": "/api/notify-listings",
+      "schedule": "15 4 * * *"
+    }
   ]
 }

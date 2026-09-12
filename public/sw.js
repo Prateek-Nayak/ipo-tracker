@@ -1,4 +1,15 @@
-const CACHE = "ipo-ledger-v4";
+const CACHE = "ipo-ledger-v5";
+// Public VAPID key, for re-subscribing if the push endpoint rotates. Public by
+// design (it also ships in the app bundle); the private key lives only server-side.
+const VAPID_PUBLIC_KEY = "BBMs6l_rEsHHDLXJPUvI3y5i31VLaUN8OlkhdThwgPJFcrqba_YhVcz_Jd-a6VYZgvLDvlvX_u9xTOuxld0cwKU";
+function vapidKeyBytes(base64) {
+  const padding = "=".repeat((4 - (base64.length % 4)) % 4);
+  const b64 = (base64 + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(b64);
+  const out = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+  return out;
+}
 const APP_SHELL = ["/", "/index.html", "/manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {
@@ -43,6 +54,34 @@ self.addEventListener("fetch", (event) => {
       .catch(() =>
         caches.match(request).then((r) => r || caches.match("/index.html"))
       )
+  );
+});
+
+// A push from the server (approach B): show it. Payload is JSON with the same
+// shape the app uses for its foreground notifications.
+self.addEventListener("push", (event) => {
+  let payload = {};
+  try { payload = event.data ? event.data.json() : {}; }
+  catch { payload = { title: "The Ledger", body: event.data ? event.data.text() : "" }; }
+  const title = payload.title || "The Ledger";
+  const options = {
+    body: payload.body || "",
+    icon: payload.icon || "/icon-192.png",
+    badge: payload.badge || "/badge-96.png",
+    tag: payload.tag || "listing",
+    data: payload.data || { url: "/" },
+  };
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+
+// If the browser rotates the push endpoint, re-subscribe so delivery continues;
+// the app re-stores the new endpoint (keyed by user) on its next open.
+self.addEventListener("pushsubscriptionchange", (event) => {
+  event.waitUntil(
+    self.registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: vapidKeyBytes(VAPID_PUBLIC_KEY),
+    }).catch(() => {})
   );
 });
 

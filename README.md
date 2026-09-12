@@ -94,6 +94,27 @@ VITE_SUPABASE_ANON_KEY=your_anon_key
 UPSTOX_ANALYTICS_TOKEN=your_upstox_analytics_token
 ```
 
+Listing-day push reminders (optional, server-driven — see below) also need:
+
+```
+VAPID_PUBLIC_KEY=your_vapid_public_key      # also baked into the client as a default
+VAPID_PRIVATE_KEY=your_vapid_private_key     # server only — never commit
+SUPABASE_SERVICE_ROLE_KEY=your_service_role_key   # server only — reads all users past RLS
+CRON_SECRET=a_long_random_string             # Vercel sends it as a Bearer token to the cron
+VITE_VAPID_PUBLIC_KEY=your_vapid_public_key  # optional; overrides the baked-in public key
+```
+
+Generate a keypair with `node -e "console.log(require('web-push').generateVAPIDKeys())"`.
+
+### Listing-day reminders
+
+A daily **Vercel Cron** (`vercel.json`, 04:15 UTC = 09:45 IST) hits `/api/notify-listings`,
+which reads each user's IPOs and stored Web Push subscription, finds the ones listing that
+day, fetches the current price from Upstox, and sends a push — so the reminder lands even
+with the app closed. Users opt in from **Sync & Data → Listing-day reminders**. When the app
+is open around 9:45 it also fires the reminder itself (enriched with the live price) as a
+fallback. Requires the `push_subscriptions` table from `supabase.sql` and the env vars above.
+
 ### Deployment
 
 Deployed on Vercel. The Vercel project's **Production** environment tracks the `main` branch (Project → Settings → Environments), so pushing to `main` triggers the production deployment to [ipo-tracker.prateeknayak.in](https://ipo-tracker.prateeknayak.in/). Every other branch gets a Preview deployment automatically.

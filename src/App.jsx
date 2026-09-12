@@ -885,6 +885,54 @@ async function rest(path, options = {}) {
   }
 }
 
+/* Web Push (approach B): the browser's push endpoint is stored per user so a
+   scheduled server job can deliver the 9:45 reminder even with the app closed.
+   The VAPID public key is not a secret - it ships in the bundle; the private
+   key lives only in the server's env. */
+const VAPID_PUBLIC_KEY = (import.meta.env.VITE_VAPID_PUBLIC_KEY || "").trim()
+  || "BBMs6l_rEsHHDLXJPUvI3y5i31VLaUN8OlkhdThwgPJFcrqba_YhVcz_Jd-a6VYZgvLDvlvX_u9xTOuxld0cwKU";
+function vapidKeyBytes(base64) {
+  const padding = "=".repeat((4 - (base64.length % 4)) % 4);
+  const b64 = (base64 + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(b64);
+  const out = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+  return out;
+}
+async function syncPushSubscription() {
+  try {
+    if (!cloudEnabled()) return;   // no account to store the endpoint under
+    if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+    if (!("serviceWorker" in navigator) || typeof PushManager === "undefined") return;
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: vapidKeyBytes(VAPID_PUBLIC_KEY) });
+    }
+    const session = await getFreshSession();
+    const userId = session?.user?.id;
+    if (!userId) return;
+    await rest("push_subscriptions?on_conflict=endpoint", {
+      method: "POST",
+      headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+      body: JSON.stringify({ endpoint: sub.endpoint, user_id: userId, subscription: sub.toJSON() }),
+    });
+  } catch (e) { console.error("push subscribe failed", e?.message || e); }
+}
+async function removePushSubscription() {
+  try {
+    if (!("serviceWorker" in navigator)) return;
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.getSubscription();
+    if (!sub) return;
+    const endpoint = sub.endpoint;
+    await sub.unsubscribe().catch(() => {});
+    if (cloudEnabled()) {
+      try { await rest(`push_subscriptions?endpoint=eq.${encodeURIComponent(endpoint)}`, { method: "DELETE", headers: { Prefer: "return=minimal" } }); } catch { /* row prunes itself on next failed send */ }
+    }
+  } catch { /* best effort */ }
+}
+
 async function cloudLoad() {
   const rows = await rest("user_data?select=kind,data");
   const out = { accounts: [], ipos: [], transfers: [], trash: [] };
@@ -2233,6 +2281,7 @@ function AppInner() {
     if (!want) {
       try { localStorage.setItem(NOTIFY_KEY, "off"); } catch { /* nothing */ }
       setNotifyOn(false);
+      removePushSubscription();
       return;
     }
     if (typeof Notification === "undefined") return;   // browser has no notifications
@@ -2241,15 +2290,16 @@ function AppInner() {
     if (perm !== "granted") { setNotifyOn(false); return; }
     try { localStorage.setItem(NOTIFY_KEY, "on"); } catch { /* nothing */ }
     setNotifyOn(true);
-    scheduleClosedReminders();
-    maybeNotifyListings();
+    syncPushSubscription();       // approach B: server-driven, works when closed
+    scheduleClosedReminders();    // approach A: best-effort local trigger
+    maybeNotifyListings();        // and catch up on anything already due
   }, [scheduleClosedReminders, maybeNotifyListings]);
 
   // Check shortly after load and every few minutes while open, so a listing that
   // crosses 9:45 with the app in hand still gets its nudge.
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
-    const run = () => { maybeNotifyListings(); scheduleClosedReminders(); };
+    const run = () => { maybeNotifyListings(); scheduleClosedReminders(); syncPushSubscription(); };
     const t = setTimeout(run, 4000);
     const iv = setInterval(run, 5 * 60 * 1000);
     return () => { clearTimeout(t); clearInterval(iv); };
