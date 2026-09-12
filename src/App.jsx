@@ -328,15 +328,16 @@ function listingNotice(ipo) {
     (s, a) => s + ((a.allotmentStatus === "Allotted" || a.allotmentStatus === "Partial") ? (Number(a.sharesAllotted) || 0) : 0), 0);
   const lots = lotSize && shares ? Math.round(shares / lotSize) : 0;
   if (ltp && issue > 0) {
+    const up = (ltp - issue) >= 0;
     const pct = ((ltp - issue) / issue) * 100;
-    const sign = pct >= 0 ? "+" : "−";
-    const title = `${company} listed — ${sign}${Math.abs(pct).toFixed(1)}%`;
+    // Notification text can't be coloured, so the arrow carries the up/down cue.
+    const title = `${up ? "📈" : "📉"} ${company} listed — ${up ? "+" : "−"}${Math.abs(pct).toFixed(1)}%`;
     const body = shares > 0
-      ? `LTP ₹${ltp} vs ₹${issue} issue. Your ${lots} allotted lot${lots === 1 ? "" : "s"} ${(ltp - issue) >= 0 ? "up" : "down"} ${inr(Math.abs(shares * (ltp - issue)))}.`
+      ? `LTP ₹${ltp} vs ₹${issue} issue. Your ${lots} allotted lot${lots === 1 ? "" : "s"} ${up ? "up" : "down"} ${inr(Math.abs(shares * (ltp - issue)))}.`
       : `LTP ₹${ltp} vs ₹${issue} issue. No allotment on this one.`;
     return { title, body };
   }
-  return { title: `${company} lists today`, body: "Listing price isn't in yet — open The Ledger to record it." };
+  return { title: `🔔 ${company} lists today`, body: "Listing price isn't in yet — open The Ledger to record it." };
 }
 
 // Stamped in at build time by vite.config.js; MMDD.HHMM, IST.
@@ -2180,7 +2181,7 @@ function AppInner() {
     const reg = await (navigator.serviceWorker ? navigator.serviceWorker.ready.catch(() => null) : Promise.resolve(null));
     for (const ipo of due) {
       const { title, body } = listingNotice(ipo);
-      const opts = { body, tag: listingTag(ipo, today), icon: "/icon-192.png", badge: "/icon-192.png", data: { url: "/" } };
+      const opts = { body, tag: listingTag(ipo, today), icon: "/icon-192.png", badge: "/badge-96.png", data: { url: "/" } };
       try {
         if (reg && reg.showNotification) await reg.showNotification(title, opts);
         else new Notification(title, opts);
@@ -2206,7 +2207,7 @@ function AppInner() {
       try {
         await reg.showNotification(`${ipo.company || "An IPO"} lists today`, {
           body: "Open The Ledger to see the listing price and your gains.",
-          tag: listingTag(ipo, ipo.listingDate), icon: "/icon-192.png", badge: "/icon-192.png",
+          tag: listingTag(ipo, ipo.listingDate), icon: "/icon-192.png", badge: "/badge-96.png",
           showTrigger: new window.TimestampTrigger(when), data: { url: "/" },
         });
       } catch { /* trigger unsupported or refused - foreground path still covers it */ }
@@ -2217,10 +2218,10 @@ function AppInner() {
   const testNotify = useCallback(async () => {
     if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
     const reg = await (navigator.serviceWorker ? navigator.serviceWorker.ready.catch(() => null) : Promise.resolve(null));
-    const title = "Sample listing — +33.5%";
+    const title = "📈 Sample listing — +33.5%";
     const opts = {
       body: "LTP ₹338.6 vs ₹201 issue. Your 8 allotted lots up ₹1,10,208. (test)",
-      tag: "listing-test", icon: "/icon-192.png", badge: "/icon-192.png", data: { url: "/" },
+      tag: "listing-test", icon: "/icon-192.png", badge: "/badge-96.png", data: { url: "/" },
     };
     try {
       if (reg && reg.showNotification) await reg.showNotification(title, opts);
