@@ -785,7 +785,12 @@ async function cloudSignUp(email, password) {
   return gotrue("signup", { method: "POST", body: JSON.stringify({ email, password }) });
 }
 async function cloudResetPassword(email) {
-  return gotrue("recover", { method: "POST", body: JSON.stringify({ email }) });
+  // Point the reset link back at this app. Without redirect_to, GoTrue falls
+  // back to the project's Site URL, which is often wrong (a stale or localhost
+  // URL), so the emailed link lands somewhere that can't complete the reset.
+  const redirectTo = typeof window !== "undefined" ? window.location.origin : "";
+  const path = redirectTo ? `recover?redirect_to=${encodeURIComponent(redirectTo)}` : "recover";
+  return gotrue(path, { method: "POST", body: JSON.stringify({ email }) });
 }
 async function cloudUpdatePassword(accessToken, password) {
   return gotrue("user", { method: "PUT", headers: { Authorization: `Bearer ${accessToken}` }, body: JSON.stringify({ password }) });
